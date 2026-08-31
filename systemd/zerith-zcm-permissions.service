@@ -1,0 +1,20 @@
+[Unit]
+Description=Grant the robot user access to the ZERITH ZCM shared memory
+After=robotd.service
+Requires=robotd.service
+PartOf=robotd.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=65
+ExecStartPre=/usr/bin/timeout 60 /bin/sh -c 'until [ -e /dev/shm/zcm/ipcshm/default ]; do /usr/bin/sleep 1; done'
+ExecStart=/usr/bin/chgrp robot /dev/shm/zcm/ipcshm/default
+ExecStart=/usr/bin/chmod 0664 /dev/shm/zcm/ipcshm/default
+# Keep the current file writable even if its group is changed later.
+ExecStart=/usr/bin/setfacl -m u:robot:rw-,m::rw- /dev/shm/zcm/ipcshm/default
+# Files recreated by SDKService inherit an explicit read/write ACL for robot.
+ExecStart=/usr/bin/setfacl -m d:u:robot:rw-,d:m::rwx /dev/shm/zcm/ipcshm
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

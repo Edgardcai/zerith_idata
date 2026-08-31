@@ -1,0 +1,22 @@
+[Unit]
+Description=ZERITH H1 PRO LAN Web Control Console
+After=network-online.target robotd.service zerith-zcm-permissions.service
+Wants=network-online.target
+Requires=robotd.service zerith-zcm-permissions.service
+
+[Service]
+Type=simple
+User=robot
+Group=robot
+WorkingDirectory=/home/robot/control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/robot/miniconda3/envs/zerith/bin/python -m web_control.server --host 172.16.18.43 --port 8080 --allow-unauthenticated-lan
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=8
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

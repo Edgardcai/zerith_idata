@@ -1,0 +1,50 @@
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments and editor state
+.venv/
+venv/
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+api.txt
+*api*key*
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.credentials
+
+# Runtime output
+*.log
+*.pid
+*.sock
+*.tmp
+*.bak
+*.jsonl
+*.raw
+*.pcm
+*.wav
+
+# Downloaded speech models. The install scripts fetch these on the target.
+voice_assistant/models/
+
+# Model/cache archives
+*.tar
+*.tar.gz
+*.tar.bz2
+*.zip

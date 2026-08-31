@@ -1,0 +1,7 @@
+qwen-asr==0.0.6
+funasr==1.4.11
+kaldi-native-fbank==1.22.3
+aiohttp==3.12.15
+modelscope==1.29.2
+# ModelScope 1.29 still imports pkg_resources, removed from newer setuptools.
+setuptools==80.9.0

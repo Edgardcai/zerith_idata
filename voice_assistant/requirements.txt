@@ -1,0 +1,4 @@
+httpx==0.28.1
+numpy==2.3.2
+sherpa-onnx==1.13.6
+sherpa-onnx-bin==1.13.6

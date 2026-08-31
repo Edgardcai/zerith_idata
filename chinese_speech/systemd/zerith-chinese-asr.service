@@ -1,0 +1,30 @@
+[Unit]
+Description=ZERITH Local Chinese ASR (FunASR + Qwen3-ASR)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/robot/control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HF_HOME=/home/robot/.cache/huggingface
+Environment=MODELSCOPE_CACHE=/home/robot/.cache/modelscope
+Environment=CHINESE_ASR_STREAM_MODEL=paraformer-online
+Environment=CHINESE_ASR_FINAL_MODEL=Qwen/Qwen3-ASR-0.6B
+Environment=CHINESE_ASR_FINAL_LOCAL_MODEL=/home/robot/.cache/modelscope/Qwen/Qwen3-ASR-0___6B
+Environment=CHINESE_ASR_FINAL_TIMEOUT_MS=1500
+Environment=CHINESE_ASR_ENDPOINT_MS=500
+Environment=CHINESE_ASR_DEVICE=cuda
+Environment=HTTP_PROXY=
+Environment=HTTPS_PROXY=
+Environment=ALL_PROXY=
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStart=/home/robot/miniconda3/envs/xiaoda-asr/bin/python -m chinese_speech.asr_service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

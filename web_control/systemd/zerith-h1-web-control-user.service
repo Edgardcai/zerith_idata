@@ -1,0 +1,18 @@
+[Unit]
+Description=ZERITH H1 PRO LAN Web Control Console (user service)
+After=network-online.target zerith-xiaoda-voice.service
+Wants=network-online.target zerith-xiaoda-voice.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/robot/control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/robot/miniconda3/envs/zerith/bin/python -m web_control.server --host 172.16.18.43 --port 8080 --allow-unauthenticated-lan
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=8
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

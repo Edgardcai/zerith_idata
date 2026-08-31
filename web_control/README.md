@@ -1,0 +1,297 @@
+# ZERITH H1 PRO 网页控制台
+
+这是一个不依赖 Flask/FastAPI 的本机网页控制台。后端运行在 ZERITH 的
+Python 3.10 环境中，浏览器端不需要安装任何包。
+
+## 已实现
+
+- 默认不加载机器人 SDK、不连接、不接管、不运动。
+- 顶部“接管控制”开关签发唯一的短时控制租约；只有持有该租约的页面才能发运动 POST。
+- 每个页面都有独立实例 ID；一个页面接管后，其他页面明确显示“其他页面已接管”并锁定开关。
+- 唯一工作线程持有唯一 `H1Robot`；状态读取和全部 setter 都通过同一线程串行执行。
+- 双臂 14 关节、双夹爪、升降柱、腰 pitch/yaw、头 yaw/pitch 的反馈和绝对位置控制。
+- 单关节动作只改变所选轴，但按 SDK 要求在每个 100 Hz 周期刷新该臂全部 7 轴，
+  其余 6 轴保持动作开始时的实测位置。
+- 底盘左右轮低层轮速控制；按住运动，松开、页面失焦或 350 ms 命令超时即发零速。
+- 生命周期/运动操作采用原子互斥准入；忙时的新动作立即拒绝，排队超时项会被取消，
+  不会在页面已报错后迟到执行。
+- 左右轮虽然由 SDK 顺序下发，但任一路失败都会立即 best-effort 向双轮补发零速并清除
+  watchdog 目标；若补偿回零也失败则进入 `stop_pending`，每 50 ms 重试并拒绝新的
+  非零轮速，直到双轮零速成功。
+- 厂商 `robot_init()`、`robot_deinit()`，以及指定的作业初始位姿。
+- 左腕 D405、头部 D435、右腕 D405 的 RGB 和深度实时显示。
+- 六路图像共用一条 WebSocket；原始帧和网页 JPEG 均为 640×480，不裁切、不缩放。
+- “语音”页签可明确选择中文（默认）或 English，既可用按钮录入单句，也可在对话框中用键盘输入文字；两种输入共用回复与受限运动执行链路。
+- “语音运动控制”默认关闭；只有当前页面已接管并完成初始化后才能确认开启。明确的前进、
+  后退、左右转、转身、挥手、握手、停止指令走本地快速路径，模糊动作才进入受限大模型分类。
+- 相机 WebSocket 使用有界发送缓冲和最新帧背压策略，慢客户端不会造成连接反复重建。
+- 目标输入在真实电机反馈到达前保持为空，之后按 SDK 步长填入当前实测位置。
+- 单关节与初始位姿支持 `0.2×` 到 `2.0×` 速度倍率，默认值在页面上显示为 `1.0×`。
+- 模拟机器人和模拟相机模式，可在完全不触碰硬件的情况下验收 UI/API。
+
+## 运行
+
+```bash
+source /home/robot/miniconda3/etc/profile.d/conda.sh
+conda activate zerith
+cd /home/robot/control
+
+python -m web_control.server
+```
+
+打开：
+
+```text
+http://172.16.18.43:8080
+```
+
+服务启动后仍不会构造 `H1Robot`。点击并确认“接管控制”时才加载 SDK 和调用
+`robot_connect()`；点击“初始化”时才切到 `LOW_LEVEL` 并调用会产生实体运动的
+`robot_init()`。
+
+### 完全模拟运行
+
+```bash
+cd /home/robot/control
+
+/home/robot/miniconda3/envs/zerith/bin/python \
+  -m web_control.server \
+  --host 127.0.0.1 \
+  --port 18080 \
+  --simulate-robot \
+  --simulate-cameras
+```
+
+模拟模式永远不会加载 H1 运动 SDK，也不会读取真实相机。
+
+## 控制生命周期
+
+```text
+页面打开
+  → 只读取网页配置；H1Robot 尚不存在
+  → 确认接管
+  → H1Robot() + robot_connect()，只读状态
+  → 确认初始化
+  → switchControlMode(LOW_LEVEL) + robot_init()
+  → 关节/机身/底盘控制
+  → 确认反初始化
+  → robot_deinit()
+  → 关闭接管并销毁 H1Robot
+```
+
+如果机器人仍是 `Init_Complete`，关闭接管会被拒绝；网页不会把断网、关页或后端
+异常当作自动执行反初始化轨迹的授权。浏览器租约失效时会取消尚未完成的普通插值、
+保持最新关节反馈并停止底盘。
+
+“停止”按钮会：
+
+- 取消网页正在执行的低层插值；
+- 将左右轮命令设为 0；
+- 对已经由网页控制的位置电机保持最新反馈。
+
+它不是 SDK/硬件急停，不能代替机器人实体急停。厂商说明机械臂没有制动器；紧急
+断电可能导致手臂因重力下落。
+
+## 限位策略
+
+网页只使用 SDK V4.0 第 2.2.3 节给出的软限位，不增加 CLI 原有的 `0.02 rad`
+margin，也不设置 `max-start-delta`，超界时拒绝而不是静默截断。
+
+```text
+升降       0.0 … 0.8 m
+腰 pitch   0.0 … 1.3 rad
+腰 yaw    -0.7 … 0.7 rad
+头 yaw    -1.5 … 1.5 rad
+头 pitch  -0.5 … 0.75 rad
+夹爪       0.0 … 1.5 rad
+双臂       逐关节使用 SDK 表中的左右非对称软限位
+```
+
+所有具体数值由 `GET /api/config` 动态生成到网页，前端不维护第二份限位表。后端仍会
+拒绝 NaN/Inf、错误 ID、错误模式、未初始化、电机错误和 SDK 明确禁止的电池状态；
+这些是接口前置条件，不是额外关节限位。
+
+### 底盘为何显示左右轮轮速
+
+双臂单关节控制只在 `LOW_LEVEL` 可用，而 SDK 的底盘线速度/角速度接口
+`setChassis_high()` 只在 `HIGH_LEVEL` 可用。初始化完成时不能切模式，也不能用第二个
+`H1Robot` 绕过单客户端约束。
+
+因此本控制台长期保持 `LOW_LEVEL`，调用：
+
+```text
+setChassis_low(left,  Speed=left_rad_s)
+setChassis_low(right, Speed=right_rad_s)
+```
+
+SDK 对低层轮速明确标注“无限位”，且未公开轮径/轮距，因此网页不伪造 m/s、rad/s
+换算或数值上限。方向键只做等幅左右轮组合，操作者应从低轮速开始；短 watchdog 独立
+保证松手/失联停车。
+
+## 初始化、反初始化和初始位姿
+
+“初始化/反初始化”是厂商全身生命周期动作，不是只动双臂：升降柱和双臂都会运动。
+
+“初始位姿”在唯一 SDK 对象内直接实现，没有启动 `send_robot_command.py` 子进程：
+
+```text
+升降柱先到 0.40 m
+→ 100 Hz、8 秒插值双臂
+  左 [0, 0, 0, -1.20, 0, 0, 0.98] rad
+  右 [0, 0, 0, -1.20, 0, 0, 0.98] rad
+→ 双夹爪 0.02 rad，hold_torque=True
+→ 持续保持，直到操作者单独确认反初始化
+```
+
+这等价于原命令的核心动作和 `--hold-until-enter` 保持语义，但 Web 页面不会把关闭
+连接解释为 Enter，也不会在到位后立即离开该姿态。
+
+## 相机链路
+
+相机开关默认关闭。开启第一路画面时才创建：
+
+```text
+CameraClient(localhost:50051, enable_depth=True)
+```
+
+关闭最后一路画面后释放 CameraClient。稳定逻辑名为：
+
+| 网页位置 | CameraClient 实际名 | RGB | Depth |
+|---|---|---|---|
+| 左腕 | `rs/cam_left_wrist` | BGR → JPEG | uint16 mm → JET JPEG |
+| 头部 | `rs/cam_high` | BGR → JPEG | uint16 mm → JET JPEG |
+| 右腕 | `rs/cam_right_wrist` | BGR → JPEG | uint16 mm → JET JPEG |
+
+网页只把深度副本转成伪彩色，后台保留的原始深度仍是 `uint16` 毫米数据。RGB 与深度
+当前配置是 `align_to: no align`，画面并排显示不表示两个像素天然对应。
+
+六路 JPEG 使用一条 `/api/cameras/ws` WebSocket，避免六条永久 MJPEG 连接占满常见
+浏览器的 HTTP/1.1 每源连接池。后端仍保留单路 MJPEG 路由供诊断。
+
+## 本机和远程访问
+
+手动启动默认监听：
+
+```text
+http://172.16.18.43:8080
+```
+
+当前现场部署按操作者要求默认启用了免认证局域网访问，可直接打开上述地址。
+同一局域网内任何能访问该地址的设备都可以读取相机并尝试接管机器人，因此不要把
+8080 端口暴露到公网或不可信网络。
+
+如果不希望开放局域网，也可以改回 localhost 并通过 SSH 隧道：
+
+```bash
+ssh -L 8080:127.0.0.1:8080 robot@ROBOT_IP
+```
+
+然后在操作电脑打开 `http://127.0.0.1:8080`。
+
+其他部署若要监听局域网，后端同样强制要求 token：
+
+```bash
+H1_WEB_CONTROL_TOKEN='使用随机长字符串' \
+  /home/robot/miniconda3/envs/zerith/bin/python \
+  -m web_control.server --host 0.0.0.0 --port 8080
+```
+
+该服务器本身不终止 TLS；不要直接暴露到互联网。
+
+## systemd
+
+仓库内提供 [zerith-h1-web-control.service](systemd/zerith-h1-web-control.service)。部署后：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now zerith-h1-web-control.service
+systemctl status zerith-h1-web-control.service
+```
+
+当前 unit 只绑定机器的 `172.16.18.43`，并显式启用免认证局域网访问；它只启动网页，
+不会自动接管或初始化机器人。
+
+当前机器还安装了无需 root 的用户服务版本
+`systemd/zerith-h1-web-control-user.service`。日常重启四个语音/网页服务可直接使用：
+
+```bash
+systemctl --user restart zerith-chinese-asr.service zerith-chinese-tts.service \
+  zerith-xiaoda-voice.service zerith-h1-web-control.service
+systemctl --user --no-pager status zerith-chinese-asr.service \
+  zerith-chinese-tts.service zerith-xiaoda-voice.service zerith-h1-web-control.service
+```
+
+语音页依赖独立的 `zerith-xiaoda-voice.service`。网页进程通过
+`127.0.0.1:8765` 访问它，不导入 `xiaoda-voice` 环境的依赖，也不会再占用一次机器人
+麦克风。当前服务以 `--web-only` 运行：小达唤醒词监听已关闭，仅在网页点击“录入一句”时打开麦克风。
+中文和英文现在都默认打开机器人端 PipeWire 输入；当前默认设备是独立的讯飞
+`XFM-DP-V0.0.18` 麦克风。中文录音仍只进入本地 Paraformer + Qwen3-ASR 链路，英文
+模型、接口和声音保持原样。
+
+反方向的运动调用通过网页进程在 `127.0.0.1:8766` 上的内部接口完成：语音进程不加载
+H1 SDK，网页进程仍是唯一 SDK 持有者。内部控制器只接受固定动作白名单，并绑定网页的
+短时控制租约；语音刷新动作不会替网页续租。底盘采用固定短时脉冲且有原有 350 ms
+watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 秒，右转使用
+1.5 rad/s、3 秒，转身使用 1.5 rad/s、8 秒且未做角度标定。挥手会先左臂后右臂，采用五次多项式缓入缓出轨迹
+驱动肩旋转关节在 -0.4～0.4 rad 间以每段 1.2 秒往复五次，并在两端各停 0.5 秒。握手默认使用右臂，
+依次将肩俯仰移动到 -0.4 rad、肘移动到 0.6 rad、肩俯仰移动到 -0.85 rad，停留
+10 秒后平滑回到右臂七轴零位。手臂其他七轴位置关节按动作计划保持为 0，夹爪保持
+原位置，底盘、腰和头部不参与这两个动作。停留阶段持续监控右臂错误标志；关节出现
+错误时会立即中止，并停止向右臂继续发送后台保持目标。由于 R1 曾报告过热，10 秒
+静态保持只能在故障已复位、机械无卡阻且实体急停可达时使用。
+挥手每一段都会重新下发完整七轴目标，肩俯仰固定为 -0.3 rad、肘固定为 -0.9 rad；
+不会再把关节跟随误差读取成下一段保持目标，因此多次摆动不会累积肩俯仰漂移。
+
+当前部署启用了免认证局域网访问，因此同一局域网中的访问者也能启动语音会话、查看
+本轮文字和回放回复。网络不完全可信时应启用 `H1_WEB_CONTROL_TOKEN`，不要继续使用
+`--allow-unauthenticated-lan`。
+
+## API 摘要
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/config` | SDK 原始限位和控制元数据 |
+| GET | `/api/state` | 23 电机、模式、初始化、电池、底盘和相机状态 |
+| GET | `/api/voice/status` | 小达状态与本轮对话文字 |
+| GET | `/api/voice/audio/{id}.wav` | 回放一条小达回复 |
+| POST | `/api/voice/start` | 按 `zh` / `en` 使用机器人本体麦克风录入单句 |
+| POST | `/api/voice/finish-input` | 手动结束当前录音并立即识别 |
+| POST | `/api/voice/text` | 按 `zh` / `en` 提交一条键盘文字，进入同一对话/动作链路 |
+| POST | `/api/voice/cancel` | 停止当前录音、合成和本地播放并清空队列 |
+| POST | `/api/voice/motion` | 使用当前控制租约显式开启/关闭语音运动；默认关闭 |
+| POST | `/api/takeover` | 开启/关闭控制租约 |
+| POST | `/api/heartbeat` | 续约；运动请求使用 `X-Control-Lease` |
+| POST | `/api/motion/joint` | 单位置电机绝对目标；支持 `speed_scale` |
+| POST | `/api/motion/chassis` | 左右轮 rad/s |
+| POST | `/api/actions/init` | 厂商初始化动作 |
+| POST | `/api/actions/deinit` | 厂商反初始化动作 |
+| POST | `/api/actions/home` | 指定双臂作业初始位姿；支持 `speed_scale` |
+| POST | `/api/stop` | 取消插值、底盘零速、当前位置保持 |
+| WS | `/api/cameras/ws` | 六路图像单连接传输 |
+| WS | `/api/voice/asr/ws` | 浏览器 16 kHz PCM 中文实时 partial/final |
+
+所有产生运动的端点都是 POST，并要求当前页面的 `X-Control-Lease`。服务器不开放 CORS。
+
+## 验证
+
+离线测试：
+
+```bash
+cd /home/robot
+/home/robot/miniconda3/envs/zerith/bin/python \
+  -m unittest discover -s control/web_control/tests -v
+```
+
+覆盖 SDK 延迟加载、全部位置限位端点、生命周期、指定初始位姿、停止/保持、底盘
+watchdog、语音运动开关/租约/固定时长/挥腕限位、相机生命周期与 640×480 JPEG、
+HTTP API 和多流 WebSocket。
+
+真实硬件已做无运动验证：
+
+- 新后端成功加载 SDK、连接、读取 23/23 电机、模式、电池并干净释放。
+- 当时实测 `UNINITIALIZED/VR`、`Deinit_Complete`、23 个电机错误码均为 0。
+- 三台相机六路帧和网页 JPEG 均为 640×480；RGB 约 29.7 FPS，深度约
+  28.2–29.7 FPS；关闭无错误。
+
+实体初始化、反初始化、关节、腰头和底盘运动只能在操作者到场、2 m 清场、急停可达、
+确认无 VR/遥控并逐项观察的条件下验收；自动化测试不会在无人看护时擅自移动机器人。

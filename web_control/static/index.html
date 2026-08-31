@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f14">
+  <title>ZERITH H1 控制台</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-shell" id="appShell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="ZERITH H1 控制台首页">
+        <span class="brand-mark" aria-hidden="true">H1</span>
+        <span class="brand-copy">
+          <strong>控制台</strong>
+          <small>ZERITH H1 PRO</small>
+        </span>
+      </a>
+
+      <div class="system-chips" aria-label="系统状态">
+        <span class="status-chip" id="connectionChip">
+          <i class="status-dot" aria-hidden="true"></i>
+          <span id="connectionText">连接中</span>
+        </span>
+        <span class="status-chip status-chip--quiet" id="sdkChip">
+          SDK <b id="sdkText">--</b>
+        </span>
+        <span class="status-chip status-chip--quiet" id="modeChip">
+          模式 <b id="modeText">--</b>
+        </span>
+      </div>
+
+      <div class="top-actions">
+        <button class="stop-button" id="stopButton" type="button" aria-label="发送软件停止指令" title="软件停止，不能替代机器人物理急停">
+          <span aria-hidden="true">■</span> 停止
+        </button>
+        <label class="takeover" for="takeoverToggle">
+          <span class="takeover-copy">
+            <strong>接管控制</strong>
+            <small id="takeoverHint">已关闭</small>
+          </span>
+          <input id="takeoverToggle" type="checkbox" role="switch" aria-describedby="takeoverHint">
+          <span class="switch-track" aria-hidden="true"><span></span></span>
+        </label>
+      </div>
+    </header>
+
+    <nav class="tabs" aria-label="控制页面">
+      <button class="tab is-active" type="button" role="tab" aria-selected="true" aria-controls="armsPage" data-tab="armsPage">
+        <span class="tab-icon" aria-hidden="true">⌁</span><span>机械臂</span>
+      </button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="bodyPage" data-tab="bodyPage">
+        <span class="tab-icon" aria-hidden="true">◇</span><span>机身</span>
+      </button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="cameraPage" data-tab="cameraPage">
+        <span class="tab-icon" aria-hidden="true">▣</span><span>相机</span>
+      </button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="voicePage" data-tab="voicePage">
+        <span class="tab-icon" aria-hidden="true">◉</span><span>语音</span>
+      </button>
+    </nav>
+
+    <main>
+      <section class="page is-active" id="armsPage" role="tabpanel">
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">14 轴 · 独立控制</p>
+            <h1>双臂</h1>
+          </div>
+          <div class="action-row lifecycle-actions">
+            <div class="motion-speed-control" title="调整单关节和初始位姿的轨迹速度；不改变厂商初始化/反初始化速度">
+              <label for="motionSpeedRange">运动速度 <output id="motionSpeedValue">1.0×</output></label>
+              <input id="motionSpeedRange" type="range" min="0.2" max="2" step="0.1" value="1">
+            </div>
+            <button class="button button--soft motion-control" id="initButton" type="button" disabled>
+              <span class="button-icon" aria-hidden="true">↥</span> 初始化
+            </button>
+            <button class="button button--soft motion-control" id="deinitButton" type="button" disabled>
+              <span class="button-icon" aria-hidden="true">↧</span> 反初始化
+            </button>
+            <button class="button button--primary motion-control" id="homeButton" type="button" disabled>
+              <span class="button-icon" aria-hidden="true">⌂</span> 初始位姿
+            </button>
+          </div>
+        </div>
+
+        <div class="arm-grid">
+          <article class="panel arm-panel">
+            <div class="panel-heading">
+              <div class="side-badge side-badge--left">L</div>
+              <div><h2>左臂</h2><p>当前 / 目标 · rad</p></div>
+            </div>
+            <div class="joint-list" id="leftArmControls" aria-live="polite">
+              <div class="panel-placeholder">正在读取 SDK 限位…</div>
+            </div>
+            <div class="gripper-slot" id="leftGripperControl"></div>
+          </article>
+
+          <article class="panel arm-panel">
+            <div class="panel-heading">
+              <div class="side-badge side-badge--right">R</div>
+              <div><h2>右臂</h2><p>当前 / 目标 · rad</p></div>
+            </div>
+            <div class="joint-list" id="rightArmControls" aria-live="polite">
+              <div class="panel-placeholder">正在读取 SDK 限位…</div>
+            </div>
+            <div class="gripper-slot" id="rightGripperControl"></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="page" id="bodyPage" role="tabpanel" hidden>
+        <div class="page-heading">
+          <div>
+            <p class="eyebrow">姿态 · 移动</p>
+            <h1>机身</h1>
+          </div>
+        </div>
+
+        <div class="body-grid">
+          <article class="panel body-panel">
+            <div class="panel-heading panel-heading--compact">
+              <div class="side-badge side-badge--body">↕</div>
+              <div><h2>升降与姿态</h2><p>当前 / 目标</p></div>
+            </div>
+            <div class="joint-list joint-list--body" id="bodyControls">
+              <div class="panel-placeholder">正在读取 SDK 限位…</div>
+            </div>
+          </article>
+
+          <article class="panel chassis-panel">
+            <div class="panel-heading panel-heading--compact">
+              <div class="side-badge side-badge--chassis">⌁</div>
+              <div><h2>底盘</h2><p>按住移动 · 松开即停</p></div>
+              <span class="drive-state" id="driveState">停止</span>
+            </div>
+
+            <div class="drive-layout">
+              <div class="drive-pad" id="drivePad" aria-label="底盘方向控制">
+                <button class="drive-button drive-button--forward motion-control" type="button" data-drive="forward" aria-label="按住前进" disabled><span>↑</span></button>
+                <button class="drive-button drive-button--left motion-control" type="button" data-drive="left" aria-label="按住左转" disabled><span>↶</span></button>
+                <button class="drive-button drive-button--stop" id="driveStopButton" type="button" aria-label="停止底盘"><span>■</span></button>
+                <button class="drive-button drive-button--right motion-control" type="button" data-drive="right" aria-label="按住右转" disabled><span>↷</span></button>
+                <button class="drive-button drive-button--backward motion-control" type="button" data-drive="backward" aria-label="按住后退" disabled><span>↓</span></button>
+              </div>
+
+              <div class="speed-controls" id="speedControls">
+                <div class="panel-placeholder">正在读取轮速配置…</div>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="page page--cameras" id="cameraPage" role="tabpanel" hidden>
+        <div class="page-heading camera-heading">
+          <div>
+            <p class="eyebrow">RGB · Depth</p>
+            <h1>相机</h1>
+          </div>
+          <div class="camera-stream-switches" aria-label="相机数据流开关">
+            <label class="camera-stream-switch" for="rgbCamerasToggle">
+              <span><strong>RGB</strong><small>同时开启三路彩色画面</small></span>
+              <span class="mini-switch">
+                <input id="rgbCamerasToggle" type="checkbox" role="switch" data-stream-group-toggle="rgb">
+                <span aria-hidden="true"></span>
+              </span>
+            </label>
+            <label class="camera-stream-switch" for="depthCamerasToggle">
+              <span><strong>深度</strong><small>同时开启三路深度画面</small></span>
+              <span class="mini-switch">
+                <input id="depthCamerasToggle" type="checkbox" role="switch" data-stream-group-toggle="depth">
+                <span aria-hidden="true"></span>
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div class="panel camera-matrix" id="cameraStack">
+          <div class="camera-matrix-note">
+            六路数据保持原始 640 × 480 分辨率；界面按可用宽度等比缩放，三视角始终完整显示。
+          </div>
+          <div class="camera-matrix-scroll">
+            <div class="camera-matrix-grid">
+              <div class="camera-matrix-corner" aria-hidden="true">视角</div>
+              <div class="camera-column-heading" data-camera-heading="left_wrist">
+                <div><h2>左腕</h2><p>D405 · 640 × 480</p></div><span class="camera-state">已关闭</span>
+              </div>
+              <div class="camera-column-heading" data-camera-heading="head">
+                <div><h2>头部</h2><p>D435 · 640 × 480</p></div><span class="camera-state">已关闭</span>
+              </div>
+              <div class="camera-column-heading" data-camera-heading="right_wrist">
+                <div><h2>右腕</h2><p>D405 · 640 × 480</p></div><span class="camera-state">已关闭</span>
+              </div>
+
+              <div class="camera-row-heading"><strong>RGB</strong><small>彩色</small></div>
+              <figure class="stream-frame" data-camera="left_wrist" data-stream="rgb">
+                <figcaption><span>左腕 · RGB</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="左腕 RGB 实时画面"><div class="stream-empty"><span>RGB</span><small>请开启 RGB</small></div></div>
+              </figure>
+              <figure class="stream-frame" data-camera="head" data-stream="rgb">
+                <figcaption><span>头部 · RGB</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="头部 RGB 实时画面"><div class="stream-empty"><span>RGB</span><small>请开启 RGB</small></div></div>
+              </figure>
+              <figure class="stream-frame" data-camera="right_wrist" data-stream="rgb">
+                <figcaption><span>右腕 · RGB</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="右腕 RGB 实时画面"><div class="stream-empty"><span>RGB</span><small>请开启 RGB</small></div></div>
+              </figure>
+
+              <div class="camera-row-heading"><strong>深度</strong><small>Depth</small></div>
+              <figure class="stream-frame" data-camera="left_wrist" data-stream="depth">
+                <figcaption><span>左腕 · 深度</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="左腕深度实时画面"><div class="stream-empty"><span>DEPTH</span><small>请开启深度</small></div></div>
+              </figure>
+              <figure class="stream-frame" data-camera="head" data-stream="depth">
+                <figcaption><span>头部 · 深度</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="头部深度实时画面"><div class="stream-empty"><span>DEPTH</span><small>请开启深度</small></div></div>
+              </figure>
+              <figure class="stream-frame" data-camera="right_wrist" data-stream="depth">
+                <figcaption><span>右腕 · 深度</span><small>640 × 480</small></figcaption>
+                <div class="stream-viewport"><img width="640" height="480" alt="右腕深度实时画面"><div class="stream-empty"><span>DEPTH</span><small>请开启深度</small></div></div>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="page page--voice" id="voicePage" role="tabpanel" hidden>
+        <div class="page-heading voice-heading">
+          <div>
+            <p class="eyebrow">XIAODA · VOICE</p>
+            <h1>语音对话</h1>
+          </div>
+          <span class="voice-state-badge" id="voiceStateBadge">
+            <i aria-hidden="true"></i><span id="voiceStateText">正在连接</span>
+          </span>
+        </div>
+
+        <div class="voice-layout">
+          <article class="panel voice-control-panel">
+            <div class="voice-orb" id="voiceOrb" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <h2>和小达说话</h2>
+            <p id="voiceDetail">正在读取语音服务状态…</p>
+            <label class="voice-language" for="voiceLanguage">
+              <span>识别与回复语言</span>
+              <select id="voiceLanguage">
+                <option value="zh" selected>中文（默认）</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+            <div class="voice-motion-control">
+              <div>
+                <strong>语音 / 文字运动控制</strong>
+                <small id="voiceMotionHint">默认关闭；需先接管并初始化机器人</small>
+              </div>
+              <label class="mini-switch" for="voiceMotionToggle">
+                <input id="voiceMotionToggle" type="checkbox" role="switch" disabled>
+                <span aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="voice-input-actions">
+              <button class="button button--primary voice-start-button" id="voiceStartButton" type="button" disabled>
+                <span aria-hidden="true">◉</span><span id="voiceStartText">启动对话</span>
+              </button>
+              <button class="button button--soft voice-cancel-button" id="voiceCancelButton" type="button" disabled>取消当前</button>
+            </div>
+            <p class="voice-hint" id="voiceInputHint">中文默认使用机器人独立麦克风，通过本地 Paraformer 与 Qwen3-ASR 双阶段识别。</p>
+
+            <div class="voice-playback">
+              <div class="voice-playback-heading">
+                <strong>回复音频</strong>
+                <label><input id="voiceAutoplay" type="checkbox"> 自动播放到本网页</label>
+              </div>
+              <audio id="voiceAudio" controls preload="none"></audio>
+              <small>机器人扬声器会照常播报；这里可回放最近一条回复。</small>
+            </div>
+          </article>
+
+          <article class="panel voice-transcript-panel">
+            <div class="panel-heading panel-heading--compact">
+              <div class="side-badge side-badge--voice">话</div>
+              <div><h2>本轮对话</h2><p>识别文字与小达回复</p></div>
+            </div>
+            <div class="voice-transcript" id="voiceTranscript" aria-live="polite">
+              <div class="voice-empty">尚未开始对话</div>
+            </div>
+            <form class="voice-text-form" id="voiceTextForm">
+              <label class="voice-text-label" for="voiceTextInput">键盘输入</label>
+              <div class="voice-text-row">
+                <input id="voiceTextInput" type="text" maxlength="1000" autocomplete="off" placeholder="输入对话内容或机器人指令…" disabled>
+                <button class="button button--primary" id="voiceTextSend" type="submit" disabled>发送</button>
+              </div>
+              <small id="voiceTextHint">语音服务就绪后可按 Enter 发送</small>
+            </form>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="takeover-shield" id="takeoverShield" aria-hidden="true">
+    <span class="lock-icon">⌁</span>
+    <span>开启接管后可控制</span>
+  </div>
+
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <section class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage">
+      <div class="modal-icon" id="confirmIcon" aria-hidden="true">!</div>
+      <h2 id="confirmTitle">确认操作</h2>
+      <p id="confirmMessage"></p>
+      <div class="modal-detail" id="confirmDetail" hidden></div>
+      <div class="modal-actions">
+        <button class="button button--soft" id="confirmCancel" type="button">取消</button>
+        <button class="button button--danger" id="confirmAccept" type="button">确认执行</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="/static/app.js" defer></script>
+</body>
+</html>

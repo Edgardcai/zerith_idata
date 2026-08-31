@@ -1,0 +1,30 @@
+[Unit]
+Description=ZERITH Local Chinese TTS (Qwen3-TTS CustomVoice)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/robot/control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=HF_HOME=/home/robot/.cache/huggingface
+Environment=CHINESE_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+Environment=CHINESE_TTS_LOCAL_MODEL=/home/robot/.cache/modelscope/Qwen/Qwen3-TTS-12Hz-0___6B-CustomVoice
+Environment=CHINESE_TTS_SPEAKER=Serena
+Environment=CHINESE_TTS_DEVICE=cuda
+Environment=CHINESE_TTS_DTYPE=bfloat16
+# This machine has no CUDA compiler/flash-attn wheel; use PyTorch SDPA safely.
+Environment=CHINESE_TTS_FLASH_ATTENTION=false
+Environment=HTTP_PROXY=
+Environment=HTTPS_PROXY=
+Environment=ALL_PROXY=
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+ExecStart=/home/robot/miniconda3/envs/xiaoda-tts/bin/python -m chinese_speech.tts_service
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

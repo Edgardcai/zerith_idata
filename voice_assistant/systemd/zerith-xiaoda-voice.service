@@ -1,0 +1,31 @@
+[Unit]
+Description=ZERITH H1 PRO XiaoDa Voice Assistant
+After=pipewire.service zerith-chinese-asr.service zerith-chinese-tts.service
+Wants=pipewire.service zerith-chinese-asr.service zerith-chinese-tts.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/robot/control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=-/home/robot/.config/zerith/voice.env
+Environment=NO_PROXY=localhost,127.0.0.1,::1
+Environment=XIAODA_MIC_DEVICE=pipewire
+Environment=XIAODA_END_SILENCE_SECONDS=0.5
+Environment=CHINESE_SPEECH_ENABLED=true
+Environment=CHINESE_ASR_STREAM_MODEL=paraformer-online
+Environment=CHINESE_ASR_FINAL_MODEL=Qwen/Qwen3-ASR-0.6B
+Environment=CHINESE_ASR_FINAL_TIMEOUT_MS=1500
+Environment=CHINESE_ASR_ENDPOINT_MS=500
+Environment=CHINESE_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice
+Environment=CHINESE_TTS_SPEAKER=Serena
+Environment=CHINESE_TTS_DEVICE=cuda
+Environment=CHINESE_TTS_DTYPE=bfloat16
+ExecStart=/home/robot/miniconda3/envs/xiaoda-voice/bin/python -m voice_assistant run --web-only
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=8
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
