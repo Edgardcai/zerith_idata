@@ -28,6 +28,11 @@ Python 3.10 环境中，浏览器端不需要安装任何包。
 - 目标输入在真实电机反馈到达前保持为空，之后按 SDK 步长填入当前实测位置。
 - 单关节与初始位姿支持 `0.2×` 到 `2.0×` 速度倍率，默认值在页面上显示为 `1.0×`。
 - 模拟机器人和模拟相机模式，可在完全不触碰硬件的情况下验收 UI/API。
+- “推理”页签使用新版 WebSocket JSON 协议，可自定义远程 host/port 和
+  prompt；先显式 health/metadata 重连，再做零 setter dry-run，最后才允许
+  二次确认真机执行。
+- 推理执行端复用本进程唯一 `H1Robot` 和唯一 CameraService；不会构造交接包中的
+  `Real_Env()`，也不会启动第二个厂商 SDK 客户端。
 
 ## 运行
 
@@ -63,6 +68,79 @@ cd /home/robot/control
 ```
 
 模拟模式永远不会加载 H1 运动 SDK，也不会读取真实相机。
+
+## 推理执行端：网页 + 代码
+
+完整部署、命令和安全说明见 [PI05_EXECUTOR.md](PI05_EXECUTOR.md)。网页头部只显示
+“推理”；左侧配置远端地址、端口、prompt、关节速度、发送频率和每个 Chunk 执行步数，
+右侧集中放置急停、断开推理连接和显式重新连接。参数语义为：
+
+| 参数 | 默认 | 有效值 |
+|---|---:|---:|
+| 双臂关节速度限幅 | 30 deg/s | 大于 0 的有限数 |
+| 控制/发送频率 | 30 Hz | 大于 0 的有限数 |
+| 每个 Chunk 执行步数 N | 30 | 1..50 的整数 |
+
+服务端每次固定返回 50 步；执行端每包执行前 N 步，完成后重新采集最新状态和三路
+图片，再同步请求下一包。推理等待期间保持上一条位置目标，不提前预取旧状态对应的
+下一包。N 不是总执行
+步数，不限制 Chunk 数量，也没有累计执行步数上限；连续执行直到操作员停止、发生故障
+或控制 lease 失效。双臂 14 个关节按
+`radians(关节速度)/发送频率` 限制每周期目标变化；基准是上一条成功下发目标，绝不按
+滞后反馈重新起算。夹爪和升降柱不经过该限幅。
+网页/API 同时报告新包首步相对推理观测和实际下发前反馈的最大双臂关节差，用于区分
+模型首步不连续与执行调度问题；这些诊断值不会修改动作。
+
+除网页外，[/home/robot/control/inference_executor.py](/home/robot/control/inference_executor.py)
+是正式代码入口。它不打开第二个 SDK；所有硬件相关命令都通过 8080，与网页
+共享唯一 SDK owner、lease、故障锁存和急停路径。它无需浏览器，但作为执行端
+使用时 8080 服务必须运行；唯一例外是只读 `metadata`，它不访问机器人或相机。
+
+代码入口的完整基本命令：
+
+```bash
+PY310=/home/robot/miniconda3/envs/zerith/bin/python
+EXECUTOR=/home/robot/control/inference_executor.py
+WEB=http://172.16.18.43:8080
+
+# 只读协议验证
+$PY310 $EXECUTOR metadata --policy-host 192.168.1.154 --policy-port 9973
+
+# 8080 中执行器的当前状态
+$PY310 $EXECUTOR status --web-url $WEB
+
+# 选择 host/port，并显式 health + metadata 重连
+$PY310 $EXECUTOR reconnect --web-url $WEB \
+  --host 192.168.1.154 --port 9973
+
+# 停止并断开推理连接，不调用 robot_deinit()
+$PY310 $EXECUTOR disconnect --web-url $WEB
+
+# 一次真状态 + 三路真图的零 setter dry-run；CLI 临时取得并释放 lease
+$PY310 $EXECUTOR dry-run --web-url $WEB --auto-takeover \
+  --prompt '把目标物放入指定位置'
+
+# 推荐的无浏览器完整流程：同 lease 内 reconnect -> dry-run -> start
+$PY310 $EXECUTOR run --web-url $WEB --auto-takeover --prepare \
+  --policy-host 192.168.1.154 --policy-port 9973 \
+  --prompt '把目标物放入指定位置' \
+  --steps-per-chunk 30 --control-rate-hz 30 --joint-speed-deg-s 30 \
+  --confirm-motion
+
+# 全局软件停止，不需 lease，不调用 robot_deinit()
+$PY310 $EXECUTOR stop --web-url $WEB
+```
+
+prompt 也可使用 `--prompt-file /path/to/prompt.txt`。独立 `dry-run --auto-takeover`
+会在验证后释放 lease；需启动真机时应使用上面的 `run --auto-takeover --prepare`，
+使 reconnect、dry-run 和 start 处于同一 lease，并由 CLI 在后台 heartbeat、最终
+释放 lease。网页和代码的真机执行都只有在
+当前 lease、`Init_Complete(2)`、`LOW_LEVEL`、同 prompt 的当前成功 dry-run 和二次运动确认
+全部成立时才能开始。`run` 必须带 `--confirm-motion`；它会跨 50 步 Chunk 连续执行，
+直到操作员 stop、Ctrl+C、故障或 lease 失效，Ctrl+C 会请求软件停止。
+必须由现场操作员事先人工完成厂商初始化；`--auto-takeover` 只管理 lease，
+绝不自动 init/deinit。机器人处于反初始化状态时，dry-run 可完成，但 start
+必定被后端拒绝。网络异常也不会自动重连后继运动。
 
 ## 控制生命周期
 
@@ -252,6 +330,14 @@ watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 
 |---|---|---|
 | GET | `/api/config` | SDK 原始限位和控制元数据 |
 | GET | `/api/state` | 23 电机、模式、初始化、电池、底盘和相机状态 |
+| GET | `/api/pi05/status` | 推理 phase、连接、远端、故障、延迟、chunk 与安全门禁状态 |
+| POST | `/api/pi05/probe` | 只读 healthz + metadata；不读取机器人、不推理、不运动 |
+| POST | `/api/pi05/reconnect` | 选择 host/port 并显式 healthz + metadata 重连；不自动恢复动作 |
+| POST | `/api/pi05/disconnect` | 软件停止并关闭推理连接；不调用 deinit |
+| POST | `/api/pi05/dry-run` | 三路真图 + 23 维 state 请求一次 50 步 chunk；零 setter |
+| POST | `/api/pi05/start` | 同 prompt dry-run、lease、关节速度、频率、每 Chunk 步数及精确确认后开始连续真机执行 |
+| POST | `/api/pi05/stop` | 全局停止推理；不要求启动页面仍持有租约，不调用 deinit |
+| POST | `/api/pi05/reset-fault` | 只清故障锁存；仍须重新 probe、dry-run 和真机确认 |
 | GET | `/api/voice/status` | 小达状态与本轮对话文字 |
 | GET | `/api/voice/audio/{id}.wav` | 回放一条小达回复 |
 | POST | `/api/voice/start` | 按 `zh` / `en` 使用机器人本体麦克风录入单句 |
@@ -284,7 +370,7 @@ cd /home/robot
 
 覆盖 SDK 延迟加载、全部位置限位端点、生命周期、指定初始位姿、停止/保持、底盘
 watchdog、语音运动开关/租约/固定时长/挥腕限位、相机生命周期与 640×480 JPEG、
-HTTP API 和多流 WebSocket。
+推理 JSON 协议/故障锁存/唯一 owner/动作安全覆盖、HTTP API 和多流 WebSocket。
 
 真实硬件已做无运动验证：
 

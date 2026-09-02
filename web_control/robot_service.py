@@ -7,9 +7,9 @@ call.  Construction, connection, mode switching and motion happen only after
 an explicit takeover request.
 
 Position limits below are the SDK V4.0 *soft limits* verbatim.  There is no
-additional application margin and no maximum-delta gate.  Operational
-interlocks (lease, mode, init state, finite values, motor errors and watchdogs)
-are deliberately separate from geometric limits.
+additional application margin and no application-level per-step delta or
+speed limit.  Operational interlocks (lease, mode, init state, finite values,
+motor errors and watchdogs) are deliberately separate from geometric limits.
 """
 
 from __future__ import annotations
@@ -94,6 +94,28 @@ MOTOR_SPEC_BY_ID = {spec.motor_id: spec for spec in MOTOR_SPECS}
 
 LEFT_ARM_MOTOR_IDS = tuple(range(7, 14))
 RIGHT_ARM_MOTOR_IDS = tuple(range(15, 22))
+
+# Pi0.5 wire order is intentionally independent from EtherCAT's numeric order:
+# left arm + gripper, right arm + gripper, lift, waist pitch/yaw, head yaw/pitch.
+# The two chassis entries exist only on the policy wire and are never forwarded
+# to position-motor setters.
+POLICY_WIRE_MOTOR_IDS = (
+    *range(7, 15),
+    *range(15, 23),
+    2,
+    3,
+    4,
+    5,
+    6,
+)
+POLICY_STATE_DIM = 23
+POLICY_POSITION_DIM = len(POLICY_WIRE_MOTOR_IDS)
+POLICY_GRIPPER_WIRE_INDICES = (7, 15)
+POLICY_BODY_HOLD_SLICE = slice(17, 21)
+POLICY_GRIPPER_VALUES = (0.0, 1.5)
+
+if POLICY_POSITION_DIM != 21 or len(set(POLICY_WIRE_MOTOR_IDS)) != 21:
+    raise RuntimeError("Pi0.5 policy motor mapping must contain 21 unique motors")
 
 MOTOR_NAMES = {
     0: "left_wheel",
@@ -197,11 +219,17 @@ class RobotService:
         self._events_lock = threading.RLock()
         self._lease_lock = threading.RLock()
         self._admission_lock = threading.RLock()
+        self._policy_lock = threading.RLock()
         self._lease_id: str | None = None
         self._lease_client_id: str | None = None
         self._lease_deadline = 0.0
         self._admission_token: object | None = None
         self._admitted_operation: str | None = None
+        self._policy_session_id: str | None = None
+        self._policy_session_lease_id: str | None = None
+        self._policy_session_started_monotonic = 0.0
+        self._policy_last_end_reason: str | None = None
+        self._policy_abort_event = threading.Event()
 
         self._sdk: Any | None = None
         self._robot: Any | None = None
@@ -296,6 +324,13 @@ class RobotService:
                 "rate_hz": 100.0,
                 "hold_until_deinit": True,
             },
+            "policy": {
+                "state_dim": POLICY_STATE_DIM,
+                "position_dim": POLICY_POSITION_DIM,
+                "wire_motor_ids": list(POLICY_WIRE_MOTOR_IDS),
+                "gripper_values": list(POLICY_GRIPPER_VALUES),
+                "base_motion": "forced_zero_not_forwarded",
+            },
         }
 
     def state(self) -> dict[str, Any]:
@@ -308,6 +343,20 @@ class RobotService:
             lease_client_id = self._lease_client_id if lease_valid else None
         result["takeover"] = lease_valid
         result["takeover_client_id"] = lease_client_id
+        with self._policy_lock:
+            policy_active = self._policy_session_id is not None
+            policy_started = self._policy_session_started_monotonic
+            policy_last_end_reason = self._policy_last_end_reason
+        now = time.monotonic()
+        result["policy_session"] = {
+            "active": policy_active,
+            "age_ms": (
+                max(0.0, (now - policy_started) * 1000.0)
+                if policy_active
+                else None
+            ),
+            "last_end_reason": policy_last_end_reason,
+        }
         with self._events_lock:
             result["events"] = list(self._events)[-20:]
         state_time = result.get("state_monotonic")
@@ -380,6 +429,115 @@ class RobotService:
         return self._call(
             "validate_motion",
             lease_id,
+            timeout=5.0,
+            exclusive=True,
+        )
+
+    def read_policy_state(
+        self,
+        lease_id: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Sample the Pi0.5 23-D state on the sole SDK owner thread.
+
+        This operation never renews the lease and never writes a motor command.
+        The final two chassis entries are always literal zeros.
+        """
+
+        self._require_lease(lease_id, renew=False)
+        return self._call(
+            "policy_state",
+            lease_id,
+            session_id,
+            timeout=5.0,
+            # Session reads already belong to the backend-wide policy owner
+            # and serialize on the sole SDK queue.  A dry-run has no session
+            # token, so keep that read admission-exclusive from ordinary web
+            # commands while its state/image snapshot is assembled.
+            exclusive=session_id is None,
+        )
+
+    def begin_policy_session(self, lease_id: str) -> dict[str, Any]:
+        """Exclusively hand normal motion admission to a Pi0.5 executor."""
+
+        self._require_lease(lease_id, renew=False)
+        return self._call(
+            "policy_begin",
+            lease_id,
+            timeout=10.0,
+            exclusive=True,
+        )
+
+    def end_policy_session(
+        self,
+        lease_id: str,
+        *,
+        session_id: str | None = None,
+        reason: str = "operator_end",
+    ) -> dict[str, Any]:
+        """End policy control without deinitializing or changing SDK mode."""
+
+        self._require_lease(lease_id, renew=False)
+        parsed_reason = str(reason).strip() or "operator_end"
+        if len(parsed_reason) > 128:
+            raise RobotCommandRejected("policy session reason 过长")
+        return self._call(
+            "policy_end",
+            lease_id,
+            session_id,
+            parsed_reason,
+            timeout=10.0,
+            exclusive=True,
+        )
+
+    def policy_hold_and_zero(
+        self,
+        lease_id: str,
+        *,
+        session_id: str | None = None,
+        reason: str = "operator_stop",
+    ) -> dict[str, Any]:
+        """Explicit safety alias: end policy, hold feedback and zero chassis."""
+
+        return self.end_policy_session(
+            lease_id,
+            session_id=session_id,
+            reason=reason,
+        )
+
+    def policy_observation(
+        self,
+        lease_id: str,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Compatibility alias for executors that call this an observation."""
+
+        return self.read_policy_state(lease_id, session_id=session_id)
+
+    def policy_step(
+        self,
+        lease_id: str,
+        action: Any,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate and send one Pi0.5 action through the SDK owner thread.
+
+        Lease validity is checked but deliberately not renewed.  Strict shape,
+        finite-value and SDK soft-limit validation happens again beside the SDK
+        calls so a rejected action terminates the active policy session.  The
+        bridge does not clamp or reject targets based on their change from the
+        latest joint/lift feedback.
+        """
+
+        self._require_lease(lease_id, renew=False)
+        return self._call(
+            "policy_step",
+            lease_id,
+            session_id,
+            action,
             timeout=5.0,
             exclusive=True,
         )
@@ -572,12 +730,14 @@ class RobotService:
     ) -> dict[str, Any]:
         self._require_lease(lease_id, renew=renew_lease)
         self._cancel_event.set()
+        self._policy_abort_event.set()
         return self._call("stop", lease_id, timeout=10.0)
 
     def close(self) -> None:
         """Stop the web backend without triggering robot_deinit motion."""
 
         self._cancel_event.set()
+        self._policy_abort_event.set()
         try:
             self._call("shutdown", timeout=5.0)
         except RobotServiceError:
@@ -592,6 +752,7 @@ class RobotService:
         timeout: float,
         exclusive: bool = False,
     ) -> Any:
+        self._assert_operation_allowed_during_policy(operation)
         admission_token: object | None = None
         if exclusive:
             admission_token = object()
@@ -617,8 +778,10 @@ class RobotService:
                 started = item.started
                 if not started:
                     item.cancelled = True
-            if started and operation in ("joint", "joints", "home"):
+            if started and operation in ("joint", "joints", "home", "policy_step"):
                 self._cancel_event.set()
+            if operation == "policy_step":
+                self._policy_abort_event.set()
             self._record_event(
                 "operation_timed_out",
                 operation=operation,
@@ -664,6 +827,10 @@ class RobotService:
         handlers = {
             "connect": self._connect_impl,
             "validate_motion": self._validate_motion_impl,
+            "policy_state": self._policy_state_impl,
+            "policy_begin": self._policy_begin_impl,
+            "policy_end": self._policy_end_impl,
+            "policy_step": self._policy_step_impl,
             "drop_arm_holds": self._drop_arm_holds_impl,
             "release": self._release_impl,
             "init": self._init_impl,
@@ -683,6 +850,7 @@ class RobotService:
             return
         self._set_busy(True, item.operation)
         try:
+            self._assert_operation_allowed_during_policy(item.operation)
             item.result = handler(*item.args)
             with self._snapshot_lock:
                 self._snapshot["last_error"] = None
@@ -700,6 +868,167 @@ class RobotService:
         self._check_power_for_motion(chassis=False)
         self._poll_state(force=True)
         return {"ok": True, "state": self.state()}
+
+    def _policy_state_impl(
+        self,
+        lease_id: str,
+        session_id: str | None,
+    ) -> dict[str, Any]:
+        self._require_policy_readable(lease_id)
+        with self._policy_lock:
+            active = self._policy_session_id is not None
+        if active:
+            active_session_id = self._require_policy_session(
+                lease_id,
+                session_id,
+            )
+        elif session_id is not None:
+            raise RobotConflict("Pi0.5 policy session 已结束，请操作员重新确认")
+        else:
+            active_session_id = None
+        try:
+            state, sampled_at = self._sample_policy_state()
+        except BaseException as exc:
+            if active_session_id is not None:
+                self._terminate_policy_session(
+                    f"state_failed:{type(exc).__name__}",
+                    expected_session_id=active_session_id,
+                )
+            raise
+        return {
+            "ok": True,
+            "state": state,
+            "state_monotonic": sampled_at,
+            "session_id": active_session_id,
+        }
+
+    def _policy_begin_impl(self, lease_id: str) -> dict[str, Any]:
+        self._require_ready(lease_id)
+        self._check_power_for_motion(chassis=False)
+        with self._policy_lock:
+            if self._policy_session_id is not None:
+                raise RobotConflict("已有 Pi0.5 policy session 正在运行")
+
+        state, sampled_at = self._sample_policy_state()
+        if not self._send_chassis(0.0, 0.0, require_success=False):
+            raise RobotCommandRejected(
+                "Pi0.5 session 启动前无法确认底盘双轮零速，请使用实体急停"
+            )
+
+        now = time.monotonic()
+        session_id = secrets.token_urlsafe(24)
+        self._cancel_event.clear()
+        self._policy_abort_event.clear()
+        self._hold_targets = {
+            motor_id: state[index]
+            for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS)
+            if MOTOR_SPEC_BY_ID[motor_id].interpolate
+        }
+        self._support_targets = {
+            motor_id: state[index]
+            for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS)
+            if not MOTOR_SPEC_BY_ID[motor_id].interpolate
+        }
+        with self._policy_lock:
+            if self._policy_session_id is not None:  # defensive; worker is sole writer
+                raise RobotConflict("已有 Pi0.5 policy session 正在运行")
+            self._policy_session_id = session_id
+            self._policy_session_lease_id = lease_id
+            self._policy_session_started_monotonic = now
+            self._policy_last_end_reason = None
+        self._record_event("policy_session_started")
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "state": state,
+            "state_monotonic": sampled_at,
+        }
+
+    def _policy_end_impl(
+        self,
+        lease_id: str,
+        session_id: str | None,
+        reason: str,
+    ) -> dict[str, Any]:
+        self._require_live_lease(lease_id)
+        active_session_id = self._require_policy_session(lease_id, session_id)
+        result = self._terminate_policy_session(
+            reason,
+            expected_session_id=active_session_id,
+        )
+        if not result["ok"]:
+            raise RobotCommandRejected(
+                "Pi0.5 session 已停止，但部分安全保持/底盘零速命令失败；"
+                "请使用实体急停: " + "; ".join(result["failures"])
+            )
+        return result
+
+    def _policy_step_impl(
+        self,
+        lease_id: str,
+        session_id: str | None,
+        action: Any,
+    ) -> dict[str, Any]:
+        active_session_id = self._require_policy_session(lease_id, session_id)
+        try:
+            self._require_ready(lease_id)
+            self._check_power_for_motion(chassis=False)
+            parsed_action = self._parse_policy_action(action)
+            latest_state, sampled_at = self._sample_policy_state()
+            requested_action = list(parsed_action)
+            effective_action = list(requested_action)
+            effective_action[POLICY_BODY_HOLD_SLICE] = latest_state[
+                POLICY_BODY_HOLD_SLICE
+            ]
+            effective_action[21] = 0.0
+            effective_action[22] = 0.0
+            self._validate_policy_targets(effective_action, latest_state)
+
+            sent_action = list(effective_action[:POLICY_POSITION_DIM])
+            for index, (motor_id, target) in enumerate(
+                zip(POLICY_WIRE_MOTOR_IDS, sent_action)
+            ):
+                self._require_live_lease(lease_id)
+                self._require_policy_session(lease_id, active_session_id)
+                if self._cancel_event.is_set() or self._policy_abort_event.is_set():
+                    raise RobotCommandRejected(
+                        f"Pi0.5 action 在 motor index {index} 前被停止"
+                    )
+                self._send_position(motor_id, target)
+
+            self._hold_targets = {
+                motor_id: sent_action[index]
+                for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS)
+                if MOTOR_SPEC_BY_ID[motor_id].interpolate
+            }
+            self._support_targets = {
+                motor_id: sent_action[index]
+                for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS)
+                if not MOTOR_SPEC_BY_ID[motor_id].interpolate
+            }
+            with self._policy_lock:
+                if self._policy_session_id != active_session_id:
+                    raise RobotConflict(
+                        "Pi0.5 policy session 已停止，请操作员重新确认"
+                    )
+            self._record_event("policy_step_sent")
+            return {
+                "ok": True,
+                "session_id": active_session_id,
+                "latest_state": latest_state,
+                "state": latest_state,
+                "state_monotonic": sampled_at,
+                "requested_action": requested_action,
+                "effective_action": effective_action,
+                "sent_action": sent_action,
+                "sent_motor_ids": list(POLICY_WIRE_MOTOR_IDS),
+            }
+        except BaseException as exc:
+            self._terminate_policy_session(
+                f"step_failed:{type(exc).__name__}",
+                expected_session_id=active_session_id,
+            )
+            raise
 
     def _drop_arm_holds_impl(
         self,
@@ -1087,9 +1416,28 @@ class RobotService:
 
     def _stop_impl(self, lease_id: str) -> dict[str, Any]:
         self._require_live_lease(lease_id)
+        with self._policy_lock:
+            active_session_id = self._policy_session_id
+        if active_session_id is not None:
+            result = self._terminate_policy_session(
+                "software_stop",
+                expected_session_id=active_session_id,
+            )
+            if not result["ok"]:
+                raise RobotCommandRejected(
+                    "policy 已停止，但部分安全保持/底盘零速命令失败；"
+                    "请使用实体急停: " + "; ".join(result["failures"])
+                )
+            self._record_event("software_stop", policy_session=True)
+            result["note"] = (
+                "policy session 已终止、底盘已发零速、21 个位置电机保持最新反馈；"
+                "这不是实体急停"
+            )
+            return result
         stopped = self._send_chassis(0.0, 0.0, require_success=False)
         self._hold_current_feedback()
         self._cancel_event.clear()
+        self._policy_abort_event.clear()
         if not stopped:
             raise RobotCommandRejected("底盘零速尚未确认；后台将继续重试，请使用实体急停")
         self._record_event("software_stop")
@@ -1099,6 +1447,13 @@ class RobotService:
         }
 
     def _shutdown_impl(self) -> dict[str, Any]:
+        with self._policy_lock:
+            active_session_id = self._policy_session_id
+        if active_session_id is not None:
+            self._terminate_policy_session(
+                "service_shutdown",
+                expected_session_id=active_session_id,
+            )
         if (
             self._chassis_was_moving or self._chassis_stop_pending
         ) and self._ready_without_lease():
@@ -1111,6 +1466,23 @@ class RobotService:
             return
         now = time.monotonic()
         lease_valid = self._lease_is_valid()
+        with self._policy_lock:
+            active_session_id = self._policy_session_id
+        if active_session_id is not None:
+            policy_end_reason: str | None = None
+            if self._policy_abort_event.is_set():
+                policy_end_reason = "abort_requested"
+            elif not lease_valid:
+                policy_end_reason = "lease_expired"
+            elif not self._ready_without_lease():
+                policy_end_reason = "robot_not_ready"
+            if policy_end_reason is not None:
+                self._terminate_policy_session(
+                    policy_end_reason,
+                    expected_session_id=active_session_id,
+                )
+                now = time.monotonic()
+                lease_valid = self._lease_is_valid()
         if not lease_valid:
             self._cancel_event.set()
             if self._chassis_was_moving:
@@ -1433,6 +1805,244 @@ class RobotService:
         self._hold_targets = new_holds
         self._support_targets = new_support
 
+    def _assert_operation_allowed_during_policy(self, operation: str) -> None:
+        allowed = {
+            "policy_state",
+            "policy_step",
+            "policy_end",
+            "stop",
+            "shutdown",
+        }
+        with self._policy_lock:
+            active = self._policy_session_id is not None
+        if active and operation not in allowed:
+            raise RobotConflict(
+                "Pi0.5 policy session 正在运行；普通运动/初始化/释放均已锁定，"
+                "只能读取 policy state、发送 policy step、结束 session 或 STOP"
+            )
+
+    def _require_policy_readable(self, lease_id: str) -> None:
+        self._require_live_lease(lease_id)
+        robot, _ = self._require_robot()
+        if not robot.isRobotConnected():
+            raise RobotUnavailable("机器人心跳已断开")
+
+    def _require_policy_session(
+        self,
+        lease_id: str,
+        session_id: str | None,
+    ) -> str:
+        self._require_live_lease(lease_id)
+        with self._policy_lock:
+            active_session_id = self._policy_session_id
+            owner_lease_id = self._policy_session_lease_id
+        if active_session_id is None:
+            raise RobotConflict(
+                "Pi0.5 policy session 已结束，请操作员重新确认后重新开始"
+            )
+        if owner_lease_id != lease_id:
+            raise RobotConflict("Pi0.5 policy session 属于其他控制租约")
+        if session_id is not None and session_id != active_session_id:
+            raise RobotConflict(
+                "Pi0.5 policy session token 已失效，请操作员重新确认"
+            )
+        return active_session_id
+
+    def _sample_policy_state(self) -> tuple[list[float], float]:
+        positions: list[float] = []
+        for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS):
+            motor_state = self._read_motor(motor_id)
+            error_flag = int(motor_state.Error_flag)
+            if error_flag != 0:
+                raise RobotCommandRejected(
+                    f"policy state[{index}] motor {motor_id} "
+                    f"error_flag=0x{error_flag:04x}"
+                )
+            position = _finite_float(
+                motor_state.Position_Actual,
+                f"policy state[{index}] motor {motor_id} feedback",
+            )
+            positions.append(position)
+        sampled_at = time.monotonic()
+        state = positions + [0.0, 0.0]
+        if len(state) != POLICY_STATE_DIM or not all(map(math.isfinite, state)):
+            raise RobotCommandRejected("policy state 必须恰好为 23 个有限数")
+        return state, sampled_at
+
+    @staticmethod
+    def _parse_policy_action(action: Any) -> list[float]:
+        if isinstance(action, (str, bytes, bytearray, dict)):
+            raise RobotCommandRejected("policy action 必须是长度 23 的数值序列")
+        try:
+            raw_values = list(action)
+        except TypeError as exc:
+            raise RobotCommandRejected(
+                "policy action 必须是长度 23 的数值序列"
+            ) from exc
+        if len(raw_values) != POLICY_STATE_DIM:
+            raise RobotCommandRejected(
+                f"policy action 必须恰好 23 维，实际为 {len(raw_values)}"
+            )
+        values: list[float] = []
+        for index, value in enumerate(raw_values):
+            if isinstance(value, bool):
+                raise RobotCommandRejected(
+                    f"policy action[{index}] 不接受布尔值"
+                )
+            values.append(_finite_float(value, f"policy action[{index}]"))
+        return values
+
+    @staticmethod
+    def _validate_policy_targets(
+        effective_action: list[float],
+        latest_state: list[float],
+    ) -> None:
+        if (
+            len(effective_action) != POLICY_STATE_DIM
+            or len(latest_state) != POLICY_STATE_DIM
+        ):
+            raise RobotCommandRejected("policy state/action 必须恰好为 23 维")
+        if not all(map(math.isfinite, effective_action)) or not all(
+            map(math.isfinite, latest_state)
+        ):
+            raise RobotCommandRejected("policy state/action 必须全部为有限数")
+
+        for index in POLICY_GRIPPER_WIRE_INDICES:
+            if effective_action[index] not in POLICY_GRIPPER_VALUES:
+                raise RobotCommandRejected(
+                    f"policy gripper action[{index}] 必须严格为 0 或 1.5"
+                )
+
+        # Model-controlled targets (arms, grippers and lift) still have to be
+        # values accepted by the corresponding SDK setters.  Waist/head are
+        # not model targets: indices 17..20 are overwritten from the latest
+        # feedback immediately before every step.  Preserve those finite
+        # feedback values exactly, including encoder drift a few ticks beyond
+        # a nominal zero, instead of turning a hold command into a range fault.
+        for index, (motor_id, target) in enumerate(
+            zip(POLICY_WIRE_MOTOR_IDS[:17], effective_action[:17])
+        ):
+            spec = MOTOR_SPEC_BY_ID[motor_id]
+            if not spec.minimum <= target <= spec.maximum:
+                raise RobotCommandRejected(
+                    f"policy action[{index}] motor {motor_id} target {target:g} "
+                    f"超出 SDK 范围 [{spec.minimum:g}, {spec.maximum:g}] {spec.unit}"
+                )
+        if effective_action[21:] != [0.0, 0.0]:
+            raise RobotCommandRejected("policy 底盘 action[21:23] 必须为零")
+
+    def _terminate_policy_session(
+        self,
+        reason: str,
+        *,
+        expected_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Fail closed without deinit; this method never raises."""
+
+        with self._policy_lock:
+            active_session_id = self._policy_session_id
+            if active_session_id is None:
+                return {
+                    "ok": True,
+                    "already_inactive": True,
+                    "reason": reason,
+                    "failures": [],
+                }
+            if (
+                expected_session_id is not None
+                and active_session_id != expected_session_id
+            ):
+                return {
+                    "ok": False,
+                    "session_mismatch": True,
+                    "reason": reason,
+                    "failures": ["policy session changed before safe stop"],
+                }
+        self._cancel_event.set()
+        self._policy_abort_event.set()
+        failures: list[str] = []
+        chassis_zero = False
+        try:
+            chassis_zero = self._send_chassis(
+                0.0,
+                0.0,
+                require_success=False,
+            )
+        except BaseException as exc:
+            failures.append(
+                f"chassis zero {type(exc).__name__}: {exc}"
+            )
+        if not chassis_zero:
+            failures.append("chassis zero not confirmed")
+
+        new_holds: dict[int, float] = {}
+        new_support: dict[int, float] = {}
+        latest_positions: list[float] = []
+        complete_state = True
+        held_motor_ids: list[int] = []
+        for motor_id in POLICY_WIRE_MOTOR_IDS:
+            try:
+                motor_state = self._read_motor(motor_id)
+                error_flag = int(motor_state.Error_flag)
+                if error_flag != 0:
+                    raise RobotCommandRejected(
+                        f"error_flag=0x{error_flag:04x}"
+                    )
+                position = _finite_float(
+                    motor_state.Position_Actual,
+                    f"motor[{motor_id}].Position_Actual feedback",
+                )
+                spec = MOTOR_SPEC_BY_ID[motor_id]
+                latest_positions.append(position)
+                self._send_position(motor_id, position)
+                held_motor_ids.append(motor_id)
+                if spec.interpolate:
+                    new_holds[motor_id] = position
+                else:
+                    new_support[motor_id] = position
+            except BaseException as exc:
+                complete_state = False
+                failures.append(
+                    f"motor {motor_id} hold {type(exc).__name__}: {exc}"
+                )
+
+        self._hold_targets = new_holds
+        self._support_targets = new_support
+        with self._policy_lock:
+            if self._policy_session_id == active_session_id:
+                self._policy_session_id = None
+                self._policy_session_lease_id = None
+                self._policy_session_started_monotonic = 0.0
+                self._policy_last_end_reason = str(reason)[:160]
+        try:
+            self._poll_state(force=True)
+        except BaseException as exc:
+            failures.append(f"state refresh {type(exc).__name__}: {exc}")
+        self._cancel_event.clear()
+        self._policy_abort_event.clear()
+        self._record_event(
+            "policy_session_ended",
+            reason=str(reason)[:160],
+            chassis_zero=chassis_zero,
+            held_motor_count=len(held_motor_ids),
+            failure_count=len(failures),
+        )
+        latest_state = (
+            latest_positions + [0.0, 0.0]
+            if complete_state and len(latest_positions) == POLICY_POSITION_DIM
+            else None
+        )
+        return {
+            "ok": chassis_zero and not failures,
+            "session_id": active_session_id,
+            "reason": reason,
+            "chassis_zero": chassis_zero,
+            "held_motor_ids": held_motor_ids,
+            "latest_state": latest_state,
+            "state": latest_state,
+            "failures": failures,
+        }
+
     def _require_robot(self) -> tuple[Any, Any]:
         if self._robot is None or self._sdk is None:
             raise RobotUnavailable("尚未接管机器人 SDK")
@@ -1559,6 +2169,9 @@ __all__ = [
     "INIT_STATE_NAMES",
     "MODE_NAMES",
     "MOTOR_SPECS",
+    "POLICY_POSITION_DIM",
+    "POLICY_STATE_DIM",
+    "POLICY_WIRE_MOTOR_IDS",
     "RobotCallTimeout",
     "RobotCommandRejected",
     "RobotConflict",

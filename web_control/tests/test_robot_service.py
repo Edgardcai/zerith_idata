@@ -8,6 +8,7 @@ from control.web_control.fake_sdk import FakeH1Robot, FakeSdk
 from control.web_control.robot_service import (
     HOME_TARGETS,
     MOTOR_SPEC_BY_ID,
+    POLICY_WIRE_MOTOR_IDS,
     RobotCallTimeout,
     RobotCommandRejected,
     RobotConflict,
@@ -44,6 +45,40 @@ class RobotServiceTests(unittest.TestCase):
         self.service.initialize(lease)
         return lease
 
+    def restart_fake_service(
+        self,
+        *,
+        robot: FakeH1Robot | None = None,
+        lease_seconds: float = 5.0,
+        trajectory_rate_hz: float = 1.0,
+    ) -> None:
+        self.service.close()
+        self.robot = robot or FakeH1Robot()
+        self.service = RobotService(
+            sdk_loader=lambda: self.sdk,
+            robot_factory=lambda _sdk: self.robot,
+            lease_seconds=lease_seconds,
+            chassis_watchdog_seconds=0.05,
+            trajectory_rate_hz=trajectory_rate_hz,
+            state_rate_hz=25.0,
+            home_duration_s=0.025,
+            home_lift_timeout_s=0.2,
+        )
+
+    def policy_action_from_feedback(self) -> list[float]:
+        action = [
+            float(self.robot.states[motor_id].Position_Actual)
+            for motor_id in POLICY_WIRE_MOTOR_IDS
+        ] + [0.0, 0.0]
+        for index in (*range(0, 7), *range(8, 15)):
+            action[index] += 0.1
+        action[7] = 1.5
+        action[15] = 0.0
+        action[16] += 0.01
+        action[17:21] = [99.0, -99.0, 88.0, -88.0]
+        action[21:23] = [7.0, -7.0]
+        return action
+
     def test_sdk_is_lazy_and_takeover_defaults_off(self) -> None:
         state = self.service.state()
         self.assertFalse(state["takeover"])
@@ -77,6 +112,286 @@ class RobotServiceTests(unittest.TestCase):
             (config["motion_speed"]["min"], config["motion_speed"]["max"]),
             (0.2, 2.0),
         )
+        self.assertEqual(
+            config["policy"]["wire_motor_ids"],
+            [*range(7, 15), *range(15, 23), 2, 3, 4, 5, 6],
+        )
+        self.assertEqual(config["policy"]["state_dim"], 23)
+        self.assertEqual(config["policy"]["position_dim"], 21)
+        self.assertFalse(
+            any(
+                "delta" in key or "speed_limit" in key
+                for key in config["policy"]
+            )
+        )
+        self.assertNotIn("watchdog_ms", config["policy"])
+        self.assertNotIn("first_step_grace_ms", config["policy"])
+        self.assertNotIn("feedback_limit_tolerance", config["policy"])
+
+    def test_policy_state_is_read_only_23d_and_uses_wire_order(self) -> None:
+        lease = self.acquire_and_init()
+        expected = []
+        for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS):
+            spec = MOTOR_SPEC_BY_ID[motor_id]
+            position = spec.minimum + 0.25 * (spec.maximum - spec.minimum)
+            self.robot.states[motor_id].Position_Actual = position
+            expected.append(position)
+        self.robot.calls.clear()
+
+        result = self.service.read_policy_state(lease)
+
+        self.assertEqual(result["state"], expected + [0.0, 0.0])
+        self.assertEqual(len(result["state"]), 23)
+        setters = [call for call in self.robot.calls if call[0].startswith("set")]
+        self.assertEqual(setters, [])
+
+    def test_policy_feedback_preserves_finite_values_without_range_threshold(self) -> None:
+        lease = self.service.acquire()["lease_id"]
+        self.robot.states[2].Position_Actual = -0.25
+        self.robot.states[3].Position_Actual = -2.396844865870662e-05
+        result = self.service.read_policy_state(lease)
+        self.assertEqual(result["state"][16], -0.25)
+        self.assertEqual(result["state"][17], -2.396844865870662e-05)
+
+        self.robot.states[2].Position_Actual = float("nan")
+        with self.assertRaisesRegex(RobotCommandRejected, "必须是有限数"):
+            self.service.read_policy_state(lease)
+
+    def test_policy_session_blocks_normal_motion_but_stop_is_always_allowed(self) -> None:
+        lease = self.acquire_and_init()
+        session = self.service.begin_policy_session(lease)
+        self.assertTrue(self.service.state()["policy_session"]["active"])
+        with self.assertRaises(RobotConflict):
+            self.service.move_joint(lease, 7, 0.1, duration_s=0.005)
+        with self.assertRaises(RobotConflict):
+            self.service.command_chassis(lease, 1.0, 1.0)
+        with self.assertRaises(RobotConflict):
+            self.service.deinitialize(lease)
+        observation = self.service.read_policy_state(
+            lease,
+            session_id=session["session_id"],
+        )
+        self.assertEqual(len(observation["state"]), 23)
+
+        stopped = self.service.stop_motion(lease, renew_lease=False)
+
+        self.assertTrue(stopped["ok"])
+        self.assertFalse(self.service.state()["policy_session"]["active"])
+        self.assertNotIn(("robot_deinit",), self.robot.calls)
+        self.assertEqual(self.robot.states[0].Speed_Actual, 0.0)
+        self.assertEqual(self.robot.states[1].Speed_Actual, 0.0)
+
+    def test_policy_step_masks_body_and_base_and_sends_exactly_21_positions(self) -> None:
+        self.restart_fake_service(trajectory_rate_hz=1.0)
+        lease = self.acquire_and_init()
+        self.robot.states[2].Position_Actual = 0.4
+        self.robot.states[3].Position_Actual = -2.396844865870662e-05
+        self.robot.states[4].Position_Actual = -0.2
+        self.robot.states[5].Position_Actual = 0.3
+        self.robot.states[6].Position_Actual = -0.1
+        begin = self.service.begin_policy_session(lease)
+        time.sleep(0.03)  # let the worker's immediate hold tick finish
+        self.robot.calls.clear()
+        action = self.policy_action_from_feedback()
+
+        result = self.service.policy_step(
+            lease,
+            action,
+            session_id=begin["session_id"],
+        )
+
+        self.assertEqual(len(result["latest_state"]), 23)
+        self.assertEqual(len(result["requested_action"]), 23)
+        self.assertEqual(len(result["effective_action"]), 23)
+        self.assertEqual(len(result["sent_action"]), 21)
+        self.assertEqual(result["sent_motor_ids"], list(POLICY_WIRE_MOTOR_IDS))
+        self.assertEqual(
+            result["effective_action"][17:21],
+            result["latest_state"][17:21],
+        )
+        self.assertEqual(result["effective_action"][17], -2.396844865870662e-05)
+        self.assertEqual(result["effective_action"][21:23], [0.0, 0.0])
+        self.assertIn(result["effective_action"][7], (0.0, 1.5))
+        self.assertIn(result["effective_action"][15], (0.0, 1.5))
+        self.assertNotIn("max_arm_delta_rad", result)
+        self.assertNotIn("joint_speed_deg_s", result)
+        self.assertNotIn("max_joint_step_rad", result)
+        position_names = {
+            "setArm_low",
+            "setGripper_low",
+            "setWaist_low",
+            "setHead_low",
+        }
+        position_calls = [
+            call for call in self.robot.calls if call[0] in position_names
+        ]
+        self.assertEqual(
+            [call[1] for call in position_calls[:21]],
+            list(POLICY_WIRE_MOTOR_IDS),
+        )
+        self.assertEqual(
+            [call[2] for call in position_calls[:21]],
+            result["sent_action"],
+        )
+        self.assertFalse(
+            any(call[0] == "setChassis_low" and call[2] != 0.0 for call in self.robot.calls)
+        )
+
+    def test_policy_calls_validate_but_do_not_renew_lease(self) -> None:
+        self.restart_fake_service()
+        lease = self.acquire_and_init()
+        with self.service._lease_lock:
+            deadline = self.service._lease_deadline
+        self.service.read_policy_state(lease)
+        begin = self.service.begin_policy_session(lease)
+        result = self.service.policy_step(
+            lease,
+            self.policy_action_from_feedback(),
+            session_id=begin["session_id"],
+        )
+        self.service.end_policy_session(
+            lease,
+            session_id=result["session_id"],
+        )
+        with self.service._lease_lock:
+            self.assertEqual(self.service._lease_deadline, deadline)
+
+    def test_invalid_policy_actions_fail_closed_without_deinit(self) -> None:
+        self.restart_fake_service()
+        lease = self.acquire_and_init()
+        invalid_actions = []
+        valid = self.policy_action_from_feedback()
+        invalid_actions.append(valid[:-1])
+        not_finite = list(valid)
+        not_finite[0] = float("nan")
+        invalid_actions.append(not_finite)
+        bad_gripper = list(valid)
+        bad_gripper[7] = 0.5
+        invalid_actions.append(bad_gripper)
+
+        for action in invalid_actions:
+            with self.subTest(action=action):
+                begin = self.service.begin_policy_session(lease)
+                with self.assertRaises(RobotCommandRejected):
+                    self.service.policy_step(
+                        lease,
+                        action,
+                        session_id=begin["session_id"],
+                    )
+                self.assertFalse(
+                    self.service.state()["policy_session"]["active"]
+                )
+                self.assertNotIn(("robot_deinit",), self.robot.calls)
+                self.assertEqual(self.robot.states[0].Speed_Actual, 0.0)
+                self.assertEqual(self.robot.states[1].Speed_Actual, 0.0)
+
+    def test_policy_step_sends_large_arm_and_lift_changes_without_clamping(self) -> None:
+        self.restart_fake_service()
+        lease = self.acquire_and_init()
+        session_id = self.service.begin_policy_session(lease)["session_id"]
+        action = [
+            float(self.robot.states[motor_id].Position_Actual)
+            for motor_id in POLICY_WIRE_MOTOR_IDS
+        ] + [0.0, 0.0]
+        action[0] = 1.2
+        action[8] = -1.2
+        action[16] = 0.7
+
+        result = self.service.policy_step(
+            lease,
+            action,
+            session_id=session_id,
+        )
+        self.assertTrue(self.service.state()["policy_session"]["active"])
+        self.assertEqual(result["requested_action"][0], 1.2)
+        self.assertEqual(result["effective_action"][0], 1.2)
+        self.assertEqual(result["sent_action"][0], 1.2)
+        self.assertEqual(result["effective_action"][8], -1.2)
+        self.assertEqual(result["effective_action"][16], 0.7)
+        self.assertEqual(self.robot.states[7].Position_Actual, 1.2)
+        self.assertEqual(self.robot.states[15].Position_Actual, -1.2)
+        self.assertEqual(self.robot.states[2].Position_Actual, 0.7)
+        self.assertNotIn(("robot_deinit",), self.robot.calls)
+
+    def test_policy_step_still_rejects_targets_outside_sdk_soft_limits(self) -> None:
+        self.restart_fake_service()
+        lease = self.acquire_and_init()
+        cases = ((0, 1.500001), (16, 0.800001))
+
+        for index, target in cases:
+            with self.subTest(index=index, target=target):
+                action = [
+                    float(self.robot.states[motor_id].Position_Actual)
+                    for motor_id in POLICY_WIRE_MOTOR_IDS
+                ] + [0.0, 0.0]
+                action[index] = target
+                session_id = self.service.begin_policy_session(lease)[
+                    "session_id"
+                ]
+                with self.assertRaisesRegex(RobotCommandRejected, "超出 SDK 范围"):
+                    self.service.policy_step(
+                        lease,
+                        action,
+                        session_id=session_id,
+                    )
+                self.assertFalse(self.service.state()["policy_session"]["active"])
+                self.assertNotIn(("robot_deinit",), self.robot.calls)
+
+    def test_motor_error_or_partial_setter_failure_ends_policy_safely(self) -> None:
+        self.restart_fake_service()
+        lease = self.acquire_and_init()
+        begin = self.service.begin_policy_session(lease)
+        self.robot.states[9].Error_flag = 0x0008
+        with self.assertRaisesRegex(RobotCommandRejected, "0x0008"):
+            self.service.policy_step(
+                lease,
+                self.policy_action_from_feedback(),
+                session_id=begin["session_id"],
+            )
+        self.assertFalse(self.service.state()["policy_session"]["active"])
+        self.assertNotIn(("robot_deinit",), self.robot.calls)
+
+        self.robot.states[9].Error_flag = 0
+        begin = self.service.begin_policy_session(lease)
+        self.robot.fail_next_set = True
+        with self.assertRaisesRegex(RobotCommandRejected, "setter"):
+            self.service.policy_step(
+                lease,
+                self.policy_action_from_feedback(),
+                session_id=begin["session_id"],
+            )
+        self.assertFalse(self.service.state()["policy_session"]["active"])
+        self.assertEqual(self.robot.states[0].Speed_Actual, 0.0)
+        self.assertEqual(self.robot.states[1].Speed_Actual, 0.0)
+        self.assertNotIn(("robot_deinit",), self.robot.calls)
+
+    def test_policy_session_has_no_first_step_or_step_timing_threshold(self) -> None:
+        self.restart_fake_service(
+            lease_seconds=1.0,
+            trajectory_rate_hz=20.0,
+        )
+        lease = self.acquire_and_init()
+        begin = self.service.begin_policy_session(lease)
+        self.assertNotIn("first_step_grace_seconds", begin)
+        self.assertNotIn("step_watchdog_seconds", begin)
+        time.sleep(0.4)
+        policy_state = self.service.state()["policy_session"]
+        self.assertTrue(policy_state["active"])
+        self.assertNotIn("awaiting_first_step", policy_state)
+        self.assertNotIn("watchdog_remaining_ms", policy_state)
+
+        self.service.policy_step(
+            lease,
+            self.policy_action_from_feedback(),
+            session_id=begin["session_id"],
+        )
+        time.sleep(0.4)
+        self.assertTrue(self.service.state()["policy_session"]["active"])
+        ended = self.service.end_policy_session(
+            lease,
+            session_id=begin["session_id"],
+        )
+        self.assertTrue(ended["ok"])
 
     def test_all_position_endpoints_are_accepted_and_outside_rejected(self) -> None:
         lease = self.acquire_and_init()

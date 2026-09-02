@@ -59,6 +59,9 @@
       <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="voicePage" data-tab="voicePage">
         <span class="tab-icon" aria-hidden="true">◉</span><span>语音</span>
       </button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pi05Page" data-tab="pi05Page">
+        <span class="tab-icon" aria-hidden="true">π</span><span>推理</span>
+      </button>
     </nav>
 
     <main>
@@ -296,6 +299,157 @@
               <small id="voiceTextHint">语音服务就绪后可按 Enter 发送</small>
             </form>
           </article>
+        </div>
+      </section>
+
+      <section class="page page--pi05" id="pi05Page" role="tabpanel" hidden>
+        <div class="page-heading pi05-heading">
+          <div>
+            <p class="eyebrow">ZERITH · REMOTE POLICY EXECUTOR</p>
+            <h1>推理</h1>
+          </div>
+          <span class="pi05-phase-badge" id="pi05PhaseBadge" data-phase="unknown">
+            <i aria-hidden="true"></i><span id="pi05PhaseText">正在读取状态</span>
+          </span>
+        </div>
+
+        <div class="pi05-layout">
+          <article class="panel pi05-control-panel">
+            <div class="panel-heading panel-heading--compact">
+              <div class="side-badge side-badge--pi05">π</div>
+              <div><h2>推理配置</h2><p>连接远端、验证观测，再由操作员确认真机执行</p></div>
+            </div>
+
+            <div class="pi05-control-body">
+              <div class="pi05-connection-grid">
+                <label class="pi05-field" for="pi05Host">
+                  <span>远端地址</span>
+                  <input id="pi05Host" type="text" value="192.168.1.154" maxlength="255" autocomplete="off" spellcheck="false">
+                </label>
+                <label class="pi05-field" for="pi05Port">
+                  <span>端口</span>
+                  <input id="pi05Port" type="number" min="1" max="65535" step="1" value="9973" inputmode="numeric">
+                </label>
+              </div>
+
+              <label class="pi05-field" for="pi05Prompt">
+                <span>任务提示词</span>
+                <textarea id="pi05Prompt" rows="4" maxlength="1000" spellcheck="false">Grasp AD Calcium Milk with the left hand and then grasp Dahongpao Milk Tea with the right hand</textarea>
+                <small>真机启动的提示词必须与当前连接下成功 dry-run 的提示词完全一致。</small>
+              </label>
+
+              <div class="pi05-parameter-grid">
+                <label class="pi05-field" for="pi05JointSpeed">
+                  <span>关节速度（deg/s）</span>
+                  <input id="pi05JointSpeed" type="number" min="0.1" step="1" value="30" inputmode="decimal">
+                  <small>限制双臂 14 个关节目标的变化速度，默认 30 deg/s；以“上一条成功下发目标”为基准，不影响夹爪和升降柱。</small>
+                </label>
+                <label class="pi05-field" for="pi05ControlRate">
+                  <span>发送频率（Hz）</span>
+                  <input id="pi05ControlRate" type="number" step="1" value="30" inputmode="decimal">
+                  <small>每秒向机器人发送动作点的次数，默认 30 Hz。</small>
+                </label>
+                <label class="pi05-field" for="pi05StepsPerChunk">
+                  <span>每个 Chunk 执行步数 N</span>
+                  <input id="pi05StepsPerChunk" type="number" min="1" max="50" step="1" value="30" inputmode="numeric">
+                  <small>服务端每包返回 50 步；执行前 N 步完成后，重新采集最新状态和图片并同步请求下一包。没有总 Chunk 或总执行步数上限。</small>
+                </label>
+              </div>
+
+              <div class="pi05-prerequisites" aria-label="真机启动条件">
+                <div class="pi05-prerequisite" id="pi05ConnectionGate" data-ready="false"><i aria-hidden="true"></i><span>远端连接和 metadata 待验证</span></div>
+                <div class="pi05-prerequisite" id="pi05LeaseGate" data-ready="false"><i aria-hidden="true"></i><span>当前页面持有控制租约</span></div>
+                <div class="pi05-prerequisite" id="pi05InitGate" data-ready="false"><i aria-hidden="true"></i><span>机器人已初始化</span></div>
+                <div class="pi05-prerequisite" id="pi05ModeGate" data-ready="false"><i aria-hidden="true"></i><span>LOW_LEVEL 控制模式</span></div>
+                <div class="pi05-prerequisite" id="pi05DryRunGate" data-ready="false"><i aria-hidden="true"></i><span>当前连接的 dry-run 已通过且提示词未变化</span></div>
+              </div>
+
+              <div class="pi05-actions">
+                <button class="button button--soft" id="pi05ProbeButton" type="button">重新验证 metadata</button>
+                <button class="button button--primary" id="pi05DryRunButton" type="button" disabled>执行 dry-run</button>
+                <button class="button button--danger pi05-start-button" id="pi05StartButton" type="button" disabled>确认并启动真机</button>
+              </div>
+
+              <div class="pi05-safety-note">
+                <strong>真机执行边界</strong>
+                <p>双臂动作按可调关节速度限幅，基准是上一条成功下发目标，不使用滞后反馈重置目标；夹爪和升降柱不经过该限幅。腰和头保持最新观测位置，底盘线/角速度强制为 0。网络、图像、状态或动作异常会停止并锁存，必须人工清故障后重新探针和 dry-run。</p>
+              </div>
+            </div>
+          </article>
+
+          <aside class="panel pi05-status-panel" aria-label="推理状态与安全控制">
+            <div class="panel-heading panel-heading--compact">
+              <div class="side-badge side-badge--pi05-status">◎</div>
+              <div><h2>状态与安全</h2><p>只轮询状态；不会自动启动或自动重连</p></div>
+              <span class="pi05-poll-state" id="pi05PollState">连接中</span>
+            </div>
+
+            <div class="pi05-safety-controls">
+              <button class="pi05-emergency-button" id="pi05EmergencyStopButton" type="button">
+                <span aria-hidden="true">■</span><strong>急停</strong><small>停止推理和普通运动；这不是实体急停</small>
+              </button>
+              <div class="pi05-connection-buttons">
+                <button class="button button--soft" id="pi05DisconnectButton" type="button">断开连接</button>
+                <button class="button button--primary" id="pi05ReconnectButton" type="button">重新连接</button>
+              </div>
+              <div class="pi05-secondary-safety-actions">
+                <button class="pi05-stop-button" id="pi05StopButton" type="button"><span aria-hidden="true">■</span> 停止推理</button>
+                <button class="button button--soft" id="pi05ResetFaultButton" type="button" disabled>清除锁存故障</button>
+              </div>
+              <p class="pi05-connection-note">断开仅关闭远端推理连接，不会反初始化机器人，也不会调用可能导致掉力的 deinit。</p>
+            </div>
+
+            <div class="pi05-endpoint-row">
+              <span>当前远端</span>
+              <strong id="pi05Endpoint">192.168.1.154:9973</strong>
+            </div>
+
+            <div class="pi05-metrics">
+              <div><span>Metadata</span><strong id="pi05MetadataState">未验证</strong></div>
+              <div><span>Dry-run</span><strong id="pi05DryRunState">未执行</strong></div>
+              <div><span>推理延迟</span><strong id="pi05Latency">--</strong></div>
+              <div><span>Chunk</span><strong id="pi05Chunk">--</strong></div>
+              <div><span>请求时序</span><strong id="pi05ChunkRequestMode">包尾同步</strong></div>
+              <div><span>新包首步目标差</span><strong id="pi05ChunkFirstDelta">--</strong></div>
+              <div><span>关节速度限幅</span><strong id="pi05JointSpeedMetric">30 deg/s</strong></div>
+              <div><span>每包执行</span><strong id="pi05StepsPerChunkMetric">30 / 50 步</strong></div>
+              <div><span>累计已执行</span><strong id="pi05Executed">0 步</strong></div>
+            </div>
+
+            <div class="pi05-status-sections">
+              <section class="pi05-status-block">
+                <h3>Metadata</h3>
+                <pre id="pi05MetadataDetail">尚未执行 metadata 探针</pre>
+              </section>
+              <section class="pi05-status-block">
+                <h3>当前 dry-run</h3>
+                <pre id="pi05DryRunDetail">尚未执行 dry-run</pre>
+              </section>
+              <section class="pi05-status-block pi05-fault-block" id="pi05FaultBlock" data-fault="false">
+                <h3>锁存故障</h3>
+                <p id="pi05Fault">无</p>
+              </section>
+            </div>
+
+            <div class="pi05-camera-status">
+              <div class="pi05-camera-heading">
+                <div><h3>观测相机映射</h3><p>CameraService / CameraClient BGR → JPEG</p></div>
+                <span id="pi05CameraLimit">最近观测帧龄</span>
+              </div>
+              <div class="pi05-camera-row">
+                <div><strong>cam_high</strong><small id="pi05CameraMapHigh">head / rs/cam_high</small></div>
+                <output id="pi05CameraAgeHigh">--</output>
+              </div>
+              <div class="pi05-camera-row">
+                <div><strong>cam_left_wrist</strong><small id="pi05CameraMapLeft">left_wrist / rs/cam_left_wrist</small></div>
+                <output id="pi05CameraAgeLeft">--</output>
+              </div>
+              <div class="pi05-camera-row">
+                <div><strong>cam_right_wrist</strong><small id="pi05CameraMapRight">right_wrist / rs/cam_right_wrist</small></div>
+                <output id="pi05CameraAgeRight">--</output>
+              </div>
+            </div>
+          </aside>
         </div>
       </section>
     </main>

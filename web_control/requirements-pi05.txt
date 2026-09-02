@@ -1,0 +1,5 @@
+# Install with the robot's CPython 3.10 environment.  Do not use the policy
+# server's Python 3.11/uv environment and do not replace the vendor SDK .so files.
+numpy==1.26.0
+opencv-contrib-python==4.10.0.84
+websockets==16.0

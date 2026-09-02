@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hashlib
 import ipaddress
 import json
+import math
 import mimetypes
 import os
 from pathlib import Path
@@ -35,6 +36,17 @@ from .camera_service import (
 )
 from .fake_camera import fake_camera_factory
 from .fake_sdk import FakeH1Robot, FakeSdk
+from .pi05_executor import (
+    Pi05Executor,
+    Pi05ExecutorError,
+    Pi05SafetyError,
+    Pi05StateError,
+)
+from .pi05_protocol import (
+    PolicyServerError,
+    ProtocolTransportError,
+    ProtocolValidationError,
+)
 from .robot_service import (
     RobotCallTimeout,
     RobotCommandRejected,
@@ -53,6 +65,7 @@ CONTROL_TOKEN_COOKIE = "h1_control_token"
 WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_CAMERA_WS_BUFFER = 4 * 1024 * 1024
 MAX_VOICE_WS_BUFFER = 1024 * 1024
+PI05_CONTROL_UNLOCKED_PHASES = frozenset(("idle", "probing", "dry_run_ready"))
 
 CAMERA_STREAM_IDS = {
     "left_wrist/rgb": 0,
@@ -83,16 +96,29 @@ class CameraConnectionManager:
         self._lock = threading.RLock()
         self._viewers = 0
         self._stop_timer: threading.Timer | None = None
+        self._closed = False
 
     def enter(self) -> dict[str, Any]:
+        # CameraClient.start() performs vendor RPCs and may take several
+        # seconds (or stall when the camera daemon is unhealthy).  Never hold
+        # the manager lock across that call: /api/state and /api/cameras/status
+        # must remain responsive while a viewer is connecting.
         with self._lock:
+            if self._closed:
+                raise CameraServiceError("相机连接管理器已关闭")
             if self._stop_timer is not None:
                 self._stop_timer.cancel()
                 self._stop_timer = None
-            if self._viewers == 0 and not self.camera.running:
-                self.camera.start()
             self._viewers += 1
+        try:
+            if not self.camera.running:
+                # CameraService serialises lifecycle calls, so concurrent
+                # first viewers are safe and the later start is idempotent.
+                self.camera.start()
             return self.camera.get_status()
+        except BaseException:
+            self.leave()
+            raise
 
     def leave(self) -> None:
         with self._lock:
@@ -106,6 +132,7 @@ class CameraConnectionManager:
 
     def close(self) -> None:
         with self._lock:
+            self._closed = True
             if self._stop_timer is not None:
                 self._stop_timer.cancel()
                 self._stop_timer = None
@@ -121,9 +148,17 @@ class CameraConnectionManager:
     def _stop_if_unused(self) -> None:
         with self._lock:
             self._stop_timer = None
-            if self._viewers != 0:
+            if self._viewers != 0 or self._closed:
                 return
-            self.camera.stop()
+        # As with start(), do not hold the manager lock across vendor calls.
+        self.camera.stop()
+        # A viewer may have entered after the zero-viewer check but before
+        # stop completed.  Restore streaming for it instead of leaving a live
+        # subscription attached to a stopped CameraService.
+        with self._lock:
+            restart = self._viewers > 0 and not self._closed
+        if restart and not self.camera.running:
+            self.camera.start()
 
 
 class WebControlApp:
@@ -134,6 +169,10 @@ class WebControlApp:
         camera: CameraService | None = None,
         voice: VoiceGateway | None = None,
         voice_motion: VoiceMotionController | None = None,
+        pi05: Pi05Executor | None = None,
+        pi05_host: str = "192.168.1.154",
+        pi05_port: int = 9973,
+        pi05_inference_timeout_s: float = 10.0,
         control_token: str | None = None,
         static_dir: Path = STATIC_DIR,
     ) -> None:
@@ -142,10 +181,22 @@ class WebControlApp:
         self.cameras = CameraConnectionManager(self.camera)
         self.voice = voice or VoiceGateway()
         self.voice_motion = voice_motion or VoiceMotionController(self.robot)
+        self.pi05 = pi05 or Pi05Executor(
+            self.robot,
+            self.camera,
+            host=pi05_host,
+            port=pi05_port,
+            inference_timeout_s=pi05_inference_timeout_s,
+            camera_acquire=self.cameras.enter,
+            camera_release=self.cameras.leave,
+        )
         self.control_token = control_token
         self.static_dir = static_dir.resolve()
 
     def close(self) -> None:
+        # Stop policy/network/camera work before releasing the unique SDK
+        # owner.  Pi05Executor.close() never calls robot_deinit().
+        self.pi05.close()
         self.voice_motion.close()
         self.cameras.close()
         self.robot.close()
@@ -230,7 +281,13 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 return
             state = self.app.robot.state()
             state["camera"] = self.app.cameras.status()
+            state["pi05"] = self.app.pi05.status()
             self._send_json(HTTPStatus.OK, state)
+            return
+        if path == "/api/pi05/status":
+            if not self._require_authorized():
+                return
+            self._send_json(HTTPStatus.OK, self.app.pi05.status())
             return
         if path == "/api/cameras/status":
             if not self._require_authorized():
@@ -271,6 +328,11 @@ class H1RequestHandler(BaseHTTPRequestHandler):
         if path == "/api/voice/asr/ws":
             if not self._require_authorized():
                 return
+            try:
+                self._require_pi05_control_unlocked("新语音 ASR WebSocket")
+            except RobotConflict as exc:
+                self._send_api_error(exc)
+                return
             self._serve_voice_asr_websocket()
             return
         stream = self._parse_camera_mjpeg_path(path)
@@ -288,7 +350,57 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             path = urlsplit(self.path).path
             lease = self.headers.get("X-Control-Lease", "")
+            if path == "/api/pi05/reconnect":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.pi05.reconnect(body.get("host"), body.get("port")),
+                )
+                return
+            if path == "/api/pi05/disconnect":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.pi05.disconnect(reason="web_operator_disconnect"),
+                )
+                return
+            if path == "/api/pi05/probe":
+                self._send_json(HTTPStatus.OK, self.app.pi05.probe())
+                return
+            if path == "/api/pi05/dry-run":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.pi05.dry_run(body.get("prompt"), lease),
+                )
+                return
+            if path == "/api/pi05/start":
+                # A voice action must be cancelled before the policy session
+                # synchronously obtains RobotService's exclusive controller.
+                self.app.voice_motion.disable(
+                    reason="pi05_start",
+                    requested_lease=lease,
+                )
+                self._send_json(
+                    HTTPStatus.ACCEPTED,
+                    self.app.pi05.start(
+                        body.get("prompt"),
+                        lease,
+                        confirmation=body.get("confirmation"),
+                        steps_per_chunk=body.get("steps_per_chunk", 30),
+                        control_rate_hz=body.get("control_rate_hz", 30),
+                        joint_speed_deg_s=body.get("joint_speed_deg_s", 30),
+                    ),
+                )
+                return
+            if path == "/api/pi05/stop":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.pi05.stop(reason="web_operator_stop"),
+                )
+                return
+            if path == "/api/pi05/reset-fault":
+                self._send_json(HTTPStatus.OK, self.app.pi05.reset_fault())
+                return
             if path == "/api/voice/start":
+                self._require_pi05_control_unlocked("语音会话启动")
                 language = _normalize_voice_language(body.get("language", "zh"))
                 self._send_json(
                     HTTPStatus.ACCEPTED,
@@ -296,12 +408,14 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 )
                 return
             if path == "/api/voice/finish-input":
+                self._require_pi05_control_unlocked("语音输入完成")
                 self._send_json(HTTPStatus.ACCEPTED, self.app.voice.finish_input())
                 return
             if path == "/api/voice/cancel":
                 self._send_json(HTTPStatus.ACCEPTED, self.app.voice.cancel())
                 return
             if path == "/api/voice/text":
+                self._require_pi05_control_unlocked("文字语音提交")
                 text = body.get("text")
                 language = _normalize_voice_language(body.get("language", "zh"))
                 if not isinstance(text, str) or not text.strip():
@@ -318,6 +432,8 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 enabled = body.get("enabled")
                 if not isinstance(enabled, bool):
                     raise RobotCommandRejected("enabled 必须是布尔值")
+                if enabled:
+                    self._require_pi05_control_unlocked("语音动作启用")
                 result = self.app.voice_motion.set_enabled(lease, enabled)
                 self._send_json(HTTPStatus.OK, result)
                 return
@@ -326,8 +442,10 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 if not isinstance(enabled, bool):
                     raise RobotCommandRejected("enabled 必须是布尔值")
                 if enabled:
+                    self._require_pi05_control_unlocked("控制权接管")
                     result = self.app.robot.acquire(body.get("client_id"))
                 else:
+                    self.app.pi05.stop(reason="takeover_released")
                     self.app.voice_motion.disable(
                         reason="takeover_released",
                         requested_lease=lease,
@@ -339,6 +457,7 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self.app.robot.heartbeat(lease))
                 return
             if path == "/api/motion/joint":
+                self._require_pi05_control_unlocked("关节运动")
                 result = self.app.robot.move_joint(
                     lease,
                     body.get("motor_id"),
@@ -349,6 +468,8 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, result)
                 return
             if path == "/api/motion/chassis":
+                if not self._is_exact_zero_chassis_command(body):
+                    self._require_pi05_control_unlocked("非零底盘运动")
                 result = self.app.robot.command_chassis(
                     lease,
                     body.get("left_speed"),
@@ -357,11 +478,13 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, result)
                 return
             if path == "/api/actions/init":
+                self._require_pi05_control_unlocked("机器人初始化")
                 result = self.app.robot.initialize(lease)
                 result.setdefault("message", "初始化完成")
                 self._send_json(HTTPStatus.OK, result)
                 return
             if path == "/api/actions/deinit":
+                self._require_pi05_control_unlocked("机器人反初始化")
                 self.app.voice_motion.disable(
                     reason="robot_deinitialized",
                     requested_lease=lease,
@@ -371,6 +494,7 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, result)
                 return
             if path == "/api/actions/home":
+                self._require_pi05_control_unlocked("机器人回初始位姿")
                 result = self.app.robot.move_home(
                     lease,
                     speed_scale=body.get("speed_scale", 1.0),
@@ -379,6 +503,7 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, result)
                 return
             if path == "/api/stop":
+                self.app.pi05.stop(reason="global_software_stop")
                 self.app.voice_motion.cancel_active(lease)
                 self._send_json(HTTPStatus.OK, self.app.robot.stop_motion(lease))
                 return
@@ -829,11 +954,53 @@ class H1RequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid control token"})
         return False
 
+    def _require_pi05_control_unlocked(self, operation: str) -> None:
+        """Reject ordinary control unless the Pi0.5 phase is explicitly safe.
+
+        This is deliberately allow-list based.  A missing, malformed, or new
+        phase must fail closed instead of accidentally re-enabling another
+        controller while policy execution may still own the robot.
+        """
+
+        try:
+            report = self.app.pi05.status()
+        except Exception as exc:
+            raise RobotConflict(
+                f"无法确认 Pi0.5 状态，已阻止{operation}"
+            ) from exc
+        phase = report.get("phase") if isinstance(report, dict) else None
+        if phase not in PI05_CONTROL_UNLOCKED_PHASES:
+            label = phase if isinstance(phase, str) and phase else "unknown"
+            raise RobotConflict(
+                f"Pi0.5 phase={label}，已阻止{operation}；请先安全停止或清除故障"
+            )
+
+    @staticmethod
+    def _is_exact_zero_chassis_command(body: dict[str, Any]) -> bool:
+        def exact_zero(value: object) -> bool:
+            return (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+                and float(value) == 0.0
+            )
+
+        return exact_zero(body.get("left_speed")) and exact_zero(
+            body.get("right_speed")
+        )
+
     def _send_api_error(self, exc: BaseException) -> None:
-        if isinstance(exc, RobotConflict):
+        if isinstance(exc, (RobotConflict, Pi05StateError)):
             status = HTTPStatus.CONFLICT
-        elif isinstance(exc, (RobotCommandRejected, ValueError, KeyError)):
+        elif isinstance(
+            exc,
+            (RobotCommandRejected, Pi05SafetyError, ValueError, KeyError),
+        ):
             status = HTTPStatus.BAD_REQUEST
+        elif isinstance(exc, ProtocolTransportError):
+            status = HTTPStatus.SERVICE_UNAVAILABLE
+        elif isinstance(exc, (PolicyServerError, ProtocolValidationError)):
+            status = HTTPStatus.BAD_GATEWAY
         elif isinstance(exc, (RobotUnavailable, CameraServiceError)):
             status = HTTPStatus.SERVICE_UNAVAILABLE
         elif isinstance(exc, VoiceGatewayError):
@@ -841,6 +1008,8 @@ class H1RequestHandler(BaseHTTPRequestHandler):
         elif isinstance(exc, RobotCallTimeout):
             status = HTTPStatus.GATEWAY_TIMEOUT
         elif isinstance(exc, RobotServiceError):
+            status = HTTPStatus.INTERNAL_SERVER_ERROR
+        elif isinstance(exc, Pi05ExecutorError):
             status = HTTPStatus.INTERNAL_SERVER_ERROR
         else:
             status = HTTPStatus.INTERNAL_SERVER_ERROR
@@ -945,6 +1114,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--camera-target", default="localhost:50051")
     parser.add_argument(
+        "--pi05-server-host",
+        default=os.environ.get("PI05_POLICY_HOST", "192.168.1.154"),
+        help="Pi0.5 WebSocket JSON policy server host",
+    )
+    parser.add_argument(
+        "--pi05-server-port",
+        type=int,
+        default=int(os.environ.get("PI05_POLICY_PORT", "9973")),
+        help="Pi0.5 WebSocket JSON policy server port",
+    )
+    parser.add_argument(
+        "--pi05-inference-timeout",
+        type=float,
+        default=float(os.environ.get("PI05_INFERENCE_TIMEOUT", "10")),
+        help="seconds before a policy inference request faults closed",
+    )
+    parser.add_argument(
         "--voice-motion-port",
         type=int,
         default=8766,
@@ -959,6 +1145,10 @@ def main(argv: list[str] | None = None) -> int:
         raise SystemExit("--port must be in 1..65535")
     if not 1 <= args.voice_motion_port <= 65535:
         raise SystemExit("--voice-motion-port must be in 1..65535")
+    if not 1 <= args.pi05_server_port <= 65535:
+        raise SystemExit("--pi05-server-port must be in 1..65535")
+    if not math.isfinite(args.pi05_inference_timeout) or args.pi05_inference_timeout <= 0:
+        raise SystemExit("--pi05-inference-timeout must be a positive finite number")
     _validate_access_policy(
         args.host,
         args.token,
@@ -981,6 +1171,9 @@ def main(argv: list[str] | None = None) -> int:
     app = WebControlApp(
         robot=robot_service,
         camera=camera_service,
+        pi05_host=args.pi05_server_host,
+        pi05_port=args.pi05_server_port,
+        pi05_inference_timeout_s=args.pi05_inference_timeout,
         control_token=args.token,
     )
     server = H1WebServer((args.host, args.port), app)

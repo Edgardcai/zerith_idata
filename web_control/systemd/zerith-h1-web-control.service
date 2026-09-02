@@ -11,10 +11,12 @@ Group=robot
 WorkingDirectory=/home/robot/control
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/home/robot/miniconda3/envs/zerith/bin/python -m web_control.server --host 172.16.18.43 --port 8080 --allow-unauthenticated-lan
+Environment=NO_PROXY=localhost,127.0.0.1,192.168.1.154
+Environment=no_proxy=localhost,127.0.0.1,192.168.1.154
+ExecStart=/home/robot/miniconda3/envs/zerith/bin/python -m web_control.server --host 172.16.18.43 --port 8080 --pi05-server-host 192.168.1.154 --pi05-server-port 9973 --allow-unauthenticated-lan
 Restart=on-failure
 RestartSec=2
-TimeoutStopSec=8
+TimeoutStopSec=20
 NoNewPrivileges=true
 PrivateTmp=true
 
