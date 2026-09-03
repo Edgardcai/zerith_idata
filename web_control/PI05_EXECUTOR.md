@@ -41,21 +41,24 @@ web_control/static/*           网页“推理”页签
 ```bash
 cd /home/robot/control
 /home/robot/miniconda3/envs/zerith/bin/python -m web_control.server \
-  --host 172.16.18.43 --port 8080 \
+  --host 0.0.0.0 --port 8080 \
   --pi05-server-host 192.168.1.154 \
   --pi05-server-port 9973 \
   --pi05-inference-timeout 10 \
   --allow-unauthenticated-lan
 ```
 
-启动服务器本身不会接管、初始化或运动机器人。现场目前启用了免认证 LAN，可信网络
+`0.0.0.0` 让同一服务同时通过无线 `172.16.18.43` 和有线 `192.168.3.43`
+访问，不会创建第二个 SDK owner。启动服务器本身不会接管、初始化或运动机器人。
+现场目前启用了免认证 LAN，可信网络
 以外应去掉 `--allow-unauthenticated-lan` 并配置 `H1_WEB_CONTROL_TOKEN`。
 
 ## 网页和代码双入口
 
 网页页签标题为“推理”。左侧集中设置推理服务器 host/port、prompt、关节速度、
-发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、断开推理连接和
-显式重新连接。参数语义为：
+发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、机械臂归位、断开
+推理连接和显式重新连接。“机械臂归位”保持按键时的升降柱实测高度和底盘零速，
+将双臂、腰、头归零并完全张开夹爪；推理运行期间禁止使用。参数语义为：
 
 | 参数 | 默认 | 有效值 |
 |---|---:|---:|
@@ -74,6 +77,11 @@ N 不是总步数，也不限制 Chunk 数量。启动后会连续执行，直�
 `last_chunk_first_arm_delta_from_feedback_rad` 分别记录新包首步相对请求观测和实际下发前
 反馈的最大双臂关节差。诊断值本身不触发拒绝；实际下发前另按配置的关节速度限制
 双臂 14 个目标的变化率。
+
+腰/头诊断按 `[waist.pitch, waist.yaw, head.yaw, head.pitch]` 排列：
+`last_chunk_observation_body` 是请求推理时的反馈，`last_chunk_server_body` 是服务端原始
+返回值，`last_chunk_effective_body` 是最终下发目标，`last_chunk_feedback_body` 是下发前
+实测位置，`last_chunk_body_hold_target` 是 session 启动时锁定的保持目标。
 
 关节限幅的单周期上限为
 `radians(joint_speed_deg_s) / control_rate_hz`。限幅基准是上一条**成功下发**的目标，
@@ -272,19 +280,22 @@ wire 17..20 -> motor 3..6    腰 pitch/yaw、头 yaw/pitch（只保持）
 wire 21..22 -> 不下发        底盘线/角速度（强制零）
 ```
 
-每个动作步都在唯一 SDK owner 线程内重新读取真实反馈，覆盖 `action[17:21]`，清零
-`action[21:23]`，最后只向位置电机发送 `action[:21]`。
+policy session 建立时，唯一 SDK owner 线程一次性读取并锁定腰/头
+`state[17:21]`。每个动作步仍重新读取真实反馈用于状态上传、错误检查和诊断，但最终
+始终用该 session 启动快照覆盖 `action[17:21]`，清零 `action[21:23]`，并只向位置
+电机发送 `action[:21]`。这样真实反馈即使因重力短暂偏离，也不会被追认为下一步目标。
 
 ## 协议与硬件边界
 
 - state 必须恰好 23 维且全部有限；action chunk 必须恰好 `50×23` 且全部有限。
 - 三路输入图片必须存在并是 `HxWx3 uint8 BGR`；直接编码成 JPEG，不做 BGR→RGB 交换。
 - 双夹爪动作只接受张开 `0` 或闭合 `1.5`。
-- 每步执行前重新读取最新反馈；腰和头 `action[17:21]` 覆盖为最新位置，底盘
-  `action[21:23]` 强制为零，最终只向 SDK 发送 `action[:21]`。
+- 每步执行前重新读取最新反馈；腰和头 `action[17:21]` 覆盖为 policy session 启动时
+  一次性采集的位置，底盘 `action[21:23]` 强制为零，最终只向 SDK 发送
+  `action[:21]`。
 - 模型控制的前 17 维目标仍遵守厂商 SDK 软限位；所有位置反馈只要求为有限数，不再
-  对反馈设置范围或零点容差阈值。腰和头的最新保持值按原始反馈透传，因此编码器在
-  标称零点附近出现微小负漂移不会阻止执行。
+  对反馈设置范围或零点容差阈值。腰和头的 session 启动快照按原始反馈保持，因此
+  编码器在标称零点附近出现微小负值不会阻止执行，也不会在运行中逐步追随漂移。
 - 仍检查 SDK 返回的电机 error flag 和厂商明确的供电前置条件（未充电时 SOC 不低于
   10%）。非有限数、维度、SDK 范围或硬件错误仍会故障停止。
 - 双臂关节速度默认 30 deg/s，只接受大于 0 的有限数；每周期按

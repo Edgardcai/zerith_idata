@@ -128,6 +128,7 @@ class _Chunk:
     latency_ms: float
     camera_ages_ms: dict[str, float]
     observation_state: np.ndarray
+    server_first_action: np.ndarray
 
 
 def _default_policy_factory(host: str, port: int) -> PolicyClientProtocol:
@@ -259,8 +260,9 @@ def _strict_chunk(value: Any) -> np.ndarray:
 def _apply_hold_and_zero(chunk: np.ndarray, state: np.ndarray) -> np.ndarray:
     """Apply the executor-side copy of the mandatory final action transform.
 
-    ``RobotService.policy_step`` repeats this transform against a newly read
-    state immediately before each hardware write.  Keeping it here makes a
+    ``RobotService.policy_step`` repeats the final transform immediately before
+    each hardware write, using the fixed waist/head feedback captured when the
+    policy session began.  Keeping an observation-based copy here makes a
     dry-run capable of proving the wire-to-hardware conversion without calling
     a setter and prevents unsafe fields from entering the action buffer.
     """
@@ -356,6 +358,12 @@ class Pi05Executor:
         self._last_chunk_first_arm_delta_from_observation_rad: float | None = None
         self._last_chunk_first_arm_delta_from_feedback_rad: float | None = None
         self._max_chunk_first_arm_delta_from_feedback_rad: float | None = None
+        self._last_chunk_observation_body: list[float] | None = None
+        self._last_chunk_server_body: list[float] | None = None
+        self._last_chunk_requested_body: list[float] | None = None
+        self._last_chunk_effective_body: list[float] | None = None
+        self._last_chunk_feedback_body: list[float] | None = None
+        self._last_chunk_body_hold_target: list[float] | None = None
 
     # ------------------------------------------------------------------
     # Public status and transitions
@@ -415,6 +423,43 @@ class Pi05Executor:
                 ),
                 "max_chunk_first_arm_delta_from_feedback_rad": (
                     self._max_chunk_first_arm_delta_from_feedback_rad
+                ),
+                "body_order": [
+                    "waist.pitch",
+                    "waist.yaw",
+                    "head.yaw",
+                    "head.pitch",
+                ],
+                "body_hold_reference": "policy_session_start_feedback",
+                "last_chunk_observation_body": (
+                    list(self._last_chunk_observation_body)
+                    if self._last_chunk_observation_body is not None
+                    else None
+                ),
+                "last_chunk_server_body": (
+                    list(self._last_chunk_server_body)
+                    if self._last_chunk_server_body is not None
+                    else None
+                ),
+                "last_chunk_requested_body": (
+                    list(self._last_chunk_requested_body)
+                    if self._last_chunk_requested_body is not None
+                    else None
+                ),
+                "last_chunk_effective_body": (
+                    list(self._last_chunk_effective_body)
+                    if self._last_chunk_effective_body is not None
+                    else None
+                ),
+                "last_chunk_feedback_body": (
+                    list(self._last_chunk_feedback_body)
+                    if self._last_chunk_feedback_body is not None
+                    else None
+                ),
+                "last_chunk_body_hold_target": (
+                    list(self._last_chunk_body_hold_target)
+                    if self._last_chunk_body_hold_target is not None
+                    else None
                 ),
                 "default_steps_per_chunk": DEFAULT_STEPS_PER_CHUNK,
                 "default_control_rate_hz": DEFAULT_CONTROL_RATE_HZ,
@@ -696,6 +741,12 @@ class Pi05Executor:
                         self._last_chunk_first_arm_delta_from_observation_rad = None
                         self._last_chunk_first_arm_delta_from_feedback_rad = None
                         self._max_chunk_first_arm_delta_from_feedback_rad = None
+                        self._last_chunk_observation_body = None
+                        self._last_chunk_server_body = None
+                        self._last_chunk_requested_body = None
+                        self._last_chunk_effective_body = None
+                        self._last_chunk_feedback_body = None
+                        self._last_chunk_body_hold_target = None
                         thread = threading.Thread(
                             target=self._run,
                             args=(
@@ -924,10 +975,10 @@ class Pi05Executor:
                         max_arm_step_rad,
                     )
                     # RobotService re-reads the latest 23-D state, reapplies
-                    # hold/zero, and only then sends action[:21].  Keeping the
-                    # synchronous call inside the barrier gives STOP a clear
-                    # drain point without interrupting an already in-flight
-                    # SDK operation.
+                    # the policy-session-start waist/head hold plus base zero,
+                    # and only then sends action[:21].  Keeping the synchronous
+                    # call inside the barrier gives STOP a clear drain point
+                    # without interrupting an already in-flight SDK operation.
                     step_result = self.robot.policy_step(
                         lease_id,
                         action.tolist(),
@@ -999,6 +1050,7 @@ class Pi05Executor:
         actions, _raw = self._infer(observation, prompt)
         response_monotonic = self._clock()
         latency_ms = max(0.0, (response_monotonic - request_started) * 1000.0)
+        server_first_action = actions[0].copy()
         effective = _apply_hold_and_zero(actions, observation.state)
         with self._lock:
             self._inference_latency_ms = latency_ms
@@ -1010,6 +1062,7 @@ class Pi05Executor:
             latency_ms=latency_ms,
             camera_ages_ms=dict(observation.camera_ages_ms),
             observation_state=observation.state.copy(),
+            server_first_action=server_first_action,
         )
 
     def _activate_chunk(
@@ -1037,10 +1090,20 @@ class Pi05Executor:
             self._chunk_sequence += 1
             sequence = self._chunk_sequence
             self._last_chunk_first_arm_delta_from_observation_rad = first_delta
+            self._last_chunk_observation_body = (
+                chunk.observation_state[17:21].tolist()
+            )
+            self._last_chunk_server_body = (
+                chunk.server_first_action[17:21].tolist()
+            )
         logger.info(
-            "Pi0.5 chunk %d activated synchronously: first_arm_delta_from_observation=%.6f rad",
+            "Pi0.5 chunk %d activated synchronously: "
+            "first_arm_delta_from_observation=%.6f rad, "
+            "observation_body=%s, server_body=%s",
             sequence,
             first_delta,
+            chunk.observation_state[17:21].tolist(),
+            chunk.server_first_action[17:21].tolist(),
         )
         return selected
 
@@ -1052,11 +1115,27 @@ class Pi05Executor:
         try:
             latest = np.asarray(step_result.get("latest_state"), dtype=np.float64)
             effective = np.asarray(step_result.get("effective_action"), dtype=np.float64)
+            requested = np.asarray(
+                step_result.get("requested_action", effective),
+                dtype=np.float64,
+            )
+            hold_target = np.asarray(
+                step_result.get("body_hold_target", effective[17:21]),
+                dtype=np.float64,
+            )
         except (TypeError, ValueError):
             return
-        if latest.shape != (STATE_DIM,) or effective.shape != (ACTION_DIM,):
+        if (
+            latest.shape != (STATE_DIM,)
+            or effective.shape != (ACTION_DIM,)
+            or requested.shape != (ACTION_DIM,)
+            or hold_target.shape != (4,)
+        ):
             return
-        if not np.isfinite(latest).all() or not np.isfinite(effective).all():
+        if not all(
+            np.isfinite(values).all()
+            for values in (latest, effective, requested, hold_target)
+        ):
             return
         delta = float(
             np.max(
@@ -1072,10 +1151,26 @@ class Pi05Executor:
             if current_max is None or delta > current_max:
                 self._max_chunk_first_arm_delta_from_feedback_rad = delta
             sequence = self._chunk_sequence
+            self._last_chunk_requested_body = requested[17:21].tolist()
+            self._last_chunk_effective_body = effective[17:21].tolist()
+            self._last_chunk_feedback_body = latest[17:21].tolist()
+            self._last_chunk_body_hold_target = hold_target.tolist()
+            observation_body = self._last_chunk_observation_body
+            server_body = self._last_chunk_server_body
         logger.info(
-            "Pi0.5 chunk %d first command: max_arm_target_feedback_delta=%.6f rad",
+            "Pi0.5 chunk %d first command: "
+            "max_arm_target_feedback_delta=%.6f rad, "
+            "body_order=[waist.pitch, waist.yaw, head.yaw, head.pitch], "
+            "observation=%s, server_return=%s, requested=%s, "
+            "effective_command=%s, measured_feedback=%s, session_hold=%s",
             sequence,
             delta,
+            observation_body,
+            server_body,
+            requested[17:21].tolist(),
+            effective[17:21].tolist(),
+            latest[17:21].tolist(),
+            hold_target.tolist(),
         )
 
     def _infer(self, observation: _Observation, prompt: str) -> tuple[np.ndarray, dict[str, Any]]:

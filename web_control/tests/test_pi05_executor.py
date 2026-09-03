@@ -134,6 +134,7 @@ class FakeRobot:
         self.stop_calls = 0
         self.deinit_calls = 0
         self.lose_lease_after_steps: int | None = None
+        self.session_body_hold: np.ndarray | None = None
 
     def has_live_lease(self, lease_id: str) -> bool:
         return bool(self.live and lease_id == "lease")
@@ -149,7 +150,13 @@ class FakeRobot:
         if not self.has_live_lease(lease_id):
             raise RuntimeError("lease expired")
         self.begin_calls += 1
-        return {"session_id": "policy-session", "state": self.state.tolist()}
+        self.session_body_hold = self.state[17:21].copy()
+        return {
+            "session_id": "policy-session",
+            "state": self.state.tolist(),
+            "body_hold_reference": "session_start_feedback",
+            "body_hold_target": self.session_body_hold.tolist(),
+        }
 
     def policy_step(
         self,
@@ -162,12 +169,19 @@ class FakeRobot:
             raise RuntimeError("invalid policy session")
         value = np.asarray(action, dtype=np.float64)
         self.steps.append(value.copy())
+        effective = value.copy()
+        if self.session_body_hold is not None:
+            effective[17:21] = self.session_body_hold
+        effective[21:23] = 0.0
         if self.lose_lease_after_steps is not None and len(self.steps) >= self.lose_lease_after_steps:
             self.live = False
         return {
             "latest_state": self.state.tolist(),
-            "effective_action": value.tolist(),
-            "sent_action": value[:21].tolist(),
+            "requested_action": value.tolist(),
+            "effective_action": effective.tolist(),
+            "sent_action": effective[:21].tolist(),
+            "body_hold_reference": "session_start_feedback",
+            "body_hold_target": effective[17:21].tolist(),
             "state_monotonic": time.monotonic(),
         }
 
@@ -179,6 +193,7 @@ class FakeRobot:
     def end_policy_session(self, lease_id: str, *, session_id=None, reason="operator_end") -> dict:
         del lease_id
         self.end_calls.append((session_id, reason))
+        self.session_body_hold = None
         return {"ok": True}
 
     def stop_motion(self, lease_id: str, *, renew_lease=False) -> dict:
@@ -850,6 +865,39 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertAlmostEqual(
             status["last_chunk_first_arm_delta_from_feedback_rad"],
             0.01,
+        )
+        expected_body = self.robot.state[17:21]
+        self.assertEqual(
+            status["body_order"],
+            ["waist.pitch", "waist.yaw", "head.yaw", "head.pitch"],
+        )
+        self.assertEqual(
+            status["body_hold_reference"],
+            "policy_session_start_feedback",
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_observation_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_server_body"],
+            np.asarray((9.0, 8.0, 7.0, 6.0)),
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_requested_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_effective_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_feedback_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_body_hold_target"],
+            expected_body,
         )
 
     def test_execution_slew_target_keeps_advancing_while_feedback_lags(self) -> None:

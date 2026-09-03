@@ -281,6 +281,7 @@ class Pi05ServerTests(unittest.TestCase):
             ("POST", "/api/actions/init", {}),
             ("POST", "/api/actions/deinit", {}),
             ("POST", "/api/actions/home", {}),
+            ("POST", "/api/actions/arm-home", {}),
             ("POST", "/api/voice/start", {"language": "zh"}),
             ("POST", "/api/voice/finish-input", {}),
             ("POST", "/api/voice/text", {"text": "向前走", "language": "zh"}),
