@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css"></head>
+<body>
+<header><a class="brand" href="/"><span class="brand-icon">Z</span><span>采集工作台<small>ZERITH / DATA COLLECTION</small></span></a><div class="header-status"><span id="connection" class="pill">连接中</span><span id="battery" class="battery">电量 —</span></div><div class="header-actions"><button id="check" class="secondary">设备检测</button><button id="end" class="secondary" disabled>结束会话</button><button id="start" class="primary">启动采集</button></div></header>
+<main>
+<div id="alert" class="alert" hidden role="alert"></div>
+<section class="overview"><div><div class="eyebrow">COLLECTION SESSION</div><h1 id="phase">准备采集</h1><p id="phaseHint">设置任务，完成检测后启动</p></div><div class="metrics"><div><strong id="episodeCount">0</strong><span>已完成</span></div><div><strong id="stage">—</strong><span>当前阶段</span></div><div><strong id="elapsed">00:00</strong><span>本条时长</span></div></div></section>
+<div id="checks" class="checks" aria-label="设备检查"></div>
+<div class="workspace">
+<section class="card task-card"><div class="card-title"><h2>采集任务</h2><span id="sessionLabel" class="muted">新会话</span></div>
+<form id="taskForm"><label>提示词<textarea id="prompt" rows="2" maxlength="500" spellcheck="false"></textarea></label>
+<div class="targets"><label><span class="side">L</span>左手目标<input id="left" placeholder="自动识别，也可填写"></label><label><span class="side">R</span>右手目标<input id="right" placeholder="自动识别，也可填写"></label><label>升降柱高度 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="例如 0.8" title="仅用于目录命名，不调整升降柱；留空沿用原目录"></label></div>
+<details id="taskOptions"><summary>采集参数</summary><div class="parameters"><label>任务编号<input id="taskId" type="number" min="0" max="999999" value="1"></label><label>子阶段数<input id="subtasks" type="number" min="1" max="20" value="2"></label><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label></div></details></form>
+<div class="directory"><span id="directoryLabel">保存目录</span><code id="directory">启动后显示</code><button id="copyPath" class="text-button" disabled>复制</button></div>
+</section>
+<section class="card telemetry"><div class="card-title"><h2>实时关节</h2></div><div id="joints" class="joints"></div><div class="telemetry-foot"><span id="vrStatus">VR 状态待检测</span><span class="muted">实际反馈</span></div></section>
+</div>
+<section class="card camera-card"><div class="card-title"><div><h2>相机画面</h2><span id="cameraHint" class="muted">预览已关闭</span></div><button id="cameraToggle" class="secondary">打开相机</button></div><div id="cameraGrid" class="camera-grid" hidden><figure><figcaption>左腕</figcaption><img data-camera="left" alt="左腕实时画面"><span data-camera-state="left">等待画面</span></figure><figure><figcaption>头部</figcaption><img data-camera="head" alt="头部实时画面"><span data-camera-state="head">等待画面</span></figure><figure><figcaption>右腕</figcaption><img data-camera="right" alt="右腕实时画面"><span data-camera-state="right">等待画面</span></figure></div></section>
+<section class="card episodes-card"><div class="card-title"><div><h2>采集记录</h2><span id="gradeCounts" class="muted">保存完成后默认 A</span></div><label class="history-toggle"><input id="history" type="checkbox">全部会话</label></div><div class="table-scroll"><table><thead><tr><th>编号</th><th>状态</th><th>帧数 / 时长</th><th>采集质量</th><th>评级</th><th>操作</th></tr></thead><tbody id="episodes"></tbody></table></div><div id="empty" class="empty"><span>◎</span><p>等待第一条采集</p></div></section>
+<details class="diagnostics"><summary>诊断详情</summary><pre id="diagnostics"></pre></details>
+</main>
+<div id="toast" class="toast" hidden role="status"></div>
+<dialog id="confirm"><form method="dialog"><h2 id="confirmTitle"></h2><p id="confirmText"></p><div class="dialog-actions"><button value="cancel" class="secondary">取消</button><button id="confirmAccept" value="ok" class="primary">确认</button></div></form></dialog>
+<dialog id="review"><div class="card-title"><h2 id="reviewTitle">查看数据</h2><button id="closeReview" class="secondary">关闭</button></div><div class="review-grid"><label>左腕<video data-review="left" controls preload="metadata"></video></label><label>头部<video data-review="head" controls preload="metadata"></video></label><label>右腕<video data-review="right" controls preload="metadata"></video></label></div></dialog>
+<script src="/static/app.js" defer></script>
+</body></html>

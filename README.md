@@ -1,5 +1,7 @@
 # ZERITH H1 PRO 数值控制与实时状态读取
 
+独立数据采集网站（8090）：[collection_web/README.md](collection_web/README.md)，支持 Meta Quest 采集状态、商品与高度目录命名、顺序编号、评级及相机预览。
+
 整套网页控制、机器人语音、中文 ASR/TTS、启动命令和安全边界的快速入口见：
 
 - [CORE_GUIDE.md](CORE_GUIDE.md)
