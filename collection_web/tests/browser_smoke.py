@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import threading
+import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from http.server import ThreadingHTTPServer
 from playwright.sync_api import sync_playwright
@@ -48,6 +49,18 @@ with tempfile.TemporaryDirectory() as temp:
             page.wait_for_function("document.querySelector('#episodes').textContent.includes('已放弃')")
             assert not (dataset / 'episode_000001').exists()
             assert app.store.list()[0]['state'] == 'deleted'
+            teleop_root=app.teleop.root
+            (teleop_root/'runtime').mkdir(parents=True)
+            state={'timestamp':time.time(),'version':'collection-1.0','active':True,'ready':True,
+                   'operator':{'initialized':True,'calibrated':True,'state':'STOP_TELEOP'},
+                   'calibration_seq':1,'pid':123,'warnings':[]}
+            status_path=teleop_root/'runtime/status.json'
+            status_path.write_text(json.dumps(state))
+            page.wait_for_function("document.querySelector('#teleopState').textContent.includes('标定成功')")
+            state['operator']['state']='DECOUPLED';state['warnings']=['头 yaw 偏差 0.00600 rad'];state['timestamp']=time.time()
+            status_path.write_text(json.dumps(state))
+            page.wait_for_function("document.querySelector('#teleopState').textContent==='遥操作中' && !document.querySelector('#teleopWarning').hidden")
+            assert page.locator('#fixedLiftHeight').is_disabled()
             page.set_viewport_size({'width': 390, 'height': 844})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             page.reload()

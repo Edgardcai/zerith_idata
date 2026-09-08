@@ -19,6 +19,7 @@ from collector import Collector
 from device_monitor import DeviceMonitor
 from episodes import EpisodeStore
 from tasks import DEFAULT_PROMPT, parse_targets
+from teleop_status import TeleopStatus
 
 ROOT=Path(__file__).resolve().parent
 
@@ -29,6 +30,7 @@ class Application:
         self.store=EpisodeStore(self.runtime,data_root)
         self.monitor=DeviceMonitor(self.runtime)
         self.cameras=Cameras()
+        self.teleop=TeleopStatus() if start_devices else TeleopStatus(self.runtime/'teleop')
         self.collector=Collector(self.store,self.monitor,self.runtime)
         self.worker=None;self.worker_log=None
         if start_devices:
@@ -44,7 +46,7 @@ class Application:
         if self.worker_log:self.worker_log.close()
         self.store.close()
     def status(self):
-        return {'device':self.monitor.snapshot(),'collection':self.collector.status(),'camera':self.cameras.status()}
+        return {'device':self.monitor.snapshot(),'collection':self.collector.status(),'camera':self.cameras.status(),'teleop':self.teleop.snapshot()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='CollectionWeb/1.0'
@@ -120,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/preflight':return self.json(self.app.collector.preflight(body))
             if path=='/api/session/start':return self.json(self.app.collector.start(body))
             if path=='/api/session/end':return self.json(self.app.collector.end())
+            if path=='/api/teleop/config':
+                return self.json(self.app.teleop.save(body,self.app.monitor.snapshot(),self.app.collector.status()))
             if path=='/api/cameras':
                 if not isinstance(body.get('enabled'),bool):raise ValueError('enabled 必须为布尔值')
                 return self.json(self.app.cameras.set_enabled(body['enabled']))

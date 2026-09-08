@@ -1,0 +1,10 @@
+vendor/
+runtime/
+__pycache__/
+*.pyc
+
+# Robot data and local inspection artifacts
+research/
+*.hdf5
+*.h5
+*.mp4

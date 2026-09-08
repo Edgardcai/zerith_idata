@@ -7,10 +7,15 @@
 <div id="alert" class="alert" hidden role="alert"></div>
 <section class="overview"><div><div class="eyebrow">COLLECTION SESSION</div><h1 id="phase">准备采集</h1><p id="phaseHint">设置任务，完成检测后启动</p></div><div class="metrics"><div><strong id="episodeCount">0</strong><span>已完成</span></div><div><strong id="stage">—</strong><span>当前阶段</span></div><div><strong id="elapsed">00:00</strong><span>本条时长</span></div></div></section>
 <div id="checks" class="checks" aria-label="设备检查"></div>
+<section class="card teleop-panel" aria-label="遥操与固定高度">
+<div class="teleop-heading"><div><span class="eyebrow">TELEOP</span><h2 id="teleopState" role="status" aria-live="polite">等待遥操状态</h2></div><button id="teleopVoice" class="secondary" type="button">开启语音提示</button></div>
+<div id="teleopWarning" class="teleop-warning" hidden role="status"></div>
+<div class="lift-controls"><label class="lift-switch"><input id="fixedLift" type="checkbox">固定升降柱</label><label class="lift-value">目标高度 · m<input id="fixedLiftHeight" type="number" min="0" max="0.8" step="0.01" value="0.4"></label><button id="saveTeleop" class="secondary" type="button">保存高度</button><span id="liftApplied" class="muted">反初始化后设置，下次初始化生效</span></div>
+</section>
 <div class="workspace">
 <section class="card task-card"><div class="card-title"><h2>采集任务</h2><span id="sessionLabel" class="muted">新会话</span></div>
 <form id="taskForm"><label>提示词<textarea id="prompt" rows="2" maxlength="500" spellcheck="false"></textarea></label>
-<div class="targets"><label><span class="side">L</span>左手目标<input id="left" placeholder="自动识别，也可填写"></label><label><span class="side">R</span>右手目标<input id="right" placeholder="自动识别，也可填写"></label><label>升降柱高度 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="例如 0.8" title="仅用于目录命名，不调整升降柱；留空沿用原目录"></label></div>
+<div class="targets"><label><span class="side">L</span>左手目标<input id="left" placeholder="自动识别，也可填写"></label><label><span class="side">R</span>右手目标<input id="right" placeholder="自动识别，也可填写"></label><label>目录高度标签 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="例如 0.8" title="仅用于目录命名，不调整升降柱；留空沿用原目录"></label></div>
 <details id="taskOptions"><summary>采集参数</summary><div class="parameters"><label>任务编号<input id="taskId" type="number" min="0" max="999999" value="1"></label><label>子阶段数<input id="subtasks" type="number" min="1" max="20" value="2"></label><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label></div></details></form>
 <div class="directory"><span id="directoryLabel">保存目录</span><code id="directory">启动后显示</code><button id="copyPath" class="text-button" disabled>复制</button></div>
 </section>

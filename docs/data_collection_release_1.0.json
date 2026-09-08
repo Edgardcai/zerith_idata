@@ -1,0 +1,15 @@
+{
+  "original_sha256": "3c807604a116128c27bcf0ca52310a4102e436c1a277af1c0301b1ef452f7282",
+  "sha256": "c567f604ef889ed0d3afbfe1eb993b0aa373b84cc8282741939d0b7a196cb7cd",
+  "changed_entries": [
+    "teleop"
+  ],
+  "preserved_entries": 643,
+  "python": "3.10",
+  "version": "collection-1.0-warn-lift-status",
+  "physical_validation": "passed short episode_000003 at fixed lift 0.4m; see TEST_REPORT.md for scope",
+  "deployed": "2026-09-08T19:08:35+08:00",
+  "website_tests": 34,
+  "teleop_host_tests": 19,
+  "offline_embedded_tests": 16
+}
