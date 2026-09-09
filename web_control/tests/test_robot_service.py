@@ -6,6 +6,7 @@ import unittest
 
 from control.web_control.fake_sdk import FakeH1Robot, FakeSdk
 from control.web_control.robot_service import (
+    ARM_HOME_TARGETS,
     HOME_TARGETS,
     MOTOR_SPEC_BY_ID,
     POLICY_WIRE_MOTOR_IDS,
@@ -167,6 +168,8 @@ class RobotServiceTests(unittest.TestCase):
             self.service.command_chassis(lease, 1.0, 1.0)
         with self.assertRaises(RobotConflict):
             self.service.deinitialize(lease)
+        with self.assertRaises(RobotConflict):
+            self.service.move_arm_home(lease)
         observation = self.service.read_policy_state(
             lease,
             session_id=session["session_id"],
@@ -193,6 +196,8 @@ class RobotServiceTests(unittest.TestCase):
         time.sleep(0.03)  # let the worker's immediate hold tick finish
         self.robot.calls.clear()
         action = self.policy_action_from_feedback()
+        action[7] = 0.42
+        action[15] = 1.23
 
         result = self.service.policy_step(
             lease,
@@ -207,12 +212,14 @@ class RobotServiceTests(unittest.TestCase):
         self.assertEqual(result["sent_motor_ids"], list(POLICY_WIRE_MOTOR_IDS))
         self.assertEqual(
             result["effective_action"][17:21],
-            result["latest_state"][17:21],
+            begin["body_hold_target"],
         )
         self.assertEqual(result["effective_action"][17], -2.396844865870662e-05)
         self.assertEqual(result["effective_action"][21:23], [0.0, 0.0])
-        self.assertIn(result["effective_action"][7], (0.0, 1.5))
-        self.assertIn(result["effective_action"][15], (0.0, 1.5))
+        self.assertEqual(result["effective_action"][7], 0.42)
+        self.assertEqual(result["effective_action"][15], 1.23)
+        self.assertEqual(result["sent_action"][7], 0.42)
+        self.assertEqual(result["sent_action"][15], 1.23)
         self.assertNotIn("max_arm_delta_rad", result)
         self.assertNotIn("joint_speed_deg_s", result)
         self.assertNotIn("max_joint_step_rad", result)
@@ -235,6 +242,61 @@ class RobotServiceTests(unittest.TestCase):
         )
         self.assertFalse(
             any(call[0] == "setChassis_low" and call[2] != 0.0 for call in self.robot.calls)
+        )
+
+    def test_policy_body_hold_stays_at_session_start_when_feedback_drifts(self) -> None:
+        self.restart_fake_service(trajectory_rate_hz=1.0)
+        lease = self.acquire_and_init()
+        initial_body = [-2.396844865870662e-05, -0.2, 0.0032, 0.0242]
+        for motor_id, target in zip((3, 4, 5, 6), initial_body):
+            self.robot.states[motor_id].Position_Actual = target
+        begin = self.service.begin_policy_session(lease)
+        self.assertEqual(begin["body_hold_target"], initial_body)
+        self.assertEqual(begin["body_hold_reference"], "session_start_feedback")
+
+        observed_drift = [0.08, -0.05, 0.12, 0.24]
+        for motor_id, target in zip((3, 4, 5, 6), observed_drift):
+            self.robot.states[motor_id].Position_Actual = target
+        first = self.service.policy_step(
+            lease,
+            self.policy_action_from_feedback(),
+            session_id=begin["session_id"],
+        )
+        self.assertEqual(first["latest_state"][17:21], observed_drift)
+        self.assertEqual(first["effective_action"][17:21], initial_body)
+        self.assertEqual(first["body_hold_target"], initial_body)
+        self.assertEqual(
+            [self.robot.states[motor_id].Position_Actual for motor_id in (3, 4, 5, 6)],
+            initial_body,
+        )
+
+        second_drift = [0.16, 0.02, 0.25, 0.48]
+        for motor_id, target in zip((3, 4, 5, 6), second_drift):
+            self.robot.states[motor_id].Position_Actual = target
+        second = self.service.policy_step(
+            lease,
+            self.policy_action_from_feedback(),
+            session_id=begin["session_id"],
+        )
+        self.assertEqual(second["latest_state"][17:21], second_drift)
+        self.assertEqual(second["effective_action"][17:21], initial_body)
+
+        policy_state = self.service.state()["policy_session"]
+        self.assertEqual(policy_state["body_hold_target"], initial_body)
+        self.assertEqual(
+            policy_state["last_body_diagnostics"],
+            {
+                "feedback": second_drift,
+                "requested": [99.0, -99.0, 88.0, -88.0],
+                "effective": initial_body,
+            },
+        )
+        self.service.end_policy_session(
+            lease,
+            session_id=begin["session_id"],
+        )
+        self.assertIsNone(
+            self.service.state()["policy_session"]["body_hold_target"]
         )
 
     def test_policy_calls_validate_but_do_not_renew_lease(self) -> None:
@@ -265,9 +327,9 @@ class RobotServiceTests(unittest.TestCase):
         not_finite = list(valid)
         not_finite[0] = float("nan")
         invalid_actions.append(not_finite)
-        bad_gripper = list(valid)
-        bad_gripper[7] = 0.5
-        invalid_actions.append(bad_gripper)
+        out_of_range_gripper = list(valid)
+        out_of_range_gripper[7] = 1.6
+        invalid_actions.append(out_of_range_gripper)
 
         for action in invalid_actions:
             with self.subTest(action=action):
@@ -435,11 +497,45 @@ class RobotServiceTests(unittest.TestCase):
         result = self.service.move_home(lease, speed_scale=2.0)
         self.assertTrue(result["holding"])
         self.assertAlmostEqual(result["duration_s"], 0.0125)
+        self.assertEqual(set(HOME_TARGETS), set(range(2, 23)))
+        self.assertEqual(HOME_TARGETS[2], 0.4)
         for motor_id, target in HOME_TARGETS.items():
             self.assertAlmostEqual(self.robot.states[motor_id].Position_Actual, target)
+        self.assertTrue(all(HOME_TARGETS[motor_id] == 0.0 for motor_id in range(3, 23)))
+        self.assertEqual(self.robot.states[0].Speed_Actual, 0.0)
+        self.assertEqual(self.robot.states[1].Speed_Actual, 0.0)
         hold_calls_before = len(self.robot.calls)
         time.sleep(0.03)
         self.assertGreater(len(self.robot.calls), hold_calls_before)
+
+    def test_arm_home_zeros_body_arms_and_grippers_but_preserves_lift(self) -> None:
+        lease = self.acquire_and_init()
+        lift_before = 0.63
+        self.robot.states[2].Position_Actual = lift_before
+        for motor_id in ARM_HOME_TARGETS:
+            self.robot.states[motor_id].Position_Actual = (
+                1.2 if motor_id in (14, 22) else 0.1
+            )
+        self.robot.states[0].Speed_Actual = 2.0
+        self.robot.states[1].Speed_Actual = -2.0
+        self.robot.calls.clear()
+
+        result = self.service.move_arm_home(lease, speed_scale=2.0)
+
+        self.assertTrue(result["holding"])
+        self.assertAlmostEqual(result["duration_s"], 0.0125)
+        self.assertAlmostEqual(result["lift_held"], lift_before)
+        self.assertAlmostEqual(self.robot.states[2].Position_Actual, lift_before)
+        for motor_id, target in ARM_HOME_TARGETS.items():
+            self.assertEqual(target, 0.0)
+            self.assertAlmostEqual(self.robot.states[motor_id].Position_Actual, 0.0)
+        self.assertEqual(self.robot.states[0].Speed_Actual, 0.0)
+        self.assertEqual(self.robot.states[1].Speed_Actual, 0.0)
+        chassis_calls = [
+            call for call in self.robot.calls if call[0] == "setChassis_low"
+        ]
+        self.assertTrue(chassis_calls)
+        self.assertTrue(all(call[2] == 0.0 for call in chassis_calls))
 
     def test_motion_speed_scale_is_bounded(self) -> None:
         self.assertEqual(self.service._parse_motion_speed_scale(1.0), 1.0)

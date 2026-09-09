@@ -33,6 +33,20 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/')[0],200);self.assertEqual(self.request('/static/app.js')[0],200)
         self.assertEqual(json.loads(self.request('/api/bootstrap')[1])['csrf'],self.app.csrf)
         status=json.loads(self.request('/api/status')[1]);self.assertEqual(status['collection']['phase'],'idle');self.assertFalse(status['device']['ready'])
+    def test_directory_groups_include_multiple_sessions_and_filter_details(self):
+        first=self.root/'batch_one';second=self.root/'batch_two'
+        first.mkdir();second.mkdir()
+        for session,dataset,uid in [('s1',first,'a'*32),('s2',first,'b'*32),('s3',second,'c'*32)]:
+            baseline=self.app.store.new_session(session,{}, {},dataset)
+            episode(dataset,uid)
+            self.app.store.observe({'id':session,'dataset':str(dataset),'baseline':baseline})
+        groups=json.loads(self.request('/api/episode-groups')[1])['groups']
+        self.assertEqual({g['dataset']:g['total'] for g in groups},{str(first):2,str(second):1})
+        from urllib.parse import quote
+        rows=json.loads(self.request('/api/episodes?dataset='+quote(str(first),safe=''))[1])['episodes']
+        self.assertEqual({r['session_id'] for r in rows},{'s1','s2'})
+        self.assertTrue(all(r['dataset']==str(first) for r in rows))
+        self.assertEqual(json.loads(self.request('/api/episodes?dataset=missing')[1])['episodes'],[])
     def test_missing_token_cross_origin_and_invalid_start(self):
         self.assertEqual(self.request('/api/session/start',{'task_name':'test'},token=False)[0],403)
         self.assertEqual(self.request('/api/session/start',{'task_name':'test'},origin='http://evil.invalid')[0],403)

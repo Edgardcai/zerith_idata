@@ -1,0 +1,644 @@
+{
+  "created": "2026-09-09T15:02:42.307325+08:00",
+  "branch": "data_collection_new",
+  "live_recording_of_latest_default_rgb_version": "pending",
+  "files": [
+    {
+      "path": "collection_web/.gitignore",
+      "source": "/home/robot/collection_web/.gitignore",
+      "sha256": "16ce0d122018145e59ca3f5e4e482eaca30296b02905fadaf7a72de13c10ed89",
+      "backup_sha256": "108201ec63b2b86c0cddfd345c0c461206b9c78d3c024cd11339477c699dddcc"
+    },
+    {
+      "path": "collection_web/README.md",
+      "source": "/home/robot/collection_web/README.md",
+      "sha256": "5c89baa126f0431496db709b670a76fce32616bfc9ef02780bb21451d54679ad",
+      "backup_sha256": "5c89baa126f0431496db709b670a76fce32616bfc9ef02780bb21451d54679ad"
+    },
+    {
+      "path": "collection_web/TEST_REPORT.md",
+      "source": "/home/robot/collection_web/TEST_REPORT.md",
+      "sha256": "bdc3cf476d97817a9bbdd4b123672f5dee4a1ce09c693a4a938037b16586cb84",
+      "backup_sha256": "bdc3cf476d97817a9bbdd4b123672f5dee4a1ce09c693a4a938037b16586cb84"
+    },
+    {
+      "path": "collection_web/app.py",
+      "source": "/home/robot/collection_web/app.py",
+      "sha256": "95421b368a0d0d91baa62d879b4f26849236850b495884e503160804320b2c82",
+      "backup_sha256": "95421b368a0d0d91baa62d879b4f26849236850b495884e503160804320b2c82"
+    },
+    {
+      "path": "collection_web/cameras.py",
+      "source": "/home/robot/collection_web/cameras.py",
+      "sha256": "11b771a0d912bc5486d296d39cd524561cea5834e5aa2cd2cb75b2dd802234a7",
+      "backup_sha256": "11b771a0d912bc5486d296d39cd524561cea5834e5aa2cd2cb75b2dd802234a7"
+    },
+    {
+      "path": "collection_web/collector.py",
+      "source": "/home/robot/collection_web/collector.py",
+      "sha256": "297dc336e0d19d31cbeef2baf17d7f6c678622efc9a2c9b0fd27af3a7365a6b9",
+      "backup_sha256": "297dc336e0d19d31cbeef2baf17d7f6c678622efc9a2c9b0fd27af3a7365a6b9"
+    },
+    {
+      "path": "collection_web/device_monitor.py",
+      "source": "/home/robot/collection_web/device_monitor.py",
+      "sha256": "4c9510f36485bb4b211cf9586080c865bb02913347550cba0462ed37c742db2e",
+      "backup_sha256": "4c9510f36485bb4b211cf9586080c865bb02913347550cba0462ed37c742db2e"
+    },
+    {
+      "path": "collection_web/episodes.py",
+      "source": "/home/robot/collection_web/episodes.py",
+      "sha256": "b745fdbbd35712dd7fafedaf427ab08805abb7c297451fed619f661c85c47e65",
+      "backup_sha256": "b745fdbbd35712dd7fafedaf427ab08805abb7c297451fed619f661c85c47e65"
+    },
+    {
+      "path": "collection_web/joint_observer.cpp",
+      "source": "/home/robot/collection_web/joint_observer.cpp",
+      "sha256": "eceb01c53ee2527febf3df283825e83fcffcb537ae9f4de01301db866ce25d00",
+      "backup_sha256": "eceb01c53ee2527febf3df283825e83fcffcb537ae9f4de01301db866ce25d00"
+    },
+    {
+      "path": "collection_web/protocol.py",
+      "source": "/home/robot/collection_web/protocol.py",
+      "sha256": "dcbbf396290d1384b8cd051f3688427d3bbc34d2007bb446bc8d98f02acb67a6",
+      "backup_sha256": "dcbbf396290d1384b8cd051f3688427d3bbc34d2007bb446bc8d98f02acb67a6"
+    },
+    {
+      "path": "collection_web/requirements.txt",
+      "source": "/home/robot/collection_web/requirements.txt",
+      "sha256": "2ae68a0b768fa6bcb3d0fb86909ea2903c24bab14dcf4c88e6adcdf24130be13",
+      "backup_sha256": "2ae68a0b768fa6bcb3d0fb86909ea2903c24bab14dcf4c88e6adcdf24130be13"
+    },
+    {
+      "path": "collection_web/start.sh",
+      "source": "/home/robot/collection_web/start.sh",
+      "sha256": "b6425dd2d0d78e8302b8bf5f5e8eb15abcc271c34c3e432c7ecb5a35facec3b9",
+      "backup_sha256": "b6425dd2d0d78e8302b8bf5f5e8eb15abcc271c34c3e432c7ecb5a35facec3b9"
+    },
+    {
+      "path": "collection_web/static/app.js",
+      "source": "/home/robot/collection_web/static/app.js",
+      "sha256": "df7364cb64efde5c50020f414cd8ff2e3f2bf10cc8c8652a898f73602260adf4",
+      "backup_sha256": "df7364cb64efde5c50020f414cd8ff2e3f2bf10cc8c8652a898f73602260adf4"
+    },
+    {
+      "path": "collection_web/static/index.html",
+      "source": "/home/robot/collection_web/static/index.html",
+      "sha256": "7fe2206a934807392c727bd93c19b67f2a55031bea7a9ab2dfe14a5f19ac5349",
+      "backup_sha256": "7fe2206a934807392c727bd93c19b67f2a55031bea7a9ab2dfe14a5f19ac5349"
+    },
+    {
+      "path": "collection_web/static/style.css",
+      "source": "/home/robot/collection_web/static/style.css",
+      "sha256": "96a699ba4e8e22d8634d3b20ca26b64cfa340f4fce51af4a8cc49a6dbb6b249b",
+      "backup_sha256": "96a699ba4e8e22d8634d3b20ca26b64cfa340f4fce51af4a8cc49a6dbb6b249b"
+    },
+    {
+      "path": "collection_web/tasks.py",
+      "source": "/home/robot/collection_web/tasks.py",
+      "sha256": "4a4261823ebfc5a54fab6e5ff29e356af2742e8b71c29e6efc7c2b67009a7272",
+      "backup_sha256": "4a4261823ebfc5a54fab6e5ff29e356af2742e8b71c29e6efc7c2b67009a7272"
+    },
+    {
+      "path": "collection_web/teleop_status.py",
+      "source": "/home/robot/collection_web/teleop_status.py",
+      "sha256": "0027ec41bc4cd7245acc8d7e714a09a9c8022c4db6821e862085ae29047e7d6a",
+      "backup_sha256": "0027ec41bc4cd7245acc8d7e714a09a9c8022c4db6821e862085ae29047e7d6a"
+    },
+    {
+      "path": "collection_web/tests/browser_smoke.py",
+      "source": "/home/robot/collection_web/tests/browser_smoke.py",
+      "sha256": "9477be37679bb3eacf20f69e178c2a93f3a2381f3b2edada1395cbcf0221a271",
+      "backup_sha256": "9477be37679bb3eacf20f69e178c2a93f3a2381f3b2edada1395cbcf0221a271"
+    },
+    {
+      "path": "collection_web/tests/test_collector.py",
+      "source": "/home/robot/collection_web/tests/test_collector.py",
+      "sha256": "c38fa299016f7b287a67a53d3df9ea6e37d1477ca23670cdd594da99f560bead",
+      "backup_sha256": "c38fa299016f7b287a67a53d3df9ea6e37d1477ca23670cdd594da99f560bead"
+    },
+    {
+      "path": "collection_web/tests/test_core.py",
+      "source": "/home/robot/collection_web/tests/test_core.py",
+      "sha256": "48cd11eac813acc7aecf1aabfe7dca334fd526e8cac9caf4111029228655eca7",
+      "backup_sha256": "48cd11eac813acc7aecf1aabfe7dca334fd526e8cac9caf4111029228655eca7"
+    },
+    {
+      "path": "collection_web/tests/test_http.py",
+      "source": "/home/robot/collection_web/tests/test_http.py",
+      "sha256": "376993d8328c53d6478b70afbdf79ef9973080bc2bd268437cf80c623eb65e13",
+      "backup_sha256": "376993d8328c53d6478b70afbdf79ef9973080bc2bd268437cf80c623eb65e13"
+    },
+    {
+      "path": "collection_web/tests/test_teleop_status.py",
+      "source": "/home/robot/collection_web/tests/test_teleop_status.py",
+      "sha256": "3a091a7c76696bf2ef168a2d5364c819198b2b836fb5d1d0b1d7e35ec87d4469",
+      "backup_sha256": "3bf214a6e62a0e9fa19bf3d9d0214c51ae5b27cf53918452eafe5eaf9a8c4da5"
+    },
+    {
+      "path": "teleop_zero_lock/.gitignore",
+      "source": "/home/robot/teleop_zero_lock/.gitignore",
+      "sha256": "21c58bef8b3e0ccfa1377597abcd32b58dd76209345062182eeb57690031be41",
+      "backup_sha256": "cae2e7eb56065ac813af1eee73bbe3fa0b2dd4c244ae9f9b34096a5fe82e1651"
+    },
+    {
+      "path": "teleop_zero_lock/README.md",
+      "source": "/home/robot/teleop_zero_lock/README.md",
+      "sha256": "6ddc47faf7d04bf3b0efcf068baf5044a6d37047ad298005cb2b90b6b1d186ec",
+      "backup_sha256": "6ddc47faf7d04bf3b0efcf068baf5044a6d37047ad298005cb2b90b6b1d186ec"
+    },
+    {
+      "path": "teleop_zero_lock/TEST_REPORT.md",
+      "source": "/home/robot/teleop_zero_lock/TEST_REPORT.md",
+      "sha256": "15c0dbd36cea4282a9b3454ec67d35341b1e1b131fb28a6e76d8f123c6ba4693",
+      "backup_sha256": "15c0dbd36cea4282a9b3454ec67d35341b1e1b131fb28a6e76d8f123c6ba4693"
+    },
+    {
+      "path": "teleop_zero_lock/config.json",
+      "source": "/home/robot/teleop_zero_lock/config.json",
+      "sha256": "f88fb9fe8f6bd567a4946ada29d89c59d9a54ac7c95e8be2d4be93ee87b7528f",
+      "backup_sha256": "f88fb9fe8f6bd567a4946ada29d89c59d9a54ac7c95e8be2d4be93ee87b7528f"
+    },
+    {
+      "path": "teleop_zero_lock/patch/zero_lock.py",
+      "source": "/home/robot/teleop_zero_lock/patch/zero_lock.py",
+      "sha256": "ad7503881973ca9683466e02fb179182763f676cd377feccc63c3d9f21e6209f",
+      "backup_sha256": "ad7503881973ca9683466e02fb179182763f676cd377feccc63c3d9f21e6209f"
+    },
+    {
+      "path": "teleop_zero_lock/tests/probe_gravity.py",
+      "source": "/home/robot/teleop_zero_lock/tests/probe_gravity.py",
+      "sha256": "2fd5a3f3ab9c80e521b990d71a38299361f81edd7e1783b60f97a55ddf09b6cd",
+      "backup_sha256": "2fd5a3f3ab9c80e521b990d71a38299361f81edd7e1783b60f97a55ddf09b6cd"
+    },
+    {
+      "path": "teleop_zero_lock/tests/probe_model.py",
+      "source": "/home/robot/teleop_zero_lock/tests/probe_model.py",
+      "sha256": "994e693df133f885a3828e6b7561dd4723c4291fa6863213549e09c2304448d1",
+      "backup_sha256": "994e693df133f885a3828e6b7561dd4723c4291fa6863213549e09c2304448d1"
+    },
+    {
+      "path": "teleop_zero_lock/tests/test_policy.py",
+      "source": "/home/robot/teleop_zero_lock/tests/test_policy.py",
+      "sha256": "f62c9bb20eb8c6b438eb35013a01419f026834c33cd252167a55551f0a953d17",
+      "backup_sha256": "f62c9bb20eb8c6b438eb35013a01419f026834c33cd252167a55551f0a953d17"
+    },
+    {
+      "path": "teleop_zero_lock/tests/test_preflight.py",
+      "source": "/home/robot/teleop_zero_lock/tests/test_preflight.py",
+      "sha256": "61ed3f7886dd772122aaa6017fd9becdeb043b79e2aaec79b33b22c19c76ff58",
+      "backup_sha256": "61ed3f7886dd772122aaa6017fd9becdeb043b79e2aaec79b33b22c19c76ff58"
+    },
+    {
+      "path": "teleop_zero_lock/tests/test_startup.py",
+      "source": "/home/robot/teleop_zero_lock/tests/test_startup.py",
+      "sha256": "a073012e0f82c869f57116b074c020ba5fd7fe8aaface0262dd6ce16a0df749b",
+      "backup_sha256": "a073012e0f82c869f57116b074c020ba5fd7fe8aaface0262dd6ce16a0df749b"
+    },
+    {
+      "path": "teleop_zero_lock/tools/analyze_recording.py",
+      "source": "/home/robot/teleop_zero_lock/tools/analyze_recording.py",
+      "sha256": "0b437341dcc57acf7d20d9f59785de17f269e966ce85705e39f52c762372d0c1",
+      "backup_sha256": "0b437341dcc57acf7d20d9f59785de17f269e966ce85705e39f52c762372d0c1"
+    },
+    {
+      "path": "teleop_zero_lock/tools/archive.py",
+      "source": "/home/robot/teleop_zero_lock/tools/archive.py",
+      "sha256": "ae126b1764747c89f7a7b46a8e85b4371afdb202453a8d22e1ba80ceb1ec3ffe",
+      "backup_sha256": "ae126b1764747c89f7a7b46a8e85b4371afdb202453a8d22e1ba80ceb1ec3ffe"
+    },
+    {
+      "path": "teleop_zero_lock/tools/bootstrap.py",
+      "source": "/home/robot/teleop_zero_lock/tools/bootstrap.py",
+      "sha256": "805296be322993620be93b7c455aae4e5f6942e88e8d02f7feb9f37937d7323b",
+      "backup_sha256": "805296be322993620be93b7c455aae4e5f6942e88e8d02f7feb9f37937d7323b"
+    },
+    {
+      "path": "teleop_zero_lock/tools/build_probe.py",
+      "source": "/home/robot/teleop_zero_lock/tools/build_probe.py",
+      "sha256": "218743d9cb851dd8c8187ed3dbc9c5151a55f3afb62f3a2d3cf08e4be9f07e20",
+      "backup_sha256": "218743d9cb851dd8c8187ed3dbc9c5151a55f3afb62f3a2d3cf08e4be9f07e20"
+    },
+    {
+      "path": "teleop_zero_lock/tools/build_trial.py",
+      "source": "/home/robot/teleop_zero_lock/tools/build_trial.py",
+      "sha256": "de6c542fc453d86ef9ac5b4d350273a191896b5fbe5e1b629669faa8a1bef0b6",
+      "backup_sha256": "de6c542fc453d86ef9ac5b4d350273a191896b5fbe5e1b629669faa8a1bef0b6"
+    },
+    {
+      "path": "teleop_zero_lock/tools/head_observer.cpp",
+      "source": "/home/robot/teleop_zero_lock/tools/head_observer.cpp",
+      "sha256": "5c6170d075a9f41ab21757dac429a8148bcc609c314cde8e37f90f221f310eae",
+      "backup_sha256": "5c6170d075a9f41ab21757dac429a8148bcc609c314cde8e37f90f221f310eae"
+    },
+    {
+      "path": "teleop_zero_lock/tools/joint_trace.cpp",
+      "source": "/home/robot/teleop_zero_lock/tools/joint_trace.cpp",
+      "sha256": "0bb957fee7d9eb6a8851781ba9652023243b2f6b852ce20dd4f9d435a062e541",
+      "backup_sha256": "0bb957fee7d9eb6a8851781ba9652023243b2f6b852ce20dd4f9d435a062e541"
+    },
+    {
+      "path": "teleop_zero_lock/tools/monitor_trial.py",
+      "source": "/home/robot/teleop_zero_lock/tools/monitor_trial.py",
+      "sha256": "1e6abc4a8a524c129992200ddfd53cc2fd351a615098e8bca2afd60f7e83ab55",
+      "backup_sha256": "1e6abc4a8a524c129992200ddfd53cc2fd351a615098e8bca2afd60f7e83ab55"
+    },
+    {
+      "path": "teleop_zero_lock/tools/preflight.py",
+      "source": "/home/robot/teleop_zero_lock/tools/preflight.py",
+      "sha256": "2b0179f5b1647f9a99fbc8859a1abbb7fbca651b7ef15803cd0baa6879b62208",
+      "backup_sha256": "2b0179f5b1647f9a99fbc8859a1abbb7fbca651b7ef15803cd0baa6879b62208"
+    },
+    {
+      "path": "teleop_zero_lock/tools/switch_trial.py",
+      "source": "/home/robot/teleop_zero_lock/tools/switch_trial.py",
+      "sha256": "ed2e9c6fb54ea49a0c38fa6c1b0e790b59169d6c1e61b2dffd37bbb63e22df54",
+      "backup_sha256": "ed2e9c6fb54ea49a0c38fa6c1b0e790b59169d6c1e61b2dffd37bbb63e22df54"
+    },
+    {
+      "path": "teleop_zero_lock/tools/upgrade_trial.py",
+      "source": "/home/robot/teleop_zero_lock/tools/upgrade_trial.py",
+      "sha256": "9aeb33f89306cbac3934aa385051a136ae98e4fc8c17611011aedced13b40ac1",
+      "backup_sha256": "9aeb33f89306cbac3934aa385051a136ae98e4fc8c17611011aedced13b40ac1"
+    },
+    {
+      "path": "collection_storage_fast/README.md",
+      "source": "/home/robot/collection_storage_fast/README.md",
+      "sha256": "625a7283b440c476ccb406ae4d1575016274231839c6efbea174bbb8a602acfc",
+      "backup_sha256": "625a7283b440c476ccb406ae4d1575016274231839c6efbea174bbb8a602acfc"
+    },
+    {
+      "path": "collection_storage_fast/patch.py",
+      "source": "/home/robot/collection_storage_fast/patch.py",
+      "sha256": "6698620c914700859648593a6e0fd90256b9054b9b4ebb372aff047e311ee2e2",
+      "backup_sha256": "6698620c914700859648593a6e0fd90256b9054b9b4ebb372aff047e311ee2e2"
+    },
+    {
+      "path": "collection_storage_fast/tests/self_test.py",
+      "source": "/home/robot/collection_storage_fast/tests/self_test.py",
+      "sha256": "c4d7a8b45d90f64d846c9bd068fa8178115ff83ad6199837e69e4b25924302a1",
+      "backup_sha256": "c4d7a8b45d90f64d846c9bd068fa8178115ff83ad6199837e69e4b25924302a1"
+    },
+    {
+      "path": "collection_storage_fast/tools/boot.py",
+      "source": "/home/robot/collection_storage_fast/tools/boot.py",
+      "sha256": "ae6d50a6f43a635d31a20c0aeaf00169f6f5db1e4034e2b7569af9a380395375",
+      "backup_sha256": "ae6d50a6f43a635d31a20c0aeaf00169f6f5db1e4034e2b7569af9a380395375"
+    },
+    {
+      "path": "collection_storage_fast/tools/bootstrap.py",
+      "source": "/home/robot/collection_storage_fast/tools/bootstrap.py",
+      "sha256": "a3418325d8ab18cd1555f2e32f143948066514bc414279268c2f72e926c22b7b",
+      "backup_sha256": "a3418325d8ab18cd1555f2e32f143948066514bc414279268c2f72e926c22b7b"
+    },
+    {
+      "path": "collection_storage_fast/tools/build.py",
+      "source": "/home/robot/collection_storage_fast/tools/build.py",
+      "sha256": "773d92cf8dcc06d7e02f432dacdc88f8ff878f8381e4bf01b5adb86b2d6f4132",
+      "backup_sha256": "773d92cf8dcc06d7e02f432dacdc88f8ff878f8381e4bf01b5adb86b2d6f4132"
+    },
+    {
+      "path": "collection_storage_fast/tools/install_boot.py",
+      "source": "/home/robot/collection_storage_fast/tools/install_boot.py",
+      "sha256": "3a2b5fc3714551373d171b43bb743b37559bc6b907fcebfd17f12d9226ea782e",
+      "backup_sha256": "3a2b5fc3714551373d171b43bb743b37559bc6b907fcebfd17f12d9226ea782e"
+    },
+    {
+      "path": "collection_storage_fast/tools/switch.py",
+      "source": "/home/robot/collection_storage_fast/tools/switch.py",
+      "sha256": "96ddf211904d5c7ceedd590025dd64b0c3e711b37eb836cf07184d8be03fc936",
+      "backup_sha256": "96ddf211904d5c7ceedd590025dd64b0c3e711b37eb836cf07184d8be03fc936"
+    },
+    {
+      "path": "collection_storage_fast/tools/zerith-storage-fast.service",
+      "source": "/home/robot/collection_storage_fast/tools/zerith-storage-fast.service",
+      "sha256": "bae21ddf1dfde590c68d35904f84524ab198e58afa414896e350dbcb320dabdc",
+      "backup_sha256": "bae21ddf1dfde590c68d35904f84524ab198e58afa414896e350dbcb320dabdc"
+    },
+    {
+      "path": "collection_rgb_only/README.md",
+      "source": "/home/robot/collection_rgb_only/README.md",
+      "sha256": "2026569c1498b0a090b0ffc2922eeb2a310044a4d6a7cca1eb41fdf10b86b478",
+      "backup_sha256": "2026569c1498b0a090b0ffc2922eeb2a310044a4d6a7cca1eb41fdf10b86b478"
+    },
+    {
+      "path": "collection_rgb_only/patch.py",
+      "source": "/home/robot/collection_rgb_only/patch.py",
+      "sha256": "a35481c1cd1da8d9c7d9855ff1f58e8499aafe96fbbd57fc45cd50c97f8a77bd",
+      "backup_sha256": "a35481c1cd1da8d9c7d9855ff1f58e8499aafe96fbbd57fc45cd50c97f8a77bd"
+    },
+    {
+      "path": "collection_rgb_only/rgb_mode.py",
+      "source": "/home/robot/collection_rgb_only/rgb_mode.py",
+      "sha256": "de3590df3a743400901fec61cdaf2802cba20f2ce039ddbef8d110123b74f878",
+      "backup_sha256": "de3590df3a743400901fec61cdaf2802cba20f2ce039ddbef8d110123b74f878"
+    },
+    {
+      "path": "collection_rgb_only/tests/self_test.py",
+      "source": "/home/robot/collection_rgb_only/tests/self_test.py",
+      "sha256": "79a76bb1e73e4f41959df1a39215fe0405ebf63c1ba24645ee59322dac8a9719",
+      "backup_sha256": "79a76bb1e73e4f41959df1a39215fe0405ebf63c1ba24645ee59322dac8a9719"
+    },
+    {
+      "path": "collection_rgb_only/tools/boot.py",
+      "source": "/home/robot/collection_rgb_only/tools/boot.py",
+      "sha256": "24c843abf8267ed60fea95cd208ae6396f152802ba93206a5dd0d76baf2ab1c2",
+      "backup_sha256": "24c843abf8267ed60fea95cd208ae6396f152802ba93206a5dd0d76baf2ab1c2"
+    },
+    {
+      "path": "collection_rgb_only/tools/bootstrap.py",
+      "source": "/home/robot/collection_rgb_only/tools/bootstrap.py",
+      "sha256": "920d1d0c2c0a2d8192542832504542e53f71af264efda296c60da14a40887b84",
+      "backup_sha256": "920d1d0c2c0a2d8192542832504542e53f71af264efda296c60da14a40887b84"
+    },
+    {
+      "path": "collection_rgb_only/tools/build.py",
+      "source": "/home/robot/collection_rgb_only/tools/build.py",
+      "sha256": "2c25f54e4bd7a417fc1fb2e52dddee165b76f0ea361dcb7a84e7dfb872de0a1a",
+      "backup_sha256": "2c25f54e4bd7a417fc1fb2e52dddee165b76f0ea361dcb7a84e7dfb872de0a1a"
+    },
+    {
+      "path": "collection_rgb_only/tools/deploy.py",
+      "source": "/home/robot/collection_rgb_only/tools/deploy.py",
+      "sha256": "28ade1e389ea64f35a96f39c434197f9a06946605e20b4c07f4bf2f41713cf95",
+      "backup_sha256": "28ade1e389ea64f35a96f39c434197f9a06946605e20b4c07f4bf2f41713cf95"
+    },
+    {
+      "path": "collection_rgb_only/tools/switch.py",
+      "source": "/home/robot/collection_rgb_only/tools/switch.py",
+      "sha256": "1399599c75993f098dd4ce9d41295480c325e37cc7827f7ee06fb59fe181e931",
+      "backup_sha256": "1399599c75993f098dd4ce9d41295480c325e37cc7827f7ee06fb59fe181e931"
+    },
+    {
+      "path": "collection_depth_toggle/README.md",
+      "source": "/home/robot/collection_depth_toggle/README.md",
+      "sha256": "fbaed84d12c34da72516cd71aa1c633ab5d8d9e8cbf1764297fd25b8e5c8deab",
+      "backup_sha256": "fbaed84d12c34da72516cd71aa1c633ab5d8d9e8cbf1764297fd25b8e5c8deab"
+    },
+    {
+      "path": "collection_depth_toggle/patch.py",
+      "source": "/home/robot/collection_depth_toggle/patch.py",
+      "sha256": "66f6d3eab91345d613d3f5c5deab5fae8cde77ae6b80cb92c8a1d2e8b9048e99",
+      "backup_sha256": "66f6d3eab91345d613d3f5c5deab5fae8cde77ae6b80cb92c8a1d2e8b9048e99"
+    },
+    {
+      "path": "collection_depth_toggle/rgb_mode.py",
+      "source": "/home/robot/collection_depth_toggle/rgb_mode.py",
+      "sha256": "f8e90fc9c3325dd36613726a306a0002dbc14fb9fd283d644ec8f129a157f73d",
+      "backup_sha256": "f8e90fc9c3325dd36613726a306a0002dbc14fb9fd283d644ec8f129a157f73d"
+    },
+    {
+      "path": "collection_depth_toggle/tests/self_test.py",
+      "source": "/home/robot/collection_depth_toggle/tests/self_test.py",
+      "sha256": "7e70428aba1152c2311eee016adae20892351b22dc9edb25012edb39f1bb36fa",
+      "backup_sha256": "7e70428aba1152c2311eee016adae20892351b22dc9edb25012edb39f1bb36fa"
+    },
+    {
+      "path": "collection_depth_toggle/tools/boot.py",
+      "source": "/home/robot/collection_depth_toggle/tools/boot.py",
+      "sha256": "24c843abf8267ed60fea95cd208ae6396f152802ba93206a5dd0d76baf2ab1c2",
+      "backup_sha256": "24c843abf8267ed60fea95cd208ae6396f152802ba93206a5dd0d76baf2ab1c2"
+    },
+    {
+      "path": "collection_depth_toggle/tools/bootstrap.py",
+      "source": "/home/robot/collection_depth_toggle/tools/bootstrap.py",
+      "sha256": "d41b635f1d20c55ba97301d4bfd272d129ad75a70d18d4f9ec5d2c5abfce776a",
+      "backup_sha256": "d41b635f1d20c55ba97301d4bfd272d129ad75a70d18d4f9ec5d2c5abfce776a"
+    },
+    {
+      "path": "collection_depth_toggle/tools/build.py",
+      "source": "/home/robot/collection_depth_toggle/tools/build.py",
+      "sha256": "b03c6c8614d69da383c3b8a7c29437bcf1585612df0a1545d67f90c9c47f4500",
+      "backup_sha256": "b03c6c8614d69da383c3b8a7c29437bcf1585612df0a1545d67f90c9c47f4500"
+    },
+    {
+      "path": "collection_depth_toggle/tools/deploy.py",
+      "source": "/home/robot/collection_depth_toggle/tools/deploy.py",
+      "sha256": "fc7cfc6a71deeb039035babb8730434d9f2c1feb8d6c1451c6742e3b7290beb3",
+      "backup_sha256": "fc7cfc6a71deeb039035babb8730434d9f2c1feb8d6c1451c6742e3b7290beb3"
+    },
+    {
+      "path": "collection_depth_toggle/tools/switch.py",
+      "source": "/home/robot/collection_depth_toggle/tools/switch.py",
+      "sha256": "fef92a20a9d231c9bddcbbd8dc582d59b4e8dee226b759999b2cfc1cdcef18b3",
+      "backup_sha256": "fef92a20a9d231c9bddcbbd8dc582d59b4e8dee226b759999b2cfc1cdcef18b3"
+    },
+    {
+      "path": "web_control/PI05_EXECUTOR.md",
+      "source": "/home/robot/control/web_control/PI05_EXECUTOR.md",
+      "sha256": "87c1020d3a1152dec4b1a40baddf2fde83dc45176732abc970b89cf5f6425218",
+      "backup_sha256": "87c1020d3a1152dec4b1a40baddf2fde83dc45176732abc970b89cf5f6425218"
+    },
+    {
+      "path": "web_control/README.md",
+      "source": "/home/robot/control/web_control/README.md",
+      "sha256": "bfa054b1b682362252f7f0de8f0006db5f998fde65cfd1d69503b15c537572c8",
+      "backup_sha256": "bfa054b1b682362252f7f0de8f0006db5f998fde65cfd1d69503b15c537572c8"
+    },
+    {
+      "path": "web_control/__init__.py",
+      "source": "/home/robot/control/web_control/__init__.py",
+      "sha256": "3f0532b81a36e6eca349e583e26dc000f324bbfa49765fb139c5c7cadab6be57",
+      "backup_sha256": "3f0532b81a36e6eca349e583e26dc000f324bbfa49765fb139c5c7cadab6be57"
+    },
+    {
+      "path": "web_control/camera_service.py",
+      "source": "/home/robot/control/web_control/camera_service.py",
+      "sha256": "7e73b7d9fe3aa0044619b732391ee03044a8469c3609dc8eb60e37d1ccde667e",
+      "backup_sha256": "7e73b7d9fe3aa0044619b732391ee03044a8469c3609dc8eb60e37d1ccde667e"
+    },
+    {
+      "path": "web_control/fake_camera.py",
+      "source": "/home/robot/control/web_control/fake_camera.py",
+      "sha256": "710491bf98db59bde9b7836df64671acca443fbeaf6022e26bb252505cef8d79",
+      "backup_sha256": "710491bf98db59bde9b7836df64671acca443fbeaf6022e26bb252505cef8d79"
+    },
+    {
+      "path": "web_control/fake_sdk.py",
+      "source": "/home/robot/control/web_control/fake_sdk.py",
+      "sha256": "b2f4e046f7330ea6a1bedfe4080013c46a1336a53e09a1d887f3527f50d34933",
+      "backup_sha256": "b2f4e046f7330ea6a1bedfe4080013c46a1336a53e09a1d887f3527f50d34933"
+    },
+    {
+      "path": "web_control/pi05_cli.py",
+      "source": "/home/robot/control/web_control/pi05_cli.py",
+      "sha256": "163c5e7d560d0287f20349641fe5b74cb267321b64de4cef90717c07fc1fe858",
+      "backup_sha256": "163c5e7d560d0287f20349641fe5b74cb267321b64de4cef90717c07fc1fe858"
+    },
+    {
+      "path": "web_control/pi05_executor.py",
+      "source": "/home/robot/control/web_control/pi05_executor.py",
+      "sha256": "ebf442adc6ed6e6f6a89d491b8615b224d7ac887992facb0c080a56a4cb52bbf",
+      "backup_sha256": "ebf442adc6ed6e6f6a89d491b8615b224d7ac887992facb0c080a56a4cb52bbf"
+    },
+    {
+      "path": "web_control/pi05_protocol.py",
+      "source": "/home/robot/control/web_control/pi05_protocol.py",
+      "sha256": "5da8d92a344eb1b71cfde9439826f823da1ab94d0e053b3d613718e16823b073",
+      "backup_sha256": "5da8d92a344eb1b71cfde9439826f823da1ab94d0e053b3d613718e16823b073"
+    },
+    {
+      "path": "web_control/replay_controller.py",
+      "source": "/home/robot/control/web_control/replay_controller.py",
+      "sha256": "a56914c06f4b34112c2b25b0b790313782b2894cc615f96a7bdb5edae2d77242",
+      "backup_sha256": "a56914c06f4b34112c2b25b0b790313782b2894cc615f96a7bdb5edae2d77242"
+    },
+    {
+      "path": "web_control/replay_timing.py",
+      "source": "/home/robot/control/web_control/replay_timing.py",
+      "sha256": "2cba93c4baa8bbcd2c3c7bba330d1341af3a58c1b95b143ffd5740ab27880180",
+      "backup_sha256": "2cba93c4baa8bbcd2c3c7bba330d1341af3a58c1b95b143ffd5740ab27880180"
+    },
+    {
+      "path": "web_control/requirements-pi05.txt",
+      "source": "/home/robot/control/web_control/requirements-pi05.txt",
+      "sha256": "b8ffbd4162b02f572460dc416aacf713ddbb474a7aba3bd6c3f922f48399fd45",
+      "backup_sha256": "b8ffbd4162b02f572460dc416aacf713ddbb474a7aba3bd6c3f922f48399fd45"
+    },
+    {
+      "path": "web_control/robot_service.py",
+      "source": "/home/robot/control/web_control/robot_service.py",
+      "sha256": "61d720bf6ebebbaf5e4197f2602244c4229efbd6ffef2708191591d20e8383d8",
+      "backup_sha256": "61d720bf6ebebbaf5e4197f2602244c4229efbd6ffef2708191591d20e8383d8"
+    },
+    {
+      "path": "web_control/server.py",
+      "source": "/home/robot/control/web_control/server.py",
+      "sha256": "feb3efc9ab82ea5033dfa572dfe3f60714d21daab8115e3e8f1f51b0f334a124",
+      "backup_sha256": "feb3efc9ab82ea5033dfa572dfe3f60714d21daab8115e3e8f1f51b0f334a124"
+    },
+    {
+      "path": "web_control/static/app.js",
+      "source": "/home/robot/control/web_control/static/app.js",
+      "sha256": "92d22d88ecb8a48a579a02c2378dec9c45d44026896ea2bbbe8c5c68055130c1",
+      "backup_sha256": "92d22d88ecb8a48a579a02c2378dec9c45d44026896ea2bbbe8c5c68055130c1"
+    },
+    {
+      "path": "web_control/static/index.html",
+      "source": "/home/robot/control/web_control/static/index.html",
+      "sha256": "2d4fdfd59dde1c8e74da9d2e3ce3080e87bc94477ad3da8a4afe528c431730fd",
+      "backup_sha256": "2d4fdfd59dde1c8e74da9d2e3ce3080e87bc94477ad3da8a4afe528c431730fd"
+    },
+    {
+      "path": "web_control/static/pcm-worklet.js",
+      "source": "/home/robot/control/web_control/static/pcm-worklet.js",
+      "sha256": "e2ddaec14779bcea183015b6ef19dc6fadd5efb5393270de95542fb303543a75",
+      "backup_sha256": "e2ddaec14779bcea183015b6ef19dc6fadd5efb5393270de95542fb303543a75"
+    },
+    {
+      "path": "web_control/static/refined.css",
+      "source": "/home/robot/control/web_control/static/refined.css",
+      "sha256": "e199869a3c2a45dccf0e0f52ebe90e9ed5e59277b2c3eb60b62dc1c748b372ed",
+      "backup_sha256": "e199869a3c2a45dccf0e0f52ebe90e9ed5e59277b2c3eb60b62dc1c748b372ed"
+    },
+    {
+      "path": "web_control/static/style.css",
+      "source": "/home/robot/control/web_control/static/style.css",
+      "sha256": "5a033a3087e9f90c85f125017c9eafb43973e3a79e0c1e4440e5f5f41adf48e6",
+      "backup_sha256": "5a033a3087e9f90c85f125017c9eafb43973e3a79e0c1e4440e5f5f41adf48e6"
+    },
+    {
+      "path": "web_control/systemd/zerith-h1-web-control-user.service",
+      "source": "/home/robot/control/web_control/systemd/zerith-h1-web-control-user.service",
+      "sha256": "d71a79b7f001585ef3456d9cc372c84e878254f6daf815e8e18852bd512f81d0",
+      "backup_sha256": "d71a79b7f001585ef3456d9cc372c84e878254f6daf815e8e18852bd512f81d0"
+    },
+    {
+      "path": "web_control/systemd/zerith-h1-web-control.service",
+      "source": "/home/robot/control/web_control/systemd/zerith-h1-web-control.service",
+      "sha256": "fcc7cf692b4047d0a370410cbbccc91f530ed3a4ec1b7d90bf15e674f98d2a9d",
+      "backup_sha256": "fcc7cf692b4047d0a370410cbbccc91f530ed3a4ec1b7d90bf15e674f98d2a9d"
+    },
+    {
+      "path": "web_control/tests/__init__.py",
+      "source": "/home/robot/control/web_control/tests/__init__.py",
+      "sha256": "2caeacac7cd3fa75d1ee0c07774191a12606f6477d995068172b4047d5829fcb",
+      "backup_sha256": "2caeacac7cd3fa75d1ee0c07774191a12606f6477d995068172b4047d5829fcb"
+    },
+    {
+      "path": "web_control/tests/test_camera_manager.py",
+      "source": "/home/robot/control/web_control/tests/test_camera_manager.py",
+      "sha256": "96c1e3e14a4c07ac0968292eb04f59303188d8e953d371fbfb5c84663bb37202",
+      "backup_sha256": "96c1e3e14a4c07ac0968292eb04f59303188d8e953d371fbfb5c84663bb37202"
+    },
+    {
+      "path": "web_control/tests/test_camera_service.py",
+      "source": "/home/robot/control/web_control/tests/test_camera_service.py",
+      "sha256": "0a388547e28e12f109c4eedef6677a24d71af3fcaa44eeb1f2cb8801f5382811",
+      "backup_sha256": "0a388547e28e12f109c4eedef6677a24d71af3fcaa44eeb1f2cb8801f5382811"
+    },
+    {
+      "path": "web_control/tests/test_pi05_cli.py",
+      "source": "/home/robot/control/web_control/tests/test_pi05_cli.py",
+      "sha256": "a97c89c16b04354ed4d216eaa5c2be0de8772ea3d79ada1ce7404ae03c77c21d",
+      "backup_sha256": "a97c89c16b04354ed4d216eaa5c2be0de8772ea3d79ada1ce7404ae03c77c21d"
+    },
+    {
+      "path": "web_control/tests/test_pi05_concurrency_regression.py",
+      "source": "/home/robot/control/web_control/tests/test_pi05_concurrency_regression.py",
+      "sha256": "defdf39ff2fea3686d00e93d51d533b34a1cfd51148e680d82cd426da7280261",
+      "backup_sha256": "defdf39ff2fea3686d00e93d51d533b34a1cfd51148e680d82cd426da7280261"
+    },
+    {
+      "path": "web_control/tests/test_pi05_executor.py",
+      "source": "/home/robot/control/web_control/tests/test_pi05_executor.py",
+      "sha256": "85892f3ac45a8097832f7902c665d1268fbb48183bf24abcebdc79d0377762e6",
+      "backup_sha256": "85892f3ac45a8097832f7902c665d1268fbb48183bf24abcebdc79d0377762e6"
+    },
+    {
+      "path": "web_control/tests/test_pi05_protocol.py",
+      "source": "/home/robot/control/web_control/tests/test_pi05_protocol.py",
+      "sha256": "e84f5fc31a7aa12d87a70d1b1954b3b647731c5b4aaf8120b0e6ed523547c9a8",
+      "backup_sha256": "e84f5fc31a7aa12d87a70d1b1954b3b647731c5b4aaf8120b0e6ed523547c9a8"
+    },
+    {
+      "path": "web_control/tests/test_pi05_server.py",
+      "source": "/home/robot/control/web_control/tests/test_pi05_server.py",
+      "sha256": "c869b478f9f9474aee679c573e8df01a8f90a106ec9df1adc56f118cefb482d0",
+      "backup_sha256": "c869b478f9f9474aee679c573e8df01a8f90a106ec9df1adc56f118cefb482d0"
+    },
+    {
+      "path": "web_control/tests/test_replay_controller.py",
+      "source": "/home/robot/control/web_control/tests/test_replay_controller.py",
+      "sha256": "23447ee2b0cd84b4f90f2e4d7804c6b83a3e1e798904a8a980cc0492157b9c4e",
+      "backup_sha256": "23447ee2b0cd84b4f90f2e4d7804c6b83a3e1e798904a8a980cc0492157b9c4e"
+    },
+    {
+      "path": "web_control/tests/test_replay_timing.py",
+      "source": "/home/robot/control/web_control/tests/test_replay_timing.py",
+      "sha256": "0574a022703cea91e641d32aa06846ada8fe682d5031534b948727636b6e7f99",
+      "backup_sha256": "0574a022703cea91e641d32aa06846ada8fe682d5031534b948727636b6e7f99"
+    },
+    {
+      "path": "web_control/tests/test_robot_service.py",
+      "source": "/home/robot/control/web_control/tests/test_robot_service.py",
+      "sha256": "70f10d317bfebaba481eeb24b2eb5d3f98eba887d985d0eebd7718deb1a80f62",
+      "backup_sha256": "70f10d317bfebaba481eeb24b2eb5d3f98eba887d985d0eebd7718deb1a80f62"
+    },
+    {
+      "path": "web_control/tests/test_server.py",
+      "source": "/home/robot/control/web_control/tests/test_server.py",
+      "sha256": "1da0d501577aba1b4da3c7ada48b67509e87e3d368ff1cea14a7ece8ee2376df",
+      "backup_sha256": "1da0d501577aba1b4da3c7ada48b67509e87e3d368ff1cea14a7ece8ee2376df"
+    },
+    {
+      "path": "web_control/tests/test_voice_motion.py",
+      "source": "/home/robot/control/web_control/tests/test_voice_motion.py",
+      "sha256": "dcea25df3fcc2de139b15102188816456ebc59be4f3b3ad8e8f050e3d8eeaa6e",
+      "backup_sha256": "dcea25df3fcc2de139b15102188816456ebc59be4f3b3ad8e8f050e3d8eeaa6e"
+    },
+    {
+      "path": "web_control/voice_gateway.py",
+      "source": "/home/robot/control/web_control/voice_gateway.py",
+      "sha256": "ec6ab648218280e08fb4c2c7eac0f2fa3c319a4be0a74b631af5f9b425e262c0",
+      "backup_sha256": "ec6ab648218280e08fb4c2c7eac0f2fa3c319a4be0a74b631af5f9b425e262c0"
+    },
+    {
+      "path": "web_control/voice_motion.py",
+      "source": "/home/robot/control/web_control/voice_motion.py",
+      "sha256": "d237b0d5fc20ca162cc30364015a5e146731e4e20d6b628f4ffbe3613fbba9d8",
+      "backup_sha256": "d237b0d5fc20ca162cc30364015a5e146731e4e20d6b628f4ffbe3613fbba9d8"
+    }
+  ],
+  "backup_adjustments": "Retain stronger repository ignore rules; normalize trailing empty line in one test file. Runtime source remains unchanged."
+}

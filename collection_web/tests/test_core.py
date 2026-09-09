@@ -35,6 +35,12 @@ def episode(dataset,uid=UUID,finished=True):
     return p
 
 class TaskTests(unittest.TestCase):
+    def test_depth_default_false_and_boolean_only(self):
+        self.assertIs(validate_task({'task_name':'test'})[0]['record_depth'],False)
+        self.assertIs(validate_task({'task_name':'test','record_depth':True})[0]['record_depth'],True)
+        for value in ('false','true',0,1,None):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                validate_task({'task_name':'test','record_depth':value})
     def test_directory_name_height_and_unchanged_vendor_config(self):
         original,targets=validate_task({'task_name':DEFAULT_PROMPT})
         config,with_height=validate_task({'task_name':DEFAULT_PROMPT,'lift_height':'00.800'})
@@ -56,6 +62,15 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(parse_targets('picotest'),{'left':'','right':''})
 
 class StoreTests(unittest.TestCase):
+    def test_selected_depth_requires_complete_three_camera_data(self):
+        p=episode(self.dataset)
+        self.assertFalse(validate_finished(p)['record_depth'])
+        with h5py.File(p/'episode.hdf5','a') as f:f.attrs['depth_recorded']=True
+        with self.assertRaisesRegex(ValueError,'深度图缺失'):validate_finished(p)
+        with h5py.File(p/'episode.hdf5','a') as f:
+            for name in ['cam_high','cam_left_wrist','cam_right_wrist']:
+                f.create_dataset('observation/images/rs/'+name+'/depth',data=np.ones((8,4),dtype='u1'))
+        self.assertTrue(validate_finished(p)['record_depth'])
     def routed(self):
         destination=self.root/'Left_Right_0.8';destination.mkdir()
         baseline=self.store.new_session('routed',{'task_name':'original prompt'},{'left':'Left','right':'Right','lift_height':'0.8'},destination,self.dataset)

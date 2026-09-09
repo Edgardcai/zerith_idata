@@ -41,21 +41,24 @@ web_control/static/*           网页“推理”页签
 ```bash
 cd /home/robot/control
 /home/robot/miniconda3/envs/zerith/bin/python -m web_control.server \
-  --host 172.16.18.43 --port 8080 \
+  --host 0.0.0.0 --port 8080 \
   --pi05-server-host 192.168.1.154 \
   --pi05-server-port 9973 \
   --pi05-inference-timeout 10 \
   --allow-unauthenticated-lan
 ```
 
-启动服务器本身不会接管、初始化或运动机器人。现场目前启用了免认证 LAN，可信网络
+`0.0.0.0` 让同一服务同时通过无线 `172.16.18.43` 和有线 `192.168.3.43`
+访问，不会创建第二个 SDK owner。启动服务器本身不会接管、初始化或运动机器人。
+现场目前启用了免认证 LAN，可信网络
 以外应去掉 `--allow-unauthenticated-lan` 并配置 `H1_WEB_CONTROL_TOKEN`。
 
 ## 网页和代码双入口
 
-网页页签标题为“推理”。左侧集中设置推理服务器 host/port、prompt、关节速度、
-发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、断开推理连接和
-显式重新连接。参数语义为：
+网页页签标题为“推理”。左侧集中设置推理服务器 host/port、任务模式、商品、prompt、
+关节速度、发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、机械臂归位、断开
+推理连接和显式重新连接。“机械臂归位”保持按键时的升降柱实测高度和底盘零速，
+将双臂、腰、头归零并完全张开夹爪；推理运行期间禁止使用。参数语义为：
 
 | 参数 | 默认 | 有效值 |
 |---|---:|---:|
@@ -67,13 +70,33 @@ cd /home/robot/control
 图片，再同步请求并执行下一包；推理期间保持上一条位置目标，不提前预取旧状态对应的
 下一包。
 N 不是总步数，也不限制 Chunk 数量。启动后会连续执行，直到操作员显式停止、发生
-故障或控制 lease 失效。
+故障、控制 lease 失效，或服务端返回严格布尔值 `is_success=true`。
+
+任务模式：
+
+- 单手：`Grasp {item} with the {left|right} hand`，未选中的手保持推理启动时姿态。
+- 双手连续：`Target: {left_item} and {right_item}. Grasp {left_item} with the left hand and then grasp {right_item} with the right hand from the shelf.`
+- 双手分开：先发送左手模板，再发送右手模板。只有实际成功下发的动作中左夹爪
+  `action[7] > 0.2` 连续达到 150 步才切换；中间任一步不满足都会把计数清零。
+  切换时在同一个 policy session 内按当前关节速度把双臂目标逐步归零，左夹爪每步
+  固定发送 `1.5`、右夹爪发送 `0`，升降柱保持切换时高度；右手阶段继续锁定左臂
+  关节为零、左夹爪为 `1.5`。零位命令发出后仍持续发送并检查实测反馈：14 个关节
+  需在 `0.05 rad` 内连续稳定 5 个控制周期才进入右手阶段；20 秒未收敛会锁存停止。
+
+自定义 Prompt 输入框留空时使用模板；单手和双手连续模式可直接输入自定义内容覆盖
+模板。单手自定义内容仍执行单手冻结，因此必须只含一个 `left` 或 `right` 且与下拉
+选择一致。双手分开需要两个明确的阶段提示词，因此网页固定使用左右商品生成两条模板。
 
 状态接口中的 `chunk_request_mode=after_chunk_sync` 表示包尾同步请求；
 `last_chunk_first_arm_delta_from_observation_rad` 和
 `last_chunk_first_arm_delta_from_feedback_rad` 分别记录新包首步相对请求观测和实际下发前
 反馈的最大双臂关节差。诊断值本身不触发拒绝；实际下发前另按配置的关节速度限制
 双臂 14 个目标的变化率。
+
+腰/头诊断按 `[waist.pitch, waist.yaw, head.yaw, head.pitch]` 排列：
+`last_chunk_observation_body` 是请求推理时的反馈，`last_chunk_server_body` 是服务端原始
+返回值，`last_chunk_effective_body` 是最终下发目标，`last_chunk_feedback_body` 是下发前
+实测位置，`last_chunk_body_hold_target` 是 session 启动时锁定的保持目标。
 
 关节限幅的单周期上限为
 `radians(joint_speed_deg_s) / control_rate_hz`。限幅基准是上一条**成功下发**的目标，
@@ -134,7 +157,9 @@ cd /home/robot/control
 ```
 
 客户端显式使用 `proxy=None`，只发送 `{"type":"metadata"}`，严格验证完整的 23 维
-state/action order、模型维度 17、连续输入夹爪、二值输出夹爪和 `status_mode=none`。
+state/action order、模型维度 17 和 `status_mode`。状态模式严格允许
+`none / left / right / prompt`。metadata 中夹爪输入、输出模式
+必须是布尔值，但可为 `true` 或 `false`；二值化或连续值处理完全由服务端负责。
 
 也可在网页“推理”页签点击“重新连接”（显式检查 healthz + metadata），
 或执行：
@@ -180,7 +205,7 @@ H1_CONTROL_LEASE='LEASE_ID' \
 让重连、dry-run 和 start 保持在同一 lease 中。
 
 dry-run 必须返回：state 23 维且有限、三路 BGR 图存在、chunk `50×23` 且有限、夹爪
-只含 `0/1.5`、17～20 保持、21～22 为零，并通过
+数值原样保留、17～20 保持、21～22 为零，并通过
 `first_arm_delta_from_observation_rad` 报告首步双臂目标相对观测的最大差值。该值只诊断、
 不改写动作。start 的 prompt 必须与当前成功 dry-run
 验证过的 prompt 完全一致；重新连接、故障复位或更换 prompt 后需要重新 dry-run。
@@ -207,10 +232,11 @@ H1_CONTROL_LEASE='LEASE_ID' \
   --confirm-motion
 ```
 
-必须与刚才 dry-run 的 prompt 完全相同。`--steps-per-chunk 30`
+必须与刚才 dry-run 的完整任务计划完全相同。`--steps-per-chunk 30`
 表示每包执行前 30 步，再请求下一包继续执行；它不是总执行步数。服务端没有
-`is_success`，也不设置总 Chunk 或总执行步数上限，因此必须由操作员使用网页停止、
-下面的 `stop` 命令或 Ctrl+C 结束；故障和 lease 失效也会终止执行。`--prompt` 可换成
+`is_success` 时按 false 处理；若响应提供严格布尔值且变为 true，则收到该包后、下发
+其中任何动作前正常结束。仍不设置总 Chunk 或总执行步数上限；操作员可随时使用网页停止、
+下面的 `stop` 命令或 Ctrl+C 结束。故障和 lease 失效也会终止执行。`--prompt` 可换成
 `--prompt-file /path/to/prompt.txt`；两种方式都会去除首尾空白并限制在 1000 字符内。
 也可随时执行：
 
@@ -248,6 +274,31 @@ start。任一环节失败都请求软件停止；它永远不自动调用 `robo
 `robot_deinit()`。机器人仍在反初始化状态时，dry-run 可安全完成，但 start 会被后端
 拒绝，不会自行初始化。
 
+CLI 默认 `--inference-mode custom`，因此旧的单 Prompt 命令保持兼容。代码入口也可
+显式使用网页相同的编排模式，例如：
+
+```bash
+# 单手：非活动侧保持启动姿态
+$PY310 $EXECUTOR run --web-url http://172.16.18.43:8080 \
+  --auto-takeover --prepare --confirm-motion \
+  --inference-mode single --active-hand left \
+  --prompt 'Grasp Coca-Cola with the left hand'
+
+# 双手分开：左手 -> 连续150个已执行闭合动作 -> 双臂归零 -> 右手
+$PY310 $EXECUTOR run --web-url http://172.16.18.43:8080 \
+  --auto-takeover --prepare --confirm-motion \
+  --inference-mode dual_separate \
+  --prompt 'Grasp Coca-Cola with the left hand' \
+  --right-prompt 'Grasp NEVER Coconut Latte with the right hand'
+```
+
+若 metadata 为 `status_mode=prompt`，每条 Prompt 必须只含一个方向单词；所以同一条
+Prompt 同时包含 `left` 和 `right` 的双手连续模式会在 dry-run 前被拒绝。该模式应使用
+`status_mode=none` 或服务端明确实现的双手完成规则。任何模式中收到
+`is_success=true` 都按本需求结束整个推理任务；它不会只作为双手分开的阶段切换信号。
+单手模式若使用固定 `left/right` 状态服务，方向必须与选中的手一致；双手分开拒绝
+固定侧状态服务，只允许 `none` 或能随每条 Prompt 选边的 `prompt`，避免监控错阶段。
+
 ## 相机映射
 
 | JSON 协议字段 | CameraService 逻辑名 | CameraClient 实际接口 | 输入 |
@@ -272,19 +323,23 @@ wire 17..20 -> motor 3..6    腰 pitch/yaw、头 yaw/pitch（只保持）
 wire 21..22 -> 不下发        底盘线/角速度（强制零）
 ```
 
-每个动作步都在唯一 SDK owner 线程内重新读取真实反馈，覆盖 `action[17:21]`，清零
-`action[21:23]`，最后只向位置电机发送 `action[:21]`。
+policy session 建立时，唯一 SDK owner 线程一次性读取并锁定腰/头
+`state[17:21]`。每个动作步仍重新读取真实反馈用于状态上传、错误检查和诊断，但最终
+始终用该 session 启动快照覆盖 `action[17:21]`，清零 `action[21:23]`，并只向位置
+电机发送 `action[:21]`。这样真实反馈即使因重力短暂偏离，也不会被追认为下一步目标。
 
 ## 协议与硬件边界
 
 - state 必须恰好 23 维且全部有限；action chunk 必须恰好 `50×23` 且全部有限。
 - 三路输入图片必须存在并是 `HxWx3 uint8 BGR`；直接编码成 JPEG，不做 BGR→RGB 交换。
-- 双夹爪动作只接受张开 `0` 或闭合 `1.5`。
-- 每步执行前重新读取最新反馈；腰和头 `action[17:21]` 覆盖为最新位置，底盘
-  `action[21:23]` 强制为零，最终只向 SDK 发送 `action[:21]`。
+- 双夹爪观测值原样上传；服务端返回的夹爪动作也不做阈值化、取整或重映射。执行端仅做
+  有限值和厂商 SDK `[0, 1.5]` 物理范围检查。
+- 每步执行前重新读取最新反馈；腰和头 `action[17:21]` 覆盖为 policy session 启动时
+  一次性采集的位置，底盘 `action[21:23]` 强制为零，最终只向 SDK 发送
+  `action[:21]`。
 - 模型控制的前 17 维目标仍遵守厂商 SDK 软限位；所有位置反馈只要求为有限数，不再
-  对反馈设置范围或零点容差阈值。腰和头的最新保持值按原始反馈透传，因此编码器在
-  标称零点附近出现微小负漂移不会阻止执行。
+  对反馈设置范围或零点容差阈值。腰和头的 session 启动快照按原始反馈保持，因此
+  编码器在标称零点附近出现微小负值不会阻止执行，也不会在运行中逐步追随漂移。
 - 仍检查 SDK 返回的电机 error flag 和厂商明确的供电前置条件（未充电时 SOC 不低于
   10%）。非有限数、维度、SDK 范围或硬件错误仍会故障停止。
 - 双臂关节速度默认 30 deg/s，只接受大于 0 的有限数；每周期按

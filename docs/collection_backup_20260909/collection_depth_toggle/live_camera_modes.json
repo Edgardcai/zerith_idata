@@ -1,0 +1,39 @@
+[
+  {
+    "record_depth": false,
+    "cameras": [
+      "cam_high",
+      "cam_left_wrist",
+      "cam_right_wrist"
+    ],
+    "streams": [
+      "color"
+    ],
+    "frames_ready": true
+  },
+  {
+    "record_depth": true,
+    "cameras": [
+      "cam_high",
+      "cam_left_wrist",
+      "cam_right_wrist"
+    ],
+    "streams": [
+      "color",
+      "depth"
+    ],
+    "frames_ready": true
+  },
+  {
+    "record_depth": false,
+    "cameras": [
+      "cam_high",
+      "cam_left_wrist",
+      "cam_right_wrist"
+    ],
+    "streams": [
+      "color"
+    ],
+    "frames_ready": true
+  }
+]

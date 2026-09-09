@@ -56,6 +56,10 @@ sudo python3 tools/switch_trial.py start --operator-ready
 sudo python3 tools/upgrade_trial.py
 ```
 
+操作员明确允许后台保存继续时，可在 `plan` 或 `start` 命令后加 `--allow-pending-save`，允许会话等待或保存期间切换。此参数不会取消保存或删除数据；正在录制、未反初始化或设备检查失败仍拒绝切换。
+
+若启动失败后原厂和扩展遥操都已退出，且该 tmux 窗口停在 shell，可执行 `sudo python3 tools/switch_trial.py start --operator-ready --recover-stopped`。切换工具会等待扩展进程对应的实时状态，失败时显示窗口输出。`--allow-pending-save` 已同步传入二进制内部检查，修改内部检查必须重建并重新自检。
+
 只切换 `robot_startup:teleop` 一个 tmux 窗口。切换工具不会强杀机器人进程，不重启整套 robotd，不因额外电量阈值拒绝操作。
 
 ## 监测与数据核验

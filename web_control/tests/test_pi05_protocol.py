@@ -92,8 +92,11 @@ class Pi05ProtocolEncodingTests(unittest.TestCase):
     def test_observation_request_is_canonical_json_data_and_has_no_rtc(self) -> None:
         images = _images()
         images["cam_high"][..., 1] = 255
+        state = np.arange(23, dtype=np.float32)
+        state[7] = 0.37
+        state[15] = 1.234
         request = protocol.build_observation_request(
-            np.arange(23, dtype=np.float32),
+            state,
             images,
             "test prompt",
         )
@@ -102,6 +105,8 @@ class Pi05ProtocolEncodingTests(unittest.TestCase):
         self.assertEqual(request["type"], "observation")
         self.assertNotIn("rtc", request)
         self.assertEqual(len(request["observation"]["state"]), 23)
+        self.assertEqual(request["observation"]["state"][7], float(state[7]))
+        self.assertEqual(request["observation"]["state"][15], float(state[15]))
         self.assertEqual(tuple(request["observation"]["images"]), protocol.CAMERA_NAMES)
         json.dumps(request, allow_nan=False)
 
@@ -125,10 +130,20 @@ class Pi05ProtocolEncodingTests(unittest.TestCase):
 
 
 class Pi05ProtocolMetadataTests(unittest.TestCase):
-    def test_metadata_requires_complete_exact_orders_and_binary_output_mode(self) -> None:
-        validated = protocol.validate_metadata(_metadata())
-        self.assertEqual(validated["state_order"], list(protocol.STATE_ORDER))
-        self.assertEqual(validated["action_order"], list(protocol.ACTION_ORDER))
+    def test_metadata_accepts_all_server_owned_gripper_and_status_modes(self) -> None:
+        for input_binary in (False, True):
+            for output_binary in (False, True):
+                for status_mode in protocol.STATUS_MODES:
+                    metadata = _metadata()
+                    metadata["input_gripper_binary"] = input_binary
+                    metadata["output_gripper_binary"] = output_binary
+                    metadata["status_mode"] = status_mode
+                    validated = protocol.validate_metadata(metadata)
+                    self.assertIs(validated["input_gripper_binary"], input_binary)
+                    self.assertIs(validated["output_gripper_binary"], output_binary)
+                    self.assertEqual(validated["status_mode"], status_mode)
+                    self.assertEqual(validated["state_order"], list(protocol.STATE_ORDER))
+                    self.assertEqual(validated["action_order"], list(protocol.ACTION_ORDER))
         self.assertEqual(
             (protocol.GRIPPER_OPEN_VALUE, protocol.GRIPPER_CLOSED_VALUE),
             (0.0, 1.5),
@@ -137,12 +152,19 @@ class Pi05ProtocolMetadataTests(unittest.TestCase):
         for key, bad_value in (
             ("wire_state_dim", 23.0),
             ("input_gripper_binary", 0),
-            ("output_gripper_binary", False),
-            ("status_mode", "left"),
+            ("output_gripper_binary", "true"),
+            ("status_mode", "left_status"),
+            ("status_mode", 0),
         ):
             metadata = _metadata()
             metadata[key] = bad_value
             with self.subTest(key=key), self.assertRaises(protocol.ProtocolValidationError):
+                protocol.validate_metadata(metadata)
+
+        for key in ("input_gripper_binary", "output_gripper_binary", "status_mode"):
+            metadata = _metadata()
+            metadata.pop(key)
+            with self.subTest(missing=key), self.assertRaises(protocol.ProtocolValidationError):
                 protocol.validate_metadata(metadata)
 
         metadata = _metadata()
@@ -168,23 +190,34 @@ class Pi05ProtocolMetadataTests(unittest.TestCase):
 
 
 class Pi05ProtocolActionTests(unittest.TestCase):
-    def test_exact_50_by_23_chunk_and_binary_grippers(self) -> None:
-        chunk = protocol.parse_action_chunk(_action_response())
+    def test_exact_50_by_23_chunk_preserves_gripper_values(self) -> None:
+        response = _action_response()
+        response["actions"][0]["left"]["gripper"] = 0.37
+        response["actions"][0]["right"]["gripper"] = 1.234
+        chunk = protocol.parse_action_chunk(response)
         self.assertEqual(chunk.shape, (50, 23))
         self.assertEqual(chunk.dtype, np.float32)
         self.assertTrue(np.isfinite(chunk).all())
-        self.assertTrue(np.isin(chunk[:, protocol.GRIPPER_INDICES], (0.0, 1.5)).all())
+        self.assertEqual(chunk[0, 7], np.float32(0.37))
+        self.assertEqual(chunk[0, 15], np.float32(1.234))
 
-    def test_gripper_roundoff_within_tolerance_is_canonicalized(self) -> None:
+    def test_accepts_optional_strict_boolean_success_status(self) -> None:
+        for success in (False, True):
+            response = _action_response()
+            response["is_success"] = success
+            chunk = protocol.parse_action_chunk(response)
+            self.assertEqual(chunk.shape, (50, 23))
+
         response = _action_response()
-        tolerance = protocol.GRIPPER_VALUE_TOLERANCE
-        response["actions"][0]["left"]["gripper"] = tolerance / 2
-        response["actions"][0]["right"]["gripper"] = 1.5 - tolerance / 2
-        chunk = protocol.parse_action_chunk(response)
-        self.assertEqual(float(chunk[0, 7]), 0.0)
-        self.assertEqual(float(chunk[0, 15]), 1.5)
+        self.assertEqual(protocol.parse_action_chunk(response).shape, (50, 23))
 
-    def test_rejects_wrong_horizon_nonfinite_nonbinary_and_status(self) -> None:
+        for invalid in (None, 0, 1, "false", [], {}):
+            response = _action_response()
+            response["is_success"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaises(protocol.ProtocolValidationError):
+                protocol.parse_action_chunk(response)
+
+    def test_rejects_wrong_horizon_and_nonfinite_action(self) -> None:
         for count in (0, 49, 51):
             response = _action_response()
             response["actions"] = response["actions"][:count]
@@ -195,16 +228,6 @@ class Pi05ProtocolActionTests(unittest.TestCase):
 
         response = _action_response()
         response["actions"][2]["head"]["yaw"] = float("inf")
-        with self.assertRaises(protocol.ProtocolValidationError):
-            protocol.parse_action_chunk(response)
-
-        response = _action_response()
-        response["actions"][3]["left"]["gripper"] = 0.01
-        with self.assertRaises(protocol.ProtocolValidationError):
-            protocol.parse_action_chunk(response)
-
-        response = _action_response()
-        response["is_success"] = False
         with self.assertRaises(protocol.ProtocolValidationError):
             protocol.parse_action_chunk(response)
 
@@ -248,6 +271,7 @@ class Pi05ProtocolClientTests(unittest.TestCase):
 
     def test_infer_returns_strict_chunk_and_raw_response(self) -> None:
         response = _action_response()
+        response["is_success"] = True
         fake = _FakeWebSocket([json.dumps(response)])
         with mock.patch.object(protocol, "_websocket_connect", return_value=fake):
             with protocol.ZerithJsonPolicyClient("server") as client:
@@ -255,6 +279,7 @@ class Pi05ProtocolClientTests(unittest.TestCase):
 
         self.assertEqual(chunk.shape, (50, 23))
         self.assertEqual(raw["type"], "action_chunk")
+        self.assertIs(raw["is_success"], True)
         sent = json.loads(fake.sent[0])
         self.assertEqual(sent["type"], "observation")
         self.assertNotIn("rtc", sent)

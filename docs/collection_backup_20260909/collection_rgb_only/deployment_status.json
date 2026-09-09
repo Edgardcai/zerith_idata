@@ -1,0 +1,245 @@
+{
+  "deployed": true,
+  "checked_at": "2026-09-09T14:37:02.748321",
+  "sha256": "d65bb44f786b09bead78607bcba14244ad160b0b941814974266fe5cac1a877d",
+  "camera": {
+    "enabled": true,
+    "running": true,
+    "phase": "running",
+    "healthy": true,
+    "thread_alive": true,
+    "grpc_target": "localhost:50051",
+    "depth_enabled": false,
+    "poll_interval_s": 0.03,
+    "stale_after_s": 1.0,
+    "generation": 1,
+    "uptime_s": 28.662244428,
+    "last_error": null,
+    "stop_error": null,
+    "expected": {
+      "left_wrist": {
+        "expected_basename": "cam_left_wrist",
+        "camera_name": "rs/cam_left_wrist",
+        "available": true,
+        "available_streams": [
+          "rgb"
+        ]
+      },
+      "head": {
+        "expected_basename": "cam_high",
+        "camera_name": "rs/cam_high",
+        "available": true,
+        "available_streams": [
+          "rgb"
+        ]
+      },
+      "right_wrist": {
+        "expected_basename": "cam_right_wrist",
+        "camera_name": "rs/cam_right_wrist",
+        "available": true,
+        "available_streams": [
+          "rgb"
+        ]
+      }
+    },
+    "missing_expected": [],
+    "missing_expected_streams": [],
+    "discovered_count": 3,
+    "cameras": {
+      "rs/cam_left_wrist": {
+        "logical_name": "left_wrist",
+        "streams": {
+          "rgb": {
+            "configured": {
+              "sdk_type": "color",
+              "width": 640,
+              "height": 480,
+              "fps": 30.0,
+              "intrinsics": {
+                "width": 640,
+                "height": 480,
+                "fx": 394.30987548828125,
+                "fy": 394.0518798828125,
+                "ppx": 310.46612548828125,
+                "ppy": 234.05641174316406,
+                "model": "inverse_brown_conrady",
+                "coeffs": [
+                  -0.048679202795028687,
+                  0.052077896893024445,
+                  0.0005442822002805769,
+                  0.0006731129251420498,
+                  -0.017409753054380417
+                ]
+              }
+            },
+            "fresh": true,
+            "last_frame_age_s": 0.029723183,
+            "fps_unique_delivered": 30.180573795177935,
+            "sequence": 858,
+            "unique_frames": 858,
+            "polls": 953,
+            "duplicate_polls": 92,
+            "getter_errors": 0,
+            "invalid_frames": 0,
+            "encode_errors": 0,
+            "last_error": null,
+            "sdk_postdecode_monotonic_s": 15271.913822165,
+            "host_getter_monotonic_ns": 15271918225006,
+            "width": 640,
+            "height": 480,
+            "dtype": "uint8",
+            "original_640x480": true
+          }
+        }
+      },
+      "rs/cam_high": {
+        "logical_name": "head",
+        "streams": {
+          "rgb": {
+            "configured": {
+              "sdk_type": "color",
+              "width": 640,
+              "height": 480,
+              "fps": 30.0,
+              "intrinsics": {
+                "width": 640,
+                "height": 480,
+                "fx": 603.9925537109375,
+                "fy": 603.9686889648438,
+                "ppx": 320.5726623535156,
+                "ppy": 252.21734619140625,
+                "model": "inverse_brown_conrady",
+                "coeffs": [
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0,
+                  0.0
+                ]
+              }
+            },
+            "fresh": true,
+            "last_frame_age_s": 0.0296378,
+            "fps_unique_delivered": 30.181808842460168,
+            "sequence": 858,
+            "unique_frames": 858,
+            "polls": 953,
+            "duplicate_polls": 92,
+            "getter_errors": 0,
+            "invalid_frames": 0,
+            "encode_errors": 0,
+            "last_error": null,
+            "sdk_postdecode_monotonic_s": 15271.913870122,
+            "host_getter_monotonic_ns": 15271918310389,
+            "width": 640,
+            "height": 480,
+            "dtype": "uint8",
+            "original_640x480": true
+          }
+        }
+      },
+      "rs/cam_right_wrist": {
+        "logical_name": "right_wrist",
+        "streams": {
+          "rgb": {
+            "configured": {
+              "sdk_type": "color",
+              "width": 640,
+              "height": 480,
+              "fps": 30.0,
+              "intrinsics": {
+                "width": 640,
+                "height": 480,
+                "fx": 393.1610412597656,
+                "fy": 392.8731384277344,
+                "ppx": 320.3065490722656,
+                "ppy": 229.6660614013672,
+                "model": "inverse_brown_conrady",
+                "coeffs": [
+                  -0.04821178689599037,
+                  0.05158350616693497,
+                  0.00015813605568837374,
+                  0.0008993875235319138,
+                  -0.017671925947070122
+                ]
+              }
+            },
+            "fresh": true,
+            "last_frame_age_s": 0.029562446,
+            "fps_unique_delivered": 30.18303500422123,
+            "sequence": 858,
+            "unique_frames": 858,
+            "polls": 953,
+            "duplicate_polls": 92,
+            "getter_errors": 0,
+            "invalid_frames": 0,
+            "encode_errors": 0,
+            "last_error": null,
+            "sdk_postdecode_monotonic_s": 15271.914164956,
+            "host_getter_monotonic_ns": 15271918385743,
+            "width": 640,
+            "height": 480,
+            "dtype": "uint8",
+            "original_640x480": true
+          }
+        }
+      }
+    },
+    "timestamp_note": "CameraClient 1.3.9 timestamp 是客户端解码/解压完成后的单调时间，不是传感器曝光时间",
+    "web_viewers": 1
+  },
+  "collection_checks": [
+    {
+      "key": "service",
+      "label": "采集服务",
+      "ok": true,
+      "detail": "状态流已连接"
+    },
+    {
+      "key": "motors",
+      "label": "电机",
+      "ok": true,
+      "detail": "23 个电机正常"
+    },
+    {
+      "key": "vr",
+      "label": "Meta Quest / VR",
+      "ok": false,
+      "detail": "未收到有效 VR 位姿"
+    },
+    {
+      "key": "communication",
+      "label": "通信",
+      "ok": true,
+      "detail": "通信板状态检查"
+    },
+    {
+      "key": "cameras",
+      "label": "相机",
+      "ok": true,
+      "detail": "头部、左腕、右腕"
+    },
+    {
+      "key": "mode",
+      "label": "遥操作模式",
+      "ok": true,
+      "detail": "遥操作模式"
+    },
+    {
+      "key": "init",
+      "label": "机器人就绪",
+      "ok": false,
+      "detail": "反初始化完成"
+    },
+    {
+      "key": "battery",
+      "label": "电量",
+      "ok": true,
+      "detail": "68%"
+    }
+  ],
+  "collection_phase": "idle",
+  "boot_rgb_override_installed": true,
+  "live_motion_tested": false,
+  "live_new_recording_tested": false
+}

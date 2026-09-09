@@ -20,6 +20,21 @@ class PreflightTests(unittest.TestCase):
         self.assertEqual(len(check(self.state)),1)
         self.state['device']['vr_connected']=True
         self.assertEqual(check(self.state),[])
+    def test_closed_session_is_idle(self):
+        self.state['collection']['phase']='closed'
+        self.assertEqual(check(self.state),[])
+    def test_pending_save_override_retains_motion_and_recording_checks(self):
+        self.state['collection']={'phase':'waiting','current':{'state':'saving'}}
+        self.assertTrue(check(self.state))
+        self.assertEqual(check(self.state,allow_pending_save=True),[])
+        self.state['collection']['current']['state']='recording'
+        self.assertTrue(check(self.state,allow_pending_save=True))
+        self.state['collection']['current']['state']='saving'
+        self.state['device']['checks'][-1]['detail']='初始化完成'
+        self.assertTrue(check(self.state,allow_pending_save=True))
+        self.state['device']['checks'][-1]['detail']='反初始化完成'
+        self.state['device']['checks'][0]['ok']=False
+        self.assertTrue(check(self.state,allow_pending_save=True))
     def test_restore_does_not_require_vr_or_charged_battery(self):
         self.state['device'].update(vr_connected=False,battery=6)
         self.assertEqual(check(self.state,starting=False),[])

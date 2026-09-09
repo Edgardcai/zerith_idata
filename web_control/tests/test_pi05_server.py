@@ -18,9 +18,11 @@ class _FakePi05:
         self.phase = "idle"
         self.probe_calls = 0
         self.dry_runs: list[tuple[str, str]] = []
+        self.dry_run_plans: list[dict[str, object]] = []
         self.reconnects: list[tuple[str, int]] = []
         self.disconnect_reasons: list[str] = []
         self.starts: list[tuple[str, str, str, int, float, float]] = []
+        self.start_plans: list[dict[str, object]] = []
         self.stop_reasons: list[str] = []
         self.closed = False
 
@@ -48,11 +50,26 @@ class _FakePi05:
         self.phase = "idle"
         return self.status()
 
-    def dry_run(self, prompt, lease):
+    def dry_run(
+        self,
+        prompt,
+        lease,
+        *,
+        inference_mode="custom",
+        active_hand=None,
+        right_prompt=None,
+    ):
         if not lease:
             raise ValueError("lease required")
         self.phase = "dry_run_ready"
         self.dry_runs.append((prompt, lease))
+        self.dry_run_plans.append(
+            {
+                "inference_mode": inference_mode,
+                "active_hand": active_hand,
+                "right_prompt": right_prompt,
+            }
+        )
         return {"ok": True, "chunk_length": 50, "action_dim": 23}
 
     def start(
@@ -64,6 +81,9 @@ class _FakePi05:
         steps_per_chunk=30,
         control_rate_hz=30,
         joint_speed_deg_s=30,
+        inference_mode="custom",
+        active_hand=None,
+        right_prompt=None,
     ):
         if confirmation != REQUIRED_CONFIRMATION:
             raise ValueError("confirmation required")
@@ -77,6 +97,13 @@ class _FakePi05:
                 control_rate_hz,
                 joint_speed_deg_s,
             )
+        )
+        self.start_plans.append(
+            {
+                "inference_mode": inference_mode,
+                "active_hand": active_hand,
+                "right_prompt": right_prompt,
+            }
         )
         return self.status()
 
@@ -242,6 +269,54 @@ class Pi05ServerTests(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(value["phase"], "running")
         self.assertEqual(self.pi05.starts[-1][3:], (30, 25, 20))
+        self.assertEqual(
+            self.pi05.start_plans[-1],
+            {
+                "inference_mode": "custom",
+                "active_hand": None,
+                "right_prompt": None,
+            },
+        )
+
+    def test_prompt_plan_fields_are_forwarded_to_dry_run_and_start(self) -> None:
+        status, takeover = self.request(
+            "POST",
+            "/api/takeover",
+            {"enabled": True, "client_id": "pi05-plan-test"},
+        )
+        self.assertEqual(status, 200)
+        lease = takeover["lease_id"]
+
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        task = {
+            "prompt": left_prompt,
+            "inference_mode": "dual_separate",
+            "active_hand": None,
+            "right_prompt": right_prompt,
+        }
+        status, _ = self.request("POST", "/api/pi05/dry-run", task, lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            self.pi05.dry_run_plans[-1],
+            {
+                "inference_mode": "dual_separate",
+                "active_hand": None,
+                "right_prompt": right_prompt,
+            },
+        )
+
+        status, _ = self.request(
+            "POST",
+            "/api/pi05/start",
+            {
+                **task,
+                "confirmation": REQUIRED_CONFIRMATION,
+            },
+            lease,
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(self.pi05.start_plans[-1], self.pi05.dry_run_plans[-1])
 
         # Pi STOP is deliberately available to any authenticated console,
         # even if the page that started the run disappeared with its lease.
@@ -281,6 +356,7 @@ class Pi05ServerTests(unittest.TestCase):
             ("POST", "/api/actions/init", {}),
             ("POST", "/api/actions/deinit", {}),
             ("POST", "/api/actions/home", {}),
+            ("POST", "/api/actions/arm-home", {}),
             ("POST", "/api/voice/start", {"language": "zh"}),
             ("POST", "/api/voice/finish-input", {}),
             ("POST", "/api/voice/text", {"text": "向前走", "language": "zh"}),

@@ -19,6 +19,8 @@ Python 3.10 环境中，浏览器端不需要安装任何包。
   watchdog 目标；若补偿回零也失败则进入 `stop_pending`，每 50 ms 重试并拒绝新的
   非零轮速，直到双轮零速成功。
 - 厂商 `robot_init()`、`robot_deinit()`，以及指定的作业初始位姿。
+- 推理安全区提供独立“机械臂归位”：双臂、腰和头归零，夹爪全开，升降柱保持
+  按键时的实测高度，底盘保持零速；推理运行期间禁用，避免控制源冲突。
 - 左腕 D405、头部 D435、右腕 D405 的 RGB 和深度实时显示。
 - 六路图像共用一条 WebSocket；原始帧和网页 JPEG 均为 640×480，不裁切、不缩放。
 - “语音”页签可明确选择中文（默认）或 English，既可用按钮录入单句，也可在对话框中用键盘输入文字；两种输入共用回复与受限运动执行链路。
@@ -33,6 +35,8 @@ Python 3.10 环境中，浏览器端不需要安装任何包。
   二次确认真机执行。
 - 推理执行端复用本进程唯一 `H1Robot` 和唯一 CameraService；不会构造交接包中的
   `Real_Env()`，也不会启动第二个厂商 SDK 客户端。
+- “真机回放”页签可递归扫描数据集目录中的 `.hdf5` / `.h5`，选择单条 episode，
+  从 `state` 或 `action` 读取 23 维绝对目标，以 `0.5×`～`2.0×` 回放。
 
 ## 运行
 
@@ -41,6 +45,7 @@ source /home/robot/miniconda3/etc/profile.d/conda.sh
 conda activate zerith
 cd /home/robot/control
 
+python -m pip install -r web_control/requirements-pi05.txt
 python -m web_control.server
 ```
 
@@ -48,6 +53,7 @@ python -m web_control.server
 
 ```text
 http://172.16.18.43:8080
+http://192.168.3.43:8080
 ```
 
 服务启动后仍不会构造 `H1Robot`。点击并确认“接管控制”时才加载 SDK 和调用
@@ -142,6 +148,60 @@ prompt 也可使用 `--prompt-file /path/to/prompt.txt`。独立 `dry-run --auto
 绝不自动 init/deinit。机器人处于反初始化状态时，dry-run 可完成，但 start
 必定被后端拒绝。网络异常也不会自动重连后继运动。
 
+## HDF5 真机回放
+
+网页“真机回放”页按以下顺序操作：输入 HDF5 文件的上一级数据集目录，或从输入框的
+`/data` 目录候选中选择，再点击“读取数据”。候选目录由后端递归查找标准
+`dataset/episode-id/episode.hdf5` 和 `dataset/demo-id/states/aligned_joints.h5` 布局并去重，只显示数据集目录，不显示文件。
+随后选择一条 episode、回放源和模式，再选择 `0.5×`～`2.0×` 速度；默认 `1.0×`。
+现场现有样例目录是：
+
+```text
+/data/zerith_data/Pepsi_DailyCOrangeJuice2
+```
+
+回放前必须由当前页面接管机器人并完成 `LOW_LEVEL` 初始化。点击启动后还会弹出一次真机
+确认；回放器先用 3 秒五次平滑曲线从实测姿态对齐到数据首帧。有 `timestamp/t` 的
+episode 按实际采集时间在内存中重建接近 `control_frequency` 的均匀轨迹，保持首末位置
+和动作时长；关节位置线性插值，夹爪按原采样时刻保持/切换。重复时间戳保留最后一帧，
+时间倒退拒绝加载。随后按重建频率乘 `speed` 发送，避免把 167 ms 的动作压成 33 ms。
+原始文件不修改；没有时间戳的旧数据及 aligned_joints 仍使用其声明的频率。
+这是时间轴修复，不能消除原始轨迹中真实存在的快速运动；需要分别检查其速度连续性。
+
+原有采集格式继续支持：
+
+```text
+observation/state/arm/position        action/arm/position
+observation/state/effector/position   action/effector/position
+observation/state/waist/position      action/waist/position
+observation/state/head/position       action/head/position
+observation/state/base/velocity       action/base/velocity
+```
+
+另外支持根属性 `format=icra_wbc_aligned_joints` 的转换格式，例如
+`/data/sim_data/0908_newscene_test1_converted/demo_0`（也可输入其上一级目录）。
+读取 `states/aligned_joints.h5` 中的 `<帧号>/state/vector` 或
+`<帧号>/action/vector`，每帧 23 维，按从 0 开始的连续数字帧号排序，
+使用根属性 `fps` 作为回放频率。已有夹爪值直接使用，不再二次转换。
+转换数据距 SDK 边界不超过 `1e-7` 的浮点舍入误差会归一到边界，实际越界仍拒绝。
+
+拼接顺序固定为左臂 7、左夹爪、右臂 7、右夹爪、升降柱、腰 pitch/yaw、头 yaw/pitch、
+底盘 linear/angular。`action` 回放只接受根属性 `action_mode=absolute`；相对动作不会被
+误当成绝对关节目标。
+
+- “双臂动作 + 夹爪”只下发前 16 维，升降柱、腰、头不改动，底盘明确保持零速。
+- “全部 23 维”下发前 21 个位置目标。当前唯一 SDK owner 必须保持 `LOW_LEVEL`，而
+  数据的底盘末两维是 `(m/s, rad/s)`、低层接口需要左右轮 `(rad/s, rad/s)`；由于厂商
+  没有公开/标定轮径和轮距，任何非零底盘数据会被明确拒绝，绝不做错误单位直传。
+  当前样例的 `action` 底盘为全零，因此可使用 action + 全部 23 维；其 `state` 包含
+  非零底盘反馈，应选择双臂模式。
+
+加载整条数据后、发送任何目标前，后端会检查字段形状、23 维、有限数、帧数一致、
+SDK 原始位置限位和底盘条件。回放期间控制租约、电机错误、连接状态持续有效；网页
+推理、语音运动、手动关节和回放互斥。回放页的“紧急停止”与顶部停止都会立即设置取消
+标志、双轮发零速并保持最新位置反馈，且不会调用 `robot_deinit()`。它们是软件停止，
+不能替代机器人的实体急停。
+
 ## 控制生命周期
 
 ```text
@@ -214,15 +274,20 @@ SDK 对低层轮速明确标注“无限位”，且未公开轮径/轮距，因
 
 ```text
 升降柱先到 0.40 m
-→ 100 Hz、8 秒插值双臂
-  左 [0, 0, 0, -1.20, 0, 0, 0.98] rad
-  右 [0, 0, 0, -1.20, 0, 0, 0.98] rad
-→ 双夹爪 0.02 rad，hold_torque=True
+→ 100 Hz、8 秒同步插值
+  双臂 14 关节 = 0 rad
+  腰 pitch/yaw、头 yaw/pitch = 0 rad
+→ 双夹爪 = 0 rad（完全张开），hold_torque=True
 → 持续保持，直到操作者单独确认反初始化
 ```
 
-这等价于原命令的核心动作和 `--hold-until-enter` 保持语义，但 Web 页面不会把关闭
-连接解释为 Enter，也不会在到位后立即离开该姿态。
+该动作保留 `--hold-until-enter` 的持续保持语义，但目标已经改为上述全零初始姿态；
+Web 页面不会把关闭连接解释为 Enter，也不会在到位后立即离开该姿态。
+
+推理页“机械臂归位”与“初始位姿”是两套不同动作：它先把底盘双轮明确置零，再读取并
+保持当时的升降柱高度，只将双臂、腰和头插值到 0，并把双夹爪张开到 0。它要求当前
+页面持有控制租约、机器人已完成初始化并处于 `LOW_LEVEL`；推理运行/停止或故障锁存
+期间均拒绝执行，必须先结束相应状态，防止手动归位与推理同时下发。
 
 ## 相机链路
 
@@ -286,15 +351,15 @@ sudo systemctl enable --now zerith-h1-web-control.service
 systemctl status zerith-h1-web-control.service
 ```
 
-当前 unit 只绑定机器的 `172.16.18.43`，并显式启用免认证局域网访问；它只启动网页，
-不会自动接管或初始化机器人。
+当前 unit 绑定 `0.0.0.0:8080`，同一个服务可从无线 `172.16.18.43` 和有线
+`192.168.3.43` 访问，并显式启用免认证局域网访问；它只启动网页，不会自动接管或
+初始化机器人，也不会为第二个地址创建另一个 SDK owner。
 
 当前机器还安装了无需 root 的用户服务版本
 `systemd/zerith-h1-web-control-user.service`。日常重启四个语音/网页服务可直接使用：
 
 ```bash
-systemctl --user restart zerith-chinese-asr.service zerith-chinese-tts.service \
-  zerith-xiaoda-voice.service zerith-h1-web-control.service
+systemctl --user restart zerith-xiaoda-voice.service zerith-h1-web-control.service
 systemctl --user --no-pager status zerith-chinese-asr.service \
   zerith-chinese-tts.service zerith-xiaoda-voice.service zerith-h1-web-control.service
 ```
@@ -303,8 +368,10 @@ systemctl --user --no-pager status zerith-chinese-asr.service \
 `127.0.0.1:8765` 访问它，不导入 `xiaoda-voice` 环境的依赖，也不会再占用一次机器人
 麦克风。当前服务以 `--web-only` 运行：小达唤醒词监听已关闭，仅在网页点击“录入一句”时打开麦克风。
 中文和英文现在都默认打开机器人端 PipeWire 输入；当前默认设备是独立的讯飞
-`XFM-DP-V0.0.18` 麦克风。中文录音仍只进入本地 Paraformer + Qwen3-ASR 链路，英文
-模型、接口和声音保持原样。
+`XFM-DP-V0.0.18` 麦克风。中文默认走已配置的云端识别与合成 API，需要联网。
+“启动本地语音”会按需加载 Paraformer + Qwen3-ASR / Qwen3-TTS，两个服务都健康
+后自动切换；加载期间继续使用云端。“停止并释放显存”恢复云端，按钮不会启用开机启动。
+英文模型、接口和声音保持原样。
 
 反方向的运动调用通过网页进程在 `127.0.0.1:8766` 上的内部接口完成：语音进程不加载
 H1 SDK，网页进程仍是唯一 SDK 持有者。内部控制器只接受固定动作白名单，并绑定网页的
@@ -338,12 +405,18 @@ watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 
 | POST | `/api/pi05/start` | 同 prompt dry-run、lease、关节速度、频率、每 Chunk 步数及精确确认后开始连续真机执行 |
 | POST | `/api/pi05/stop` | 全局停止推理；不要求启动页面仍持有租约，不调用 deinit |
 | POST | `/api/pi05/reset-fault` | 只清故障锁存；仍须重新 probe、dry-run 和真机确认 |
+| GET | `/api/replay/status` | 回放 phase、帧进度、所选 episode 和故障 |
+| GET | `/api/replay/directories` | 在 `/data` 下发现标准 episode 的上一级数据集目录；不运动 |
+| POST | `/api/replay/scan` | 递归检查数据集目录并返回可用 HDF5 列表；不运动 |
+| POST | `/api/replay/start` | 使用当前 lease 和精确确认启动所选 state/action 回放 |
+| POST | `/api/replay/stop` | 无需原 lease 的软件停止；底盘零速、位置保持、不反初始化 |
 | GET | `/api/voice/status` | 小达状态与本轮对话文字 |
 | GET | `/api/voice/audio/{id}.wav` | 回放一条小达回复 |
 | POST | `/api/voice/start` | 按 `zh` / `en` 使用机器人本体麦克风录入单句 |
 | POST | `/api/voice/finish-input` | 手动结束当前录音并立即识别 |
 | POST | `/api/voice/text` | 按 `zh` / `en` 提交一条键盘文字，进入同一对话/动作链路 |
 | POST | `/api/voice/cancel` | 停止当前录音、合成和本地播放并清空队列 |
+| POST | `/api/voice/local-speech` | `{enabled: boolean}` 按需启停两个本地 GPU 语音服务，状态见 voice/status 的 local_speech |
 | POST | `/api/voice/motion` | 使用当前控制租约显式开启/关闭语音运动；默认关闭 |
 | POST | `/api/takeover` | 开启/关闭控制租约 |
 | POST | `/api/heartbeat` | 续约；运动请求使用 `X-Control-Lease` |
@@ -351,7 +424,8 @@ watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 
 | POST | `/api/motion/chassis` | 左右轮 rad/s |
 | POST | `/api/actions/init` | 厂商初始化动作 |
 | POST | `/api/actions/deinit` | 厂商反初始化动作 |
-| POST | `/api/actions/home` | 指定双臂作业初始位姿；支持 `speed_scale` |
+| POST | `/api/actions/home` | 双臂/腰/头归零、夹爪全开、升降柱到 0.40 m；支持 `speed_scale` |
+| POST | `/api/actions/arm-home` | 双臂/腰/头归零、夹爪全开、保持当前升降柱高度；支持 `speed_scale` |
 | POST | `/api/stop` | 取消插值、底盘零速、当前位置保持 |
 | WS | `/api/cameras/ws` | 六路图像单连接传输 |
 | WS | `/api/voice/asr/ws` | 浏览器 16 kHz PCM 中文实时 partial/final |
@@ -370,7 +444,8 @@ cd /home/robot
 
 覆盖 SDK 延迟加载、全部位置限位端点、生命周期、指定初始位姿、停止/保持、底盘
 watchdog、语音运动开关/租约/固定时长/挥腕限位、相机生命周期与 640×480 JPEG、
-推理 JSON 协议/故障锁存/唯一 owner/动作安全覆盖、HTTP API 和多流 WebSocket。
+推理 JSON 协议/故障锁存、HDF5 映射/回放/停止、唯一 owner、动作安全覆盖、HTTP API
+和多流 WebSocket。
 
 真实硬件已做无运动验证：
 

@@ -13,7 +13,8 @@
  * POST /api/motion/joint      {motor_id:number,target:number,speed_scale:number}
  * POST /api/motion/chassis    {left_speed:number,right_speed:number}
  * POST /api/heartbeat
- * POST /api/actions/init | /api/actions/deinit | /api/actions/home {speed_scale:number}
+ * POST /api/actions/init | /api/actions/deinit
+ * POST /api/actions/home | /api/actions/arm-home {speed_scale:number}
  * POST /api/stop
  * GET  /api/voice/status
  * GET  /api/voice/audio/{id}.wav
@@ -27,13 +28,20 @@
  * POST /api/pi05/probe         {}
  * POST /api/pi05/reconnect     {host:string,port:number}
  * POST /api/pi05/disconnect    {}
- * POST /api/pi05/dry-run       {prompt:string} + control lease
- * POST /api/pi05/start         {prompt:string,control_rate_hz:number,
+ * POST /api/pi05/dry-run       {prompt:string,inference_mode:string,
+ *                               active_hand:string|null,right_prompt:string|null} + control lease
+ * POST /api/pi05/start         {prompt:string,inference_mode:string,
+ *                               active_hand:string|null,right_prompt:string|null,control_rate_hz:number,
  *                               steps_per_chunk:number,
  *                               joint_speed_deg_s:number,
  *                               confirmation:string} + control lease
  * POST /api/pi05/stop          {}
  * POST /api/pi05/reset-fault   {}
+ * GET  /api/replay/status
+ * GET  /api/replay/directories
+ * POST /api/replay/scan        {dataset_dir:string}
+ * POST /api/replay/start       {dataset_dir,episode,source,mode,speed,confirmation}
+ * POST /api/replay/stop        {}
  * WS   /api/cameras/ws
  *   subscribe text: {streams:["left_wrist/rgb", "head/depth", ...]}
  *   frame binary: [one-byte stream id][complete JPEG bytes]
@@ -57,6 +65,7 @@ const API = Object.freeze({
   action: (name) => `/api/actions/${name}`,
   cameraWs: "/api/cameras/ws",
   voiceStatus: "/api/voice/status",
+  voiceLocalSpeech: "/api/voice/local-speech",
   voiceStart: "/api/voice/start",
   voiceFinishInput: "/api/voice/finish-input",
   voiceText: "/api/voice/text",
@@ -72,15 +81,73 @@ const API = Object.freeze({
   pi05Start: "/api/pi05/start",
   pi05Stop: "/api/pi05/stop",
   pi05ResetFault: "/api/pi05/reset-fault",
+  replayStatus: "/api/replay/status",
+  replayDirectories: "/api/replay/directories",
+  replayScan: "/api/replay/scan",
+  replayStart: "/api/replay/start",
+  replayStop: "/api/replay/stop",
 });
 
 const PI05_CONFIRMATION = "我确认实体急停可用并启动PI0.5真机执行";
+const REPLAY_CONFIRMATION = "我确认实体急停可用并开始真机回放";
 const PI05_CONTROL_UNLOCKED_PHASES = new Set(["idle", "probing", "dry_run_ready"]);
 const PI05_CONFIGURATION_PHASES = new Set(["idle", "dry_run_ready"]);
+const REPLAY_ACTIVE_PHASES = new Set(["loading", "aligning", "running", "stopping"]);
 const PI05_CAMERA_UI = Object.freeze([
   { wire: "cam_high", service: "head", client: "rs/cam_high", mapId: "pi05CameraMapHigh", ageId: "pi05CameraAgeHigh" },
   { wire: "cam_left_wrist", service: "left_wrist", client: "rs/cam_left_wrist", mapId: "pi05CameraMapLeft", ageId: "pi05CameraAgeLeft" },
   { wire: "cam_right_wrist", service: "right_wrist", client: "rs/cam_right_wrist", mapId: "pi05CameraMapRight", ageId: "pi05CameraAgeRight" },
+]);
+const PI05_PRODUCT_GROUPS = Object.freeze([
+  Object.freeze({
+    label: "Old Drinks",
+    items: Object.freeze([
+      "Taro Milk",
+      "Robuk Velvet Latte",
+      "Yili Peach Yogurt",
+      "HK Orange Fanta",
+      "Aojiru",
+      "NEVER Coconut Latte",
+      "Daily C Orange Juice",
+      "Daily C Grape Juice",
+      "AD Calcium Milk",
+      "Yili Strawberry Yogurt",
+      "Dahongpao Milk Tea",
+      "Sprite",
+    ]),
+  }),
+  Object.freeze({
+    label: "New Drinks",
+    items: Object.freeze([
+      "Schweppes C",
+      "Coca-Cola",
+      "Ginger Ale",
+      "Itoen Oolong",
+      "Fanta Strawberry",
+      "Fanta Grape",
+      "Pepsi Real Sugar",
+      "Pepsi",
+      "Tropicana",
+      "Vita Coconut",
+      "Nongfu Spring",
+      "Cestbon",
+      "If coconut",
+      "Minute Maid Peach",
+      "Bottled Coca-Cola",
+    ]),
+  }),
+  Object.freeze({
+    label: "Snacks",
+    items: Object.freeze([
+      "Lays Original",
+      "Lays Cucumber",
+      "Lays Barbecue",
+      "Danisa Cookies",
+      "MM Red",
+      "MM Yellow",
+      "Pocky Chocolate",
+    ]),
+  }),
 ]);
 
 const GROUP_TARGETS = Object.freeze({
@@ -136,6 +203,8 @@ const state = {
   motionSpeedConfig: null,
   voiceTimer: null,
   voiceOnline: false,
+  voiceLocalSpeech: null,
+  voiceLocalPending: false,
   voiceStartPending: false,
   voiceTextPending: false,
   voiceSequence: null,
@@ -166,6 +235,10 @@ const state = {
   pi05Metadata: null,
   pi05DryRunResult: null,
   pi05EndpointDirty: false,
+  replayStatus: { phase: "idle", progress: 0, total: 0 },
+  replayScan: null,
+  replayPending: false,
+  replayDirectoriesPending: false,
 };
 
 const dom = {};
@@ -180,6 +253,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindCameras();
   bindVoice();
   bindPi05();
+  bindReplay();
   bindModal();
   window.addEventListener("blur", stopDrive);
   document.addEventListener("visibilitychange", () => {
@@ -208,20 +282,30 @@ function cacheDom() {
     "confirmIcon", "confirmCancel", "confirmAccept", "toastRegion",
     "voiceStateBadge", "voiceStateText", "voiceDetail", "voiceOrb",
     "voiceStartButton", "voiceStartText", "voiceCancelButton", "voiceTranscript", "voiceAudio",
+    "voiceLocalStart", "voiceLocalStop",
     "voiceAutoplay", "voiceLanguage", "voiceMotionToggle", "voiceMotionHint",
     "voiceTextForm", "voiceTextInput", "voiceTextSend", "voiceTextHint", "voiceInputHint",
     "pi05PhaseBadge", "pi05PhaseText", "pi05PollState", "pi05Endpoint",
-    "pi05Host", "pi05Port", "pi05Prompt", "pi05JointSpeed", "pi05ControlRate", "pi05StepsPerChunk",
+    "pi05Host", "pi05Port", "pi05Prompt", "pi05PromptPreview", "pi05CustomPromptField",
+    "pi05TaskSingle", "pi05TaskDual", "pi05SingleFields", "pi05SingleItem", "pi05SingleHand",
+    "pi05DualFields", "pi05DualLeftItem", "pi05DualRightItem", "pi05DualContinuous", "pi05DualSeparate",
+    "pi05JointSpeed", "pi05ControlRate", "pi05StepsPerChunk",
     "pi05ProbeButton", "pi05DryRunButton", "pi05StartButton",
-    "pi05EmergencyStopButton", "pi05DisconnectButton", "pi05ReconnectButton",
-    "pi05StopButton", "pi05ResetFaultButton", "pi05ConnectionGate",
-    "pi05LeaseGate", "pi05InitGate", "pi05ModeGate", "pi05DryRunGate",
-    "pi05MetadataState", "pi05DryRunState", "pi05Latency", "pi05Chunk",
+    "pi05EmergencyStopButton", "pi05ArmHomeButton", "pi05DisconnectButton", "pi05ReconnectButton",
+    "pi05StopButton", "pi05ResetFaultButton",
+    "inferenceConnectionChip", "inferenceConnectionText",
+    "pi05MetadataState", "pi05DryRunState", "pi05TaskStage", "pi05LeftGripperProgress",
+    "pi05Latency", "pi05Chunk",
     "pi05ChunkRequestMode", "pi05ChunkFirstDelta", "pi05JointSpeedMetric", "pi05StepsPerChunkMetric",
     "pi05Executed", "pi05MetadataDetail", "pi05DryRunDetail",
     "pi05FaultBlock", "pi05Fault", "pi05CameraLimit", "pi05CameraMapHigh",
     "pi05CameraMapLeft", "pi05CameraMapRight", "pi05CameraAgeHigh",
     "pi05CameraAgeLeft", "pi05CameraAgeRight",
+    "replayPhaseBadge", "replayPhaseText", "replayDatasetDir", "replayDirectoryOptions",
+    "replayDirectoryRefreshButton", "replayScanButton",
+    "replayEpisode", "replaySource", "replayMode", "replaySpeed", "replaySpeedValue",
+    "replaySelection", "replayProgress", "replayProgressText", "replayProgressPercent",
+    "replayStartButton", "replayStopButton",
   ].forEach((id) => { dom[id] = document.getElementById(id); });
 }
 
@@ -233,6 +317,7 @@ async function bootstrap() {
   scheduleVoicePoll();
   await pollPi05();
   schedulePi05Poll();
+  void loadReplayDirectories({ quiet: true });
 }
 
 function bindTabs() {
@@ -264,7 +349,7 @@ function bindTakeover() {
       dom.takeoverToggle.checked = false;
       const accepted = await confirmAction({
         title: "接管机器人？",
-        message: "接管后，本页面可以发送运动指令。请先清空机器人周围并确认没有其他控制端。",
+        message: "接管后可控制机器人，请确认周围空旷且无其他控制端。",
         accept: "确认接管",
         tone: "warning",
       });
@@ -315,16 +400,14 @@ function bindTakeover() {
 
 function bindLifecycleActions() {
   dom.initButton.addEventListener("click", () => runAction("init", {
-    title: "初始化双臂？",
+    title: "初始化机器人？",
     message: "升降柱和双臂将产生较大范围运动。",
-    detail: "确保机器人周围无人、无障碍物，且遥控/VR 未同时控制。",
     accept: "确认初始化",
   }));
 
   dom.deinitButton.addEventListener("click", () => runAction("deinit", {
     title: "反初始化？",
-    message: "这不是断开连接：升降柱和双臂会执行实体回收运动。",
-    detail: "请检查完整回收路径，确认底盘和机械臂周围无障碍物。",
+    message: "升降柱和双臂将收回，请确认路径无障碍。",
     accept: "确认反初始化",
   }));
 
@@ -332,9 +415,8 @@ function bindLifecycleActions() {
     const speedScale = getMotionSpeedScale();
     const estimatedSeconds = 8 / speedScale;
     void runAction("home", {
-      title: "移动到初始位姿？",
-      message: `双臂、双夹爪与升降柱将同时移动，当前 ${formatSpeedScale(speedScale)}，手臂轨迹约 ${formatNumber(estimatedSeconds)} 秒。`,
-      detail: "左/右臂 [0, 0, 0, -1.20, 0, 0, 0.98] rad\n夹爪 0.02 rad · 升降柱 0.40 m",
+      title: "复位机器人？",
+      message: `双臂、腰、头归零，夹爪张开，升降至 0.40 m。约 ${formatNumber(estimatedSeconds)} 秒。`,
       accept: "确认移动",
     });
   });
@@ -370,6 +452,8 @@ function bindCameras() {
 }
 
 function bindVoice() {
+  dom.voiceLocalStart.addEventListener("click", () => { void setLocalSpeech(true); });
+  dom.voiceLocalStop.addEventListener("click", () => { void setLocalSpeech(false); });
   dom.voiceStartButton.addEventListener("click", () => {
     if (["synthesizing", "speaking"].includes(state.voiceState)) void cancelVoiceOutput();
     else if (state.voiceState === "listening") void finishVoiceInput();
@@ -392,14 +476,30 @@ function bindVoice() {
 }
 
 function bindPi05() {
+  populatePi05ProductSelectors();
   const markEndpointDirty = () => {
     state.pi05EndpointDirty = true;
     state.pi05DryRunResult = null;
     updatePi05Controls();
   };
+  const markPromptPlanDirty = () => {
+    state.pi05DryRunResult = null;
+    renderPi05PromptBuilder();
+    updatePi05Controls();
+  };
   dom.pi05Host.addEventListener("input", markEndpointDirty);
   dom.pi05Port.addEventListener("input", markEndpointDirty);
-  dom.pi05Prompt.addEventListener("input", updatePi05Controls);
+  [
+    dom.pi05TaskSingle,
+    dom.pi05TaskDual,
+    dom.pi05SingleItem,
+    dom.pi05SingleHand,
+    dom.pi05DualLeftItem,
+    dom.pi05DualRightItem,
+    dom.pi05DualContinuous,
+    dom.pi05DualSeparate,
+  ].forEach((control) => control.addEventListener("change", markPromptPlanDirty));
+  dom.pi05Prompt.addEventListener("input", markPromptPlanDirty);
   dom.pi05JointSpeed.addEventListener("input", updatePi05Controls);
   dom.pi05ControlRate.addEventListener("input", updatePi05Controls);
   dom.pi05StepsPerChunk.addEventListener("input", updatePi05Controls);
@@ -407,10 +507,62 @@ function bindPi05() {
   dom.pi05DryRunButton.addEventListener("click", () => { void dryRunPi05(); });
   dom.pi05StartButton.addEventListener("click", () => { void startPi05(); });
   dom.pi05EmergencyStopButton.addEventListener("click", () => { void emergencyStop(); });
+  dom.pi05ArmHomeButton.addEventListener("click", () => {
+    const speedScale = getMotionSpeedScale();
+    const estimatedSeconds = 8 / speedScale;
+    void runAction("arm-home", {
+      title: "机械臂归位？",
+      message: `双臂、腰和头将回到 0，夹爪完全张开；轨迹约 ${formatNumber(estimatedSeconds)} 秒。`,
+      detail: "升降柱保持当前高度，底盘零速。",
+      accept: "确认归位",
+    });
+  });
   dom.pi05DisconnectButton.addEventListener("click", () => { void disconnectPi05(); });
   dom.pi05ReconnectButton.addEventListener("click", () => { void reconnectPi05(); });
   dom.pi05StopButton.addEventListener("click", () => { void stopPi05(); });
   dom.pi05ResetFaultButton.addEventListener("click", () => { void resetPi05Fault(); });
+  renderPi05PromptBuilder();
+}
+
+function bindReplay() {
+  dom.replayDirectoryRefreshButton.addEventListener("click", () => {
+    void loadReplayDirectories();
+  });
+  dom.replayScanButton.addEventListener("click", () => { void scanReplayDataset(); });
+  dom.replayEpisode.addEventListener("change", renderReplaySelection);
+  dom.replaySource.addEventListener("change", renderReplaySelection);
+  dom.replayMode.addEventListener("change", renderReplaySelection);
+  dom.replaySpeed.addEventListener("input", () => {
+    dom.replaySpeedValue.textContent = `${Number(dom.replaySpeed.value).toFixed(1)}×`;
+    renderReplaySelection();
+  });
+  dom.replayStartButton.addEventListener("click", () => { void startReplay(); });
+  dom.replayStopButton.addEventListener("click", () => { void stopReplay(); });
+  renderReplayStatus();
+}
+
+async function loadReplayDirectories({ quiet = false } = {}) {
+  if (state.replayDirectoriesPending || replayBlocksOtherControls()) return;
+  state.replayDirectoriesPending = true;
+  dom.replayDirectoryRefreshButton.textContent = "读取中…";
+  updateReplayControls();
+  try {
+    const result = await getJson(API.replayDirectories, 30000);
+    const directories = Array.isArray(result.directories) ? result.directories : [];
+    dom.replayDirectoryOptions.innerHTML = "";
+    directories.forEach((directory) => {
+      const option = document.createElement("option");
+      option.value = String(directory);
+      dom.replayDirectoryOptions.append(option);
+    });
+    if (!quiet) toast(`已找到 ${directories.length} 个数据集目录`, "success", 3500);
+  } catch (error) {
+    if (!quiet) toast(`读取 /data 目录失败：${error.message}`, "error", 6500);
+  } finally {
+    state.replayDirectoriesPending = false;
+    dom.replayDirectoryRefreshButton.textContent = "刷新目录";
+    updateReplayControls();
+  }
 }
 
 function pi05Phase() {
@@ -419,15 +571,98 @@ function pi05Phase() {
 }
 
 function pi05BlocksOtherControls() {
-  return state.pi05StartPending || !PI05_CONTROL_UNLOCKED_PHASES.has(pi05Phase());
+  return state.pi05StartPending || !PI05_CONTROL_UNLOCKED_PHASES.has(pi05Phase()) ||
+    replayBlocksOtherControls();
+}
+
+function replayPhase() {
+  return String(state.replayStatus?.phase ?? "idle").toLowerCase();
+}
+
+function replayBlocksOtherControls() {
+  return state.replayPending || REPLAY_ACTIVE_PHASES.has(replayPhase());
 }
 
 function hasCurrentControlLease() {
   return state.takeover && Boolean(state.leaseId) && !state.remoteTakeover && !state.takeoverPending;
 }
 
+function populatePi05ProductSelectors() {
+  [dom.pi05SingleItem, dom.pi05DualLeftItem, dom.pi05DualRightItem].forEach((select) => {
+    const defaultValue = select.dataset.default ?? "";
+    select.replaceChildren();
+    PI05_PRODUCT_GROUPS.forEach((group) => {
+      const optgroup = document.createElement("optgroup");
+      optgroup.label = group.label;
+      group.items.forEach((name) => {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        optgroup.append(option);
+      });
+      select.append(optgroup);
+    });
+    select.value = defaultValue;
+  });
+}
+
+function currentPi05Task() {
+  const customPrompt = dom.pi05Prompt.value.trim();
+  if (dom.pi05TaskSingle.checked) {
+    const item = dom.pi05SingleItem.value;
+    const hand = dom.pi05SingleHand.value === "right" ? "right" : "left";
+    return {
+      inference_mode: "single",
+      active_hand: hand,
+      prompt: customPrompt || (item ? `Grasp ${item} with the ${hand} hand` : ""),
+      right_prompt: null,
+    };
+  }
+
+  const leftItem = dom.pi05DualLeftItem.value;
+  const rightItem = dom.pi05DualRightItem.value;
+  if (dom.pi05DualSeparate.checked) {
+    return {
+      inference_mode: "dual_separate",
+      active_hand: null,
+      prompt: leftItem ? `Grasp ${leftItem} with the left hand` : "",
+      right_prompt: rightItem ? `Grasp ${rightItem} with the right hand` : "",
+    };
+  }
+  return {
+    inference_mode: "dual_continuous",
+    active_hand: null,
+    prompt: customPrompt || (
+      leftItem && rightItem
+        ? `Target: ${leftItem} and ${rightItem}. Grasp ${leftItem} with the left hand and then grasp ${rightItem} with the right hand from the shelf.`
+        : ""
+    ),
+    right_prompt: null,
+  };
+}
+
+function pi05TasksEqual(left, right) {
+  return left.inference_mode === right.inference_mode &&
+    left.active_hand === right.active_hand &&
+    left.prompt === right.prompt &&
+    left.right_prompt === right.right_prompt;
+}
+
+function renderPi05PromptBuilder() {
+  const single = dom.pi05TaskSingle.checked;
+  const separate = !single && dom.pi05DualSeparate.checked;
+  dom.pi05SingleFields.hidden = !single;
+  dom.pi05DualFields.hidden = single;
+  dom.pi05CustomPromptField.hidden = separate;
+
+  const task = currentPi05Task();
+  dom.pi05PromptPreview.textContent = task.inference_mode === "dual_separate"
+    ? `Left\n${task.prompt}\n\nRight\n${task.right_prompt}`
+    : task.prompt;
+}
+
 function currentPi05Prompt() {
-  return dom.pi05Prompt.value.trim();
+  return currentPi05Task().prompt;
 }
 
 function currentPi05Host() {
@@ -466,20 +701,24 @@ function pi05RemoteConnected(status = state.pi05Status) {
 function pi05DryRunMatchesCurrent(status = state.pi05Status) {
   if (!status || pi05Phase() !== "dry_run_ready" || status.dry_run_ok !== true) return false;
   if (!pi05RemoteConnected(status)) return false;
-  if (String(status.prompt ?? "") !== currentPi05Prompt()) return false;
+  if (!["inference_mode", "active_hand", "prompt", "right_prompt"].every(
+    (key) => Object.prototype.hasOwnProperty.call(status, key),
+  )) return false;
+  const currentTask = currentPi05Task();
+  const statusTask = {
+    inference_mode: status.inference_mode,
+    active_hand: status.active_hand,
+    prompt: status.prompt,
+    right_prompt: status.right_prompt,
+  };
+  if (!pi05TasksEqual(statusTask, currentTask)) return false;
   return status.required_confirmation === PI05_CONFIRMATION;
-}
-
-function setPi05Gate(element, ready, text) {
-  element.dataset.ready = String(Boolean(ready));
-  const label = element.querySelector("span");
-  if (label) label.textContent = text;
 }
 
 function updatePi05Controls() {
   if (!dom.pi05ProbeButton) return;
   const phase = pi05Phase();
-  const blocked = !PI05_CONTROL_UNLOCKED_PHASES.has(phase);
+  const blocked = !PI05_CONTROL_UNLOCKED_PHASES.has(phase) || replayBlocksOtherControls();
   const actionPending = state.pi05ActionPending || state.pi05StartPending;
   const configurationPhase = PI05_CONFIGURATION_PHASES.has(phase);
   const endpointReady = currentPi05Host() !== null && currentPi05Port() !== null;
@@ -487,43 +726,14 @@ function updatePi05Controls() {
   const leaseReady = hasCurrentControlLease();
   const initReady = state.initState === 2;
   const modeReady = state.controlModeName.toUpperCase() === "LOW_LEVEL";
-  const promptReady = Boolean(currentPi05Prompt());
+  const currentTask = currentPi05Task();
+  const promptReady = Boolean(currentTask.prompt) &&
+    (currentTask.inference_mode !== "dual_separate" || Boolean(currentTask.right_prompt));
   const jointSpeedReady = currentPi05JointSpeed() !== null;
   const controlRateReady = currentPi05ControlRate() !== null;
   const stepsPerChunkReady = currentPi05StepsPerChunk() !== null;
   const dryRunReady = pi05DryRunMatchesCurrent();
   const metadataReady = remoteReady && state.pi05Status?.metadata_ok === true;
-
-  setPi05Gate(
-    dom.pi05ConnectionGate,
-    metadataReady,
-    metadataReady
-      ? "远端已连接，metadata 已验证"
-      : state.pi05EndpointDirty
-        ? "远端配置已修改，需要重新连接"
-        : "需要重新连接并验证 metadata",
-  );
-
-  setPi05Gate(
-    dom.pi05LeaseGate,
-    leaseReady,
-    leaseReady ? "当前页面持有控制租约" : "需要当前页面接管控制",
-  );
-  setPi05Gate(
-    dom.pi05InitGate,
-    initReady,
-    initReady ? "机器人已初始化（init_state = 2）" : "需要机器人 init_state = 2",
-  );
-  setPi05Gate(
-    dom.pi05ModeGate,
-    modeReady,
-    modeReady ? "LOW_LEVEL 控制模式" : `当前模式：${state.controlModeName}`,
-  );
-  setPi05Gate(
-    dom.pi05DryRunGate,
-    dryRunReady,
-    dryRunReady ? "当前连接的 dry-run 已通过，提示词一致" : "需要当前连接的 dry-run 通过且提示词未变化",
-  );
 
   dom.pi05ProbeButton.disabled = actionPending || blocked || !configurationPhase || state.pi05EndpointDirty;
   dom.pi05DryRunButton.disabled = actionPending || blocked || !configurationPhase || !leaseReady || !metadataReady || !promptReady;
@@ -535,10 +745,22 @@ function updatePi05Controls() {
   dom.pi05DisconnectButton.disabled = actionPending || state.pi05StartPending || state.pi05StopPending;
   dom.pi05ResetFaultButton.disabled = state.pi05ActionPending || state.pi05StartPending || state.pi05StopPending || phase !== "fault";
   dom.pi05StopButton.disabled = state.pi05StopPending;
+  dom.pi05ArmHomeButton.disabled = actionPending || state.pi05StopPending ||
+    blocked || !leaseReady || !initReady || !modeReady || !canControl();
   const configurationLocked = actionPending || !configurationPhase;
+  const singleMode = dom.pi05TaskSingle.checked;
+  const separateMode = !singleMode && dom.pi05DualSeparate.checked;
   dom.pi05Host.disabled = configurationLocked;
   dom.pi05Port.disabled = configurationLocked;
-  dom.pi05Prompt.disabled = configurationLocked;
+  dom.pi05TaskSingle.disabled = configurationLocked;
+  dom.pi05TaskDual.disabled = configurationLocked;
+  dom.pi05SingleItem.disabled = configurationLocked || !singleMode;
+  dom.pi05SingleHand.disabled = configurationLocked || !singleMode;
+  dom.pi05DualLeftItem.disabled = configurationLocked || singleMode;
+  dom.pi05DualRightItem.disabled = configurationLocked || singleMode;
+  dom.pi05DualContinuous.disabled = configurationLocked || singleMode;
+  dom.pi05DualSeparate.disabled = configurationLocked || singleMode;
+  dom.pi05Prompt.disabled = configurationLocked || separateMode;
   dom.pi05JointSpeed.disabled = configurationLocked;
   dom.pi05ControlRate.disabled = configurationLocked;
   dom.pi05StepsPerChunk.disabled = configurationLocked;
@@ -564,7 +786,7 @@ async function reconnectPi05() {
     const reconnectResult = await postJson(API.pi05Reconnect, { host, port }, 12000);
     state.pi05EndpointDirty = false;
     applyPi05Payload(reconnectResult);
-    toast("远端推理已重新连接，metadata 验证通过", "success", 4200);
+    toast("推理服务已连接", "success", 4200);
   } catch (error) {
     toast(`重新连接或 metadata 验证失败：${error.message}`, "error", 7000);
   } finally {
@@ -580,7 +802,7 @@ async function disconnectPi05() {
   const accepted = await confirmAction({
     title: "断开远端推理连接？",
     message: "该操作只关闭远端推理连接，不会反初始化机器人。",
-    detail: "如果真机推理仍在运行，连接中断会触发安全停止或锁存故障。断开后不会自动重连；需要操作员点击“重新连接”。",
+    detail: "运行中的推理将停止，恢复时需手动重连。",
     accept: "确认断开",
     tone: "warning",
   });
@@ -594,7 +816,7 @@ async function disconnectPi05() {
     state.pi05Metadata = null;
     state.pi05DryRunResult = null;
     applyPi05Payload(result);
-    toast("远端推理连接已断开；机器人未反初始化", "success", 4200);
+    toast("推理连接已断开", "success", 4200);
   } catch (error) {
     toast(`断开连接失败：${error.message}`, "error", 7000);
   } finally {
@@ -615,7 +837,7 @@ async function probePi05() {
   try {
     const result = await postJson(API.pi05Probe, {}, 20000);
     applyPi05Payload(result);
-    toast("推理 healthz 与 metadata 验证通过", "success", 3500);
+    toast("连接验证通过", "success", 3500);
   } catch (error) {
     toast(`推理探针失败：${error.message}`, "error", 6500);
   } finally {
@@ -627,9 +849,12 @@ async function probePi05() {
 }
 
 async function dryRunPi05() {
-  const prompt = currentPi05Prompt();
+  const task = currentPi05Task();
+  const prompt = task.prompt;
   if (!hasCurrentControlLease()) return toast("dry-run 需要当前页面持有控制租约", "error", 4500);
-  if (!prompt) return toast("请输入任务提示词", "error");
+  if (!prompt || (task.inference_mode === "dual_separate" && !task.right_prompt)) {
+    return toast("请选择完整任务或输入自定义 Prompt", "error");
+  }
   if (!pi05RemoteConnected() || state.pi05Status?.metadata_ok !== true) {
     return toast("请先重新连接并完成 healthz + metadata 探针", "error", 4500);
   }
@@ -641,9 +866,9 @@ async function dryRunPi05() {
   updateControlAvailability();
   dom.pi05DryRunButton.textContent = "推理验证中…";
   try {
-    const result = await postJson(API.pi05DryRun, { prompt }, 30000, { lease: true });
+    const result = await postJson(API.pi05DryRun, task, 30000, { lease: true });
     state.pi05DryRunResult = result;
-    toast("dry-run 通过：未发送任何电机动作", "success", 4000);
+    toast("预检通过", "success", 4000);
   } catch (error) {
     toast(`dry-run 失败并已锁存：${error.message}`, "error", 7000);
   } finally {
@@ -656,7 +881,8 @@ async function dryRunPi05() {
 }
 
 async function startPi05() {
-  const prompt = currentPi05Prompt();
+  const task = currentPi05Task();
+  const prompt = task.prompt;
   const jointSpeed = currentPi05JointSpeed();
   const controlRate = currentPi05ControlRate();
   const stepsPerChunk = currentPi05StepsPerChunk();
@@ -667,22 +893,21 @@ async function startPi05() {
     return toast("真机启动要求远端已连接且 metadata 已验证", "error", 5000);
   }
   if (!pi05DryRunMatchesCurrent()) return toast("请用相同提示词完成当前连接的 dry-run", "error", 5500);
-  if (!prompt || jointSpeed === null || controlRate === null || stepsPerChunk === null) {
+  if (!prompt || (task.inference_mode === "dual_separate" && !task.right_prompt) ||
+      jointSpeed === null || controlRate === null || stepsPerChunk === null) {
     return toast("请检查提示词、关节速度和发送频率（必须大于 0），以及每个 Chunk 执行步数（1～50）", "error", 5500);
   }
 
-  const maxArmStepRad = jointSpeed * Math.PI / 180 / controlRate;
-
   const accepted = await confirmAction({
     title: "启动推理真机执行？",
-    message: "确认后将向真实机器人连续发送动作。双臂、双夹爪和升降柱会产生实体运动。",
-    detail: `关节速度限幅：${jointSpeed} deg/s\n每周期双臂目标最大变化：${maxArmStepRad.toFixed(5)} rad（基于上一条成功下发目标，不基于反馈）\n发送频率：${controlRate} Hz\n每个 Chunk 执行：${stepsPerChunk} / 50 步\n请求时序：执行完 N 步后重新读取最新状态和图片，再同步请求下一包；推理期间保持上一目标\n连续执行：不设总 Chunk 或总执行步数上限\n退出：服务端没有 is_success；必须由操作员手动停止，或在发生故障时退出\n腰和头：每步保持最新观测位置\n底盘：线速度与角速度强制为 0，禁止移动\n安全：请确保实体急停始终可达，并安排操作员全程监护`,
+    message: "双臂、夹爪和升降柱将持续运动，请确保实体急停可达。",
+    detail: `${jointSpeed}°/s · ${controlRate} Hz · 每批 ${stepsPerChunk} 步`,
     accept: "我已确认，启动真机",
     tone: "danger",
   });
   if (!accepted) return;
 
-  if (prompt !== currentPi05Prompt() || jointSpeed !== currentPi05JointSpeed() ||
+  if (!pi05TasksEqual(task, currentPi05Task()) || jointSpeed !== currentPi05JointSpeed() ||
       controlRate !== currentPi05ControlRate() ||
       stepsPerChunk !== currentPi05StepsPerChunk() ||
       !hasCurrentControlLease() || state.initState !== 2 ||
@@ -701,7 +926,7 @@ async function startPi05() {
     const result = await postJson(
       API.pi05Start,
       {
-        prompt,
+        ...task,
         joint_speed_deg_s: jointSpeed,
         control_rate_hz: controlRate,
         steps_per_chunk: stepsPerChunk,
@@ -711,7 +936,7 @@ async function startPi05() {
       { lease: true },
     );
     applyPi05Payload(result);
-    toast("推理真机执行已启动，请持续监护", "success", 4500);
+    toast("推理已启动", "success", 4500);
   } catch (error) {
     toast(`推理启动失败：${error.message}`, "error", 7000);
   } finally {
@@ -807,6 +1032,10 @@ function applyPi05Status(status) {
   const nextPhase = pi05Phase();
   if (PI05_CONTROL_UNLOCKED_PHASES.has(previousPhase) &&
       !PI05_CONTROL_UNLOCKED_PHASES.has(nextPhase)) stopDrive();
+  if (["running", "stopping"].includes(previousPhase) && nextPhase === "idle" &&
+      status.completion_reason === "server_success") {
+    toast("任务完成，推理已停止", "success", 5000);
+  }
   renderPi05Status();
   updateControlAvailability();
   updateVoiceControls(state.voiceState, dom.voiceDetail.textContent);
@@ -868,12 +1097,33 @@ function renderPi05Status() {
     ? phase
     : "unknown";
   dom.pi05PhaseBadge.dataset.phase = knownPhase;
-  dom.pi05PhaseText.textContent = pi05PhaseLabel(knownPhase);
+  const stageLabel = ({
+    custom: "自定义执行中",
+    single: "单手执行中",
+    dual_continuous: "双手连续执行中",
+    dual_separate_left: "双手分开 · 左手",
+    dual_separate_home: "双手归位切换",
+    dual_separate_right: "双手分开 · 右手",
+    ready: "Dry-run 已就绪",
+    completed: "服务端确认完成",
+    fault: "故障停止",
+  })[String(status.task_stage ?? "")];
+  dom.pi05PhaseText.textContent = knownPhase === "running" && stageLabel
+    ? stageLabel
+    : pi05PhaseLabel(knownPhase);
   dom.pi05PollState.textContent = state.pi05StatusOnline ? "状态在线" : "状态接口不可达";
   dom.pi05PollState.classList.toggle("is-online", state.pi05StatusOnline);
   dom.pi05PollState.classList.toggle("is-offline", !state.pi05StatusOnline);
   const endpointText = String(status.endpoint ?? "192.168.1.154:9973");
   dom.pi05Endpoint.textContent = endpointText;
+  const remoteConnected = state.pi05StatusOnline &&
+    (status.connected ?? status.remote_connected ?? status.policy_connected ?? status.metadata_ok) === true;
+  dom.inferenceConnectionText.textContent = state.pi05StatusOnline
+    ? `${endpointText} ${remoteConnected ? "已连接成功" : "未连接"}`
+    : "推理连接状态未知";
+  dom.inferenceConnectionChip.classList.toggle("is-online", remoteConnected);
+  dom.inferenceConnectionChip.classList.toggle("is-offline", !remoteConnected);
+
   if (!state.pi05EndpointDirty) {
     const endpoint = pi05EndpointParts(status);
     if (endpoint) {
@@ -889,6 +1139,13 @@ function renderPi05Status() {
   dom.pi05DryRunState.textContent = dryRunOk
     ? `已通过 · ${Number.isFinite(dryAge) ? formatPi05Milliseconds(dryAge) + " 前" : "有效"}`
     : "未就绪";
+  dom.pi05TaskStage.textContent = stageLabel ?? "--";
+  const leftCount = Number(status.left_gripper_consecutive);
+  const leftRequired = Number(status.left_gripper_close_required_steps);
+  dom.pi05LeftGripperProgress.textContent = status.inference_mode === "dual_separate" &&
+      Number.isFinite(leftCount) && Number.isFinite(leftRequired)
+    ? `${leftCount} / ${leftRequired}`
+    : "--";
   dom.pi05Latency.textContent = formatPi05Milliseconds(status.inference_latency_ms);
   const chunkLength = status.chunk_length == null ? NaN : Number(status.chunk_length);
   dom.pi05Chunk.textContent = Number.isFinite(chunkLength) ? `${chunkLength} 步` : "--";
@@ -914,7 +1171,8 @@ function renderPi05Status() {
   if (state.pi05Metadata) {
     dom.pi05MetadataDetail.textContent = userFacingInferenceText(JSON.stringify(state.pi05Metadata, null, 2));
   } else if (metadataOk) {
-    dom.pi05MetadataDetail.textContent = "zerith_h1_pro · state 23 · action 23 · policy 17\n连续输入夹爪 · 二值输出夹爪 · no-status";
+    const statusMode = String(status.metadata_status_mode ?? "unknown");
+    dom.pi05MetadataDetail.textContent = `zerith_h1_pro · state 23 · action 23 · policy 17\n夹爪输入/输出原样透传 · 服务端处理 · status ${statusMode}`;
   } else {
     dom.pi05MetadataDetail.textContent = "尚未执行 metadata 探针";
   }
@@ -949,6 +1207,220 @@ function renderPi05Status() {
   updatePi05Controls();
 }
 
+function selectedReplayEpisode() {
+  const episodes = state.replayScan?.episodes;
+  if (!Array.isArray(episodes)) return null;
+  return episodes.find((episode) => episode.path === dom.replayEpisode.value) ?? null;
+}
+
+function replaySelectionError() {
+  const episode = selectedReplayEpisode();
+  if (!episode) return "请选择一条 HDF5 数据";
+  const source = dom.replaySource.value;
+  if (episode.sources?.[source] !== true) {
+    return episode.source_errors?.[source] ?? `${source} 字段不可用`;
+  }
+  if (dom.replayMode.value === "full") {
+    const baseMax = Number(episode.base_abs_max?.[source]);
+    if (!Number.isFinite(baseMax)) return "无法确认底盘速度字段";
+    if (baseMax > 1e-9) {
+      return `该 ${source} 含非零底盘速度（最大 ${baseMax.toFixed(4)}），当前 LOW_LEVEL 不可回放`;
+    }
+  }
+  return null;
+}
+
+function renderReplaySelection() {
+  const episode = selectedReplayEpisode();
+  const error = replaySelectionError();
+  if (!episode) {
+    dom.replaySelection.textContent = state.replayScan
+      ? "目录中没有可用的 HDF5 数据"
+      : "请选择数据集目录并读取";
+  } else if (error) {
+    dom.replaySelection.textContent = error;
+  } else {
+    const speed = Number(dom.replaySpeed.value);
+    const seconds = Number(episode.duration_s) / speed;
+    const task = String(episode.task_name ?? "").trim();
+    dom.replaySelection.textContent =
+      `${Number(episode.frames)} 帧 · ${Number(episode.rate_hz).toFixed(0)} Hz · ` +
+      `${Number.isFinite(seconds) ? seconds.toFixed(1) : "--"} 秒` +
+      (episode.timing?.basis === "timestamp/t" ? " · 按实际采集时间回放" : "") +
+      `${task ? ` · ${task}` : ""}`;
+  }
+  dom.replaySelection.classList.toggle("is-error", Boolean(episode && error));
+  updateReplayControls();
+}
+
+async function scanReplayDataset() {
+  if (state.replayPending || replayBlocksOtherControls()) return;
+  const datasetDir = dom.replayDatasetDir.value.trim();
+  if (!datasetDir) return toast("请输入数据集目录", "error", 4000);
+  state.replayPending = true;
+  dom.replayScanButton.textContent = "读取中…";
+  updateReplayControls();
+  try {
+    const result = await postJson(API.replayScan, { dataset_dir: datasetDir }, 30000);
+    state.replayScan = result;
+    dom.replayDatasetDir.value = String(result.dataset_dir ?? datasetDir);
+    dom.replayEpisode.innerHTML = "";
+    const episodes = Array.isArray(result.episodes) ? result.episodes : [];
+    episodes.forEach((episode, index) => {
+      const option = document.createElement("option");
+      option.value = String(episode.path);
+      const episodeId = String(episode.episode_id ?? "").trim();
+      option.textContent = `${index + 1}. ${episodeId || episode.path} · ${Number(episode.frames)} 帧`;
+      dom.replayEpisode.append(option);
+    });
+    if (!episodes.length) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "没有可用的 HDF5 数据";
+      dom.replayEpisode.append(option);
+    }
+    dom.replayEpisode.disabled = !episodes.length;
+    toast(`已读取 ${episodes.length} 条数据`, episodes.length ? "success" : "error", 3500);
+  } catch (error) {
+    state.replayScan = null;
+    dom.replayEpisode.innerHTML = '<option value="">读取失败</option>';
+    dom.replayEpisode.disabled = true;
+    toast(`读取数据集失败：${error.message}`, "error", 6500);
+  } finally {
+    state.replayPending = false;
+    dom.replayScanButton.textContent = "读取数据";
+    renderReplaySelection();
+  }
+}
+
+async function startReplay() {
+  const episode = selectedReplayEpisode();
+  const selectionError = replaySelectionError();
+  if (!episode || selectionError) return toast(selectionError ?? "请选择回放数据", "error", 5500);
+  if (!canControl() || state.initState !== 2 || state.controlModeName.toUpperCase() !== "LOW_LEVEL") {
+    return toast("请先接管控制并完成 LOW_LEVEL 初始化", "error", 5000);
+  }
+  const source = dom.replaySource.value;
+  const mode = dom.replayMode.value;
+  const speed = Number(dom.replaySpeed.value);
+  const accepted = await confirmAction({
+    title: "开始真机回放？",
+    message: `将以 ${speed.toFixed(1)}× 回放 ${episode.episode_id || episode.path}。`,
+    detail: `${source} · ${mode === "arms" ? "双臂 + 夹爪" : "全部 23 维"}。先对齐首帧，请确保实体急停可达。`,
+    accept: "确认开始回放",
+  });
+  if (!accepted) return;
+  if (!canControl() || replaySelectionError()) {
+    return toast("确认期间机器人或数据状态已变化", "error", 5000);
+  }
+
+  state.replayPending = true;
+  dom.replayStartButton.textContent = "正在启动…";
+  updateReplayControls();
+  try {
+    const result = await postJson(
+      API.replayStart,
+      {
+        dataset_dir: dom.replayDatasetDir.value.trim(),
+        episode: episode.path,
+        source,
+        mode,
+        speed,
+        confirmation: REPLAY_CONFIRMATION,
+      },
+      30000,
+      { lease: true },
+    );
+    applyReplayStatus(result);
+    toast("真机回放已启动", "success", 3500);
+  } catch (error) {
+    toast(`回放启动失败：${error.message}`, "error", 7000);
+  } finally {
+    state.replayPending = false;
+    dom.replayStartButton.textContent = "确认并开始回放";
+    updateReplayControls();
+  }
+}
+
+async function stopReplay({ quiet = false } = {}) {
+  if (state.replayPending) return false;
+  state.replayPending = true;
+  dom.replayStopButton.textContent = "正在停止…";
+  updateReplayControls();
+  try {
+    const result = await postJson(API.replayStop, {}, 20000);
+    applyReplayStatus(result);
+    if (!quiet) toast("回放已停止", "success", 4200);
+    return true;
+  } catch (error) {
+    if (!quiet) toast(`回放停止失败：${error.message}`, "error", 7000);
+    return false;
+  } finally {
+    state.replayPending = false;
+    dom.replayStopButton.textContent = "■ 紧急停止";
+    updateReplayControls();
+  }
+}
+
+function applyReplayStatus(status, { update = true } = {}) {
+  if (!status || typeof status !== "object") return;
+  state.replayStatus = { ...status };
+  renderReplayStatus();
+  if (update) updateControlAvailability();
+}
+
+function replayPhaseLabel(phase) {
+  return ({
+    idle: "待机",
+    loading: "正在读取",
+    aligning: "正在对齐首帧",
+    running: "回放中",
+    stopping: "正在停止",
+    completed: "回放完成",
+    fault: "回放故障",
+  })[phase] ?? "状态未知";
+}
+
+function renderReplayStatus() {
+  if (!dom.replayPhaseBadge) return;
+  const status = state.replayStatus ?? {};
+  const phase = replayPhase();
+  dom.replayPhaseBadge.dataset.phase = phase;
+  dom.replayPhaseText.textContent = replayPhaseLabel(phase);
+  const progress = Math.max(0, Number(status.progress) || 0);
+  const total = Math.max(0, Number(status.total) || 0);
+  const ratio = total ? Math.min(1, progress / total) : 0;
+  dom.replayProgress.max = Math.max(1, total);
+  dom.replayProgress.value = Math.min(progress, Math.max(1, total));
+  dom.replayProgressText.textContent = `${progress} / ${total} 帧`;
+  dom.replayProgressPercent.textContent = `${Math.round(ratio * 100)}%`;
+  if (phase === "fault" && status.fault) {
+    dom.replaySelection.textContent = String(status.fault);
+    dom.replaySelection.classList.add("is-error");
+  }
+  updateReplayControls();
+}
+
+function updateReplayControls() {
+  if (!dom.replayStartButton) return;
+  const active = REPLAY_ACTIVE_PHASES.has(replayPhase());
+  const configurationLocked = active || state.replayPending;
+  const selectionReady = Boolean(selectedReplayEpisode()) && !replaySelectionError();
+  const robotReady = state.takeover && Boolean(state.leaseId) && state.connected &&
+    state.sdkLoaded && state.initState === 2 && state.controlModeName.toUpperCase() === "LOW_LEVEL";
+  const inferenceReady = PI05_CONTROL_UNLOCKED_PHASES.has(pi05Phase());
+  dom.replayDatasetDir.disabled = configurationLocked;
+  dom.replayDirectoryRefreshButton.disabled = configurationLocked || state.replayDirectoriesPending;
+  dom.replayScanButton.disabled = configurationLocked;
+  dom.replayEpisode.disabled = configurationLocked || !state.replayScan?.episodes?.length;
+  dom.replaySource.disabled = configurationLocked;
+  dom.replayMode.disabled = configurationLocked;
+  dom.replaySpeed.disabled = configurationLocked;
+  dom.replayStartButton.disabled = configurationLocked || !selectionReady || !robotReady ||
+    !inferenceReady || state.backendBusy || state.localBusy;
+  dom.replayStopButton.disabled = !(active || state.replayPending);
+}
+
 async function setVoiceMotionEnabled(enabled) {
   if (state.voiceMotionPending) return;
   dom.voiceMotionToggle.checked = state.voiceMotionEnabled;
@@ -964,7 +1436,7 @@ async function setVoiceMotionEnabled(enabled) {
     const accepted = await confirmAction({
       title: "开启对话运动控制？",
       message: "开启后，明确的语音或键盘文字指令可以直接让机器人移动或挥手。",
-      detail: "请清空机器人周围，确认实体急停可达。底盘只执行低速固定时长动作；转身角度未经里程计标定。",
+      detail: "请确认周围空旷、实体急停可达；转身角度为估算值。",
       accept: "确认开启",
       tone: "warning",
     });
@@ -1229,6 +1701,31 @@ async function submitVoiceText() {
   }
 }
 
+async function setLocalSpeech(enabled) {
+  if (state.voiceLocalPending) return;
+  state.voiceLocalPending = true;
+  updateLocalSpeechControls();
+  try {
+    const result = await postJson(API.voiceLocalSpeech, { enabled }, 7000);
+    toast(result.message, "success");
+    await pollVoice();
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.voiceLocalPending = false;
+    updateLocalSpeechControls();
+  }
+}
+
+function updateLocalSpeechControls() {
+  const local = state.voiceLocalSpeech;
+  const phase = local?.phase ?? "checking";
+  const unavailable = !state.voiceOnline || !local?.managed || state.voiceLocalPending;
+  dom.voiceLocalStart.disabled = unavailable || pi05BlocksOtherControls() || ["checking", "starting", "ready", "stopping"].includes(phase);
+  dom.voiceLocalStop.disabled = unavailable || ["checking", "off", "stopping"].includes(phase);
+  dom.voiceLocalStart.textContent = phase === "starting" ? "正在加载…" : "启动本地语音";
+}
+
 async function pollVoice() {
   try {
     const data = await getJson(API.voiceStatus, 1800);
@@ -1255,6 +1752,8 @@ function scheduleVoicePoll() {
 }
 
 function applyVoiceState(data) {
+  state.voiceLocalSpeech = data.local_speech ?? null;
+  updateLocalSpeechControls();
   const voiceState = String(data.state ?? "offline");
   const detail = String(data.detail ?? "");
   if (!state.voiceBrowserListening) updateVoiceControls(voiceState, detail);
@@ -1346,7 +1845,9 @@ function updateVoiceControls(voiceState, detail) {
       : "小达正在处理上一条输入…";
   if (dom.voiceInputHint) {
     dom.voiceInputHint.textContent = dom.voiceLanguage.value === "zh"
-      ? "中文默认使用机器人独立麦克风，通过本地 Paraformer 与 Qwen3-ASR 双阶段识别。"
+      ? (state.voiceLocalSpeech?.ready
+        ? "使用机器人独立麦克风，通过本地 Paraformer 与 Qwen3-ASR 识别，Qwen3-TTS 播报。"
+        : "使用机器人独立麦克风，通过云端识别和合成中文语音，无需加载本地模型。")
       : "English 保持原链路：使用机器人本体麦克风，一次录入一句。";
   }
 }
@@ -1652,6 +2153,18 @@ function scheduleStatePoll() {
 }
 
 function applyRobotState(data) {
+  if (data.camera && typeof data.camera.depth_enabled === "boolean") {
+    const disabled = !data.camera.depth_enabled;
+    dom.depthCamerasToggle.disabled = disabled;
+    dom.depthCamerasToggle.title = disabled ? "当前仅采集彩色图像，深度已关闭" : "";
+    if (disabled && dom.depthCamerasToggle.checked) {
+      dom.depthCamerasToggle.checked = false;
+      setStreamGroup("depth", false);
+    }
+  }
+  if (data.replay && typeof data.replay === "object") {
+    applyReplayStatus(data.replay, { update: false });
+  }
   applyConnection(Boolean(data.connected), !data.server_owned && !data.sdk_loaded);
   state.sdkLoaded = Boolean(data.sdk_loaded ?? data.sdkLoaded);
   state.backendBusy = Boolean(data.busy);
@@ -1747,6 +2260,7 @@ function updateControlAvailability() {
     dom.voiceMotionToggle.disabled = pi05BlocksOtherControls() || state.voiceMotionPending || !(canEnableVoiceMotion || canDisableVoiceMotion);
   }
   updatePi05Controls();
+  updateReplayControls();
 }
 
 function canControl() {
@@ -1790,15 +2304,22 @@ async function runAction(name, confirmation) {
   if (!await confirmAction(confirmation)) return;
   if (!canControl()) return toast("确认期间控制状态已变化，动作未发送", "error", 5000);
 
-  const button = { init: dom.initButton, deinit: dom.deinitButton, home: dom.homeButton }[name];
+  const button = {
+    init: dom.initButton,
+    deinit: dom.deinitButton,
+    home: dom.homeButton,
+    "arm-home": dom.pi05ArmHomeButton,
+  }[name];
   const oldContent = button.innerHTML;
   state.localBusy = true;
   updateControlAvailability();
   button.textContent = "执行中…";
   try {
-    const body = name === "home" ? { speed_scale: getMotionSpeedScale() } : {};
+    const body = ["home", "arm-home"].includes(name)
+      ? { speed_scale: getMotionSpeedScale() }
+      : {};
     const result = await postJson(API.action(name), body, 180000, { lease: true });
-    toast(result.message ?? "动作已完成", "success", 4000);
+    toast(({ init: "初始化完成", deinit: "反初始化完成", home: "复位完成", "arm-home": "双臂复位完成" })[name] ?? "已完成", "success", 2200);
   } catch (error) {
     toast(error.message, "error", 6000);
   } finally {
@@ -1812,10 +2333,13 @@ async function emergencyStop() {
   stopDrive();
   const emergencyLease = state.leaseId;
   state.pi05StopPending = true;
+  state.replayPending = true;
   updateControlAvailability();
   let inferenceStopped = false;
+  let replayStopped = false;
   let globalStopped = false;
   let inferenceError = null;
+  let replayError = null;
   let globalError = null;
   try {
     try {
@@ -1824,6 +2348,14 @@ async function emergencyStop() {
       applyPi05Payload(result);
     } catch (error) {
       inferenceError = error;
+    }
+
+    try {
+      const result = await postJson(API.replayStop, {}, 20000);
+      replayStopped = true;
+      applyReplayStatus(result, { update: false });
+    } catch (error) {
+      replayError = error;
     }
 
     if (emergencyLease) {
@@ -1836,21 +2368,16 @@ async function emergencyStop() {
     }
   } finally {
     state.pi05StopPending = false;
+    state.replayPending = false;
     await pollPi05();
     updateControlAvailability();
   }
 
-  if (inferenceStopped && (!emergencyLease || globalStopped)) {
-    const scope = globalStopped ? "推理和普通运动" : "推理";
-    return toast(`软件急停已停止${scope}；这不是实体急停`, "success", 5200);
+  if (inferenceStopped && replayStopped && (!emergencyLease || globalStopped)) {
+    return toast("软件停止已完成", "success", 5200);
   }
-  if (inferenceStopped) {
-    return toast(`推理停止已发送，但普通运动停止未确认：${globalError?.message ?? "控制租约不可用"}。请使用实体急停`, "error", 8000);
-  }
-  if (globalStopped) {
-    return toast(`普通运动停止已发送，但推理停止接口未确认：${inferenceError?.message ?? "未知错误"}。请使用实体急停`, "error", 8000);
-  }
-  const detail = [inferenceError?.message, globalError?.message].filter(Boolean).join("；");
+  const detail = [inferenceError?.message, replayError?.message, globalError?.message]
+    .filter(Boolean).join("；");
   return toast(`软件急停未确认：${detail || "未知错误"}。请立即使用实体急停`, "error", 9000);
 }
 
@@ -2290,6 +2817,10 @@ function toast(message, tone = "", duration = 3200) {
   const item = document.createElement("div");
   item.className = `toast${tone ? ` is-${tone}` : ""}`;
   item.textContent = userFacingInferenceText(message);
+  if (tone === "success") {
+    dom.toastRegion.querySelectorAll(".is-success").forEach((previous) => previous.remove());
+    duration = Math.min(duration, 2200);
+  }
   dom.toastRegion.append(item);
   window.setTimeout(() => item.remove(), duration);
 }

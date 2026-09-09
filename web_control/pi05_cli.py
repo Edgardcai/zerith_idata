@@ -123,6 +123,37 @@ def _prompt(args: argparse.Namespace) -> str:
     return value
 
 
+def _task_payload(args: argparse.Namespace, prompt: str) -> dict[str, Any]:
+    """Build the optional multi-stage task envelope while preserving legacy calls."""
+
+    mode = str(getattr(args, "inference_mode", "custom"))
+    payload: dict[str, Any] = {"prompt": prompt}
+    if mode == "custom":
+        if getattr(args, "active_hand", None) or getattr(args, "right_prompt", None):
+            raise CliError("custom mode cannot use --active-hand or --right-prompt")
+        return payload
+    active_hand = getattr(args, "active_hand", None)
+    if mode == "single" and active_hand not in ("left", "right"):
+        raise CliError("single mode requires --active-hand left or right")
+    if mode != "single" and active_hand is not None:
+        raise CliError("--active-hand is only valid for single mode")
+    payload["inference_mode"] = mode
+    payload["active_hand"] = active_hand
+    right_prompt = getattr(args, "right_prompt", None)
+    normalised_right = right_prompt.strip() if isinstance(right_prompt, str) else ""
+    if mode == "dual_separate":
+        if not normalised_right:
+            raise CliError("dual_separate mode requires --right-prompt")
+        if len(normalised_right) > 1000:
+            raise CliError("--right-prompt must not exceed 1000 characters")
+        payload["right_prompt"] = normalised_right
+    elif normalised_right:
+        raise CliError("--right-prompt is only valid for dual_separate mode")
+    else:
+        payload["right_prompt"] = None
+    return payload
+
+
 def _web_base(value: str) -> str:
     parsed = urlsplit(str(value).strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -328,14 +359,14 @@ def _dry_run(args: argparse.Namespace) -> int:
                     result = api.request(
                         "POST",
                         "/api/pi05/dry-run",
-                        {"prompt": prompt},
+                        _task_payload(args, prompt),
                         lease=lease,
                     )
             else:
                 result = api.request(
                     "POST",
                     "/api/pi05/dry-run",
-                    {"prompt": prompt},
+                    _task_payload(args, prompt),
                     lease=lease,
                 )
             if automatic:
@@ -383,7 +414,7 @@ def _run(args: argparse.Namespace) -> int:
                         prepared = api.request(
                             "POST",
                             "/api/pi05/dry-run",
-                            {"prompt": prompt},
+                            _task_payload(args, prompt),
                             lease=lease,
                         )
                         _print(
@@ -408,7 +439,7 @@ def _run(args: argparse.Namespace) -> int:
                     prepared = api.request(
                         "POST",
                         "/api/pi05/dry-run",
-                        {"prompt": prompt},
+                        _task_payload(args, prompt),
                         lease=lease,
                     )
                     _print(
@@ -470,7 +501,7 @@ def _start_run(
         "POST",
         "/api/pi05/start",
         {
-            "prompt": prompt,
+            **_task_payload(args, prompt),
             "steps_per_chunk": args.steps_per_chunk,
             "control_rate_hz": args.control_rate_hz,
             "joint_speed_deg_s": args.joint_speed_deg_s,
@@ -502,6 +533,21 @@ def _add_prompt_options(parser: argparse.ArgumentParser) -> None:
             "explicitly acquire, heartbeat, and finally release an 8080 "
             "control lease; never initializes or deinitializes the robot"
         ),
+    )
+    parser.add_argument(
+        "--inference-mode",
+        choices=("custom", "single", "dual_continuous", "dual_separate"),
+        default="custom",
+        help="task orchestration mode; prompt-only legacy behavior is custom",
+    )
+    parser.add_argument(
+        "--active-hand",
+        choices=("left", "right"),
+        help="required for --inference-mode single",
+    )
+    parser.add_argument(
+        "--right-prompt",
+        help="required second prompt for --inference-mode dual_separate",
     )
 
 

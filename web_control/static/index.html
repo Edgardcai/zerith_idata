@@ -3,9 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0b0f14">
+  <meta name="theme-color" content="#ffffff">
   <title>ZERITH H1 控制台</title>
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/refined.css">
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -19,6 +20,10 @@
       </a>
 
       <div class="system-chips" aria-label="系统状态">
+        <span class="status-chip" id="inferenceConnectionChip" role="status">
+          <i class="status-dot" aria-hidden="true"></i>
+          <span id="inferenceConnectionText">推理未连接</span>
+        </span>
         <span class="status-chip" id="connectionChip">
           <i class="status-dot" aria-hidden="true"></i>
           <span id="connectionText">连接中</span>
@@ -43,6 +48,17 @@
           <input id="takeoverToggle" type="checkbox" role="switch" aria-describedby="takeoverHint">
           <span class="switch-track" aria-hidden="true"><span></span></span>
         </label>
+        <div class="top-lifecycle-actions" role="group" aria-label="机器人初始化与复位">
+        <button class="button button--info motion-control" id="initButton" type="button" disabled>
+          <span class="button-icon" aria-hidden="true">↥</span> 初始化
+        </button>
+        <button class="button button--warning motion-control" id="deinitButton" type="button" disabled>
+          <span class="button-icon" aria-hidden="true">↧</span> 反初始化
+        </button>
+        <button class="button button--violet motion-control" id="homeButton" type="button" disabled>
+          <span class="button-icon" aria-hidden="true">⌂</span> 复位
+        </button>
+        </div>
       </div>
     </header>
 
@@ -62,29 +78,23 @@
       <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="pi05Page" data-tab="pi05Page">
         <span class="tab-icon" aria-hidden="true">π</span><span>推理</span>
       </button>
+      <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="replayPage" data-tab="replayPage">
+        <span class="tab-icon" aria-hidden="true">▶</span><span>真机回放</span>
+      </button>
     </nav>
 
     <main>
       <section class="page is-active" id="armsPage" role="tabpanel">
         <div class="page-heading">
           <div>
-            <p class="eyebrow">14 轴 · 独立控制</p>
             <h1>双臂</h1>
           </div>
-          <div class="action-row lifecycle-actions">
+          <div class="action-row">
             <div class="motion-speed-control" title="调整单关节和初始位姿的轨迹速度；不改变厂商初始化/反初始化速度">
               <label for="motionSpeedRange">运动速度 <output id="motionSpeedValue">1.0×</output></label>
               <input id="motionSpeedRange" type="range" min="0.2" max="2" step="0.1" value="1">
             </div>
-            <button class="button button--soft motion-control" id="initButton" type="button" disabled>
-              <span class="button-icon" aria-hidden="true">↥</span> 初始化
-            </button>
-            <button class="button button--soft motion-control" id="deinitButton" type="button" disabled>
-              <span class="button-icon" aria-hidden="true">↧</span> 反初始化
-            </button>
-            <button class="button button--primary motion-control" id="homeButton" type="button" disabled>
-              <span class="button-icon" aria-hidden="true">⌂</span> 初始位姿
-            </button>
+
           </div>
         </div>
 
@@ -92,7 +102,7 @@
           <article class="panel arm-panel">
             <div class="panel-heading">
               <div class="side-badge side-badge--left">L</div>
-              <div><h2>左臂</h2><p>当前 / 目标 · rad</p></div>
+              <div><h2>左臂</h2></div>
             </div>
             <div class="joint-list" id="leftArmControls" aria-live="polite">
               <div class="panel-placeholder">正在读取 SDK 限位…</div>
@@ -103,7 +113,7 @@
           <article class="panel arm-panel">
             <div class="panel-heading">
               <div class="side-badge side-badge--right">R</div>
-              <div><h2>右臂</h2><p>当前 / 目标 · rad</p></div>
+              <div><h2>右臂</h2></div>
             </div>
             <div class="joint-list" id="rightArmControls" aria-live="polite">
               <div class="panel-placeholder">正在读取 SDK 限位…</div>
@@ -116,7 +126,6 @@
       <section class="page" id="bodyPage" role="tabpanel" hidden>
         <div class="page-heading">
           <div>
-            <p class="eyebrow">姿态 · 移动</p>
             <h1>机身</h1>
           </div>
         </div>
@@ -125,7 +134,7 @@
           <article class="panel body-panel">
             <div class="panel-heading panel-heading--compact">
               <div class="side-badge side-badge--body">↕</div>
-              <div><h2>升降与姿态</h2><p>当前 / 目标</p></div>
+              <div><h2>升降与姿态</h2></div>
             </div>
             <div class="joint-list joint-list--body" id="bodyControls">
               <div class="panel-placeholder">正在读取 SDK 限位…</div>
@@ -159,19 +168,18 @@
       <section class="page page--cameras" id="cameraPage" role="tabpanel" hidden>
         <div class="page-heading camera-heading">
           <div>
-            <p class="eyebrow">RGB · Depth</p>
             <h1>相机</h1>
           </div>
           <div class="camera-stream-switches" aria-label="相机数据流开关">
             <label class="camera-stream-switch" for="rgbCamerasToggle">
-              <span><strong>RGB</strong><small>同时开启三路彩色画面</small></span>
+              <span><strong>RGB</strong></span>
               <span class="mini-switch">
                 <input id="rgbCamerasToggle" type="checkbox" role="switch" data-stream-group-toggle="rgb">
                 <span aria-hidden="true"></span>
               </span>
             </label>
             <label class="camera-stream-switch" for="depthCamerasToggle">
-              <span><strong>深度</strong><small>同时开启三路深度画面</small></span>
+              <span><strong>深度</strong></span>
               <span class="mini-switch">
                 <input id="depthCamerasToggle" type="checkbox" role="switch" data-stream-group-toggle="depth">
                 <span aria-hidden="true"></span>
@@ -181,9 +189,6 @@
         </div>
 
         <div class="panel camera-matrix" id="cameraStack">
-          <div class="camera-matrix-note">
-            六路数据保持原始 640 × 480 分辨率；界面按可用宽度等比缩放，三视角始终完整显示。
-          </div>
           <div class="camera-matrix-scroll">
             <div class="camera-matrix-grid">
               <div class="camera-matrix-corner" aria-hidden="true">视角</div>
@@ -232,7 +237,6 @@
       <section class="page page--voice" id="voicePage" role="tabpanel" hidden>
         <div class="page-heading voice-heading">
           <div>
-            <p class="eyebrow">XIAODA · VOICE</p>
             <h1>语音对话</h1>
           </div>
           <span class="voice-state-badge" id="voiceStateBadge">
@@ -254,6 +258,12 @@
                 <option value="en">English</option>
               </select>
             </label>
+            <div class="voice-local-services">
+              <div class="voice-input-actions">
+                <button class="button button--soft" id="voiceLocalStart" type="button" disabled>启动本地语音</button>
+                <button class="button button--soft" id="voiceLocalStop" type="button" disabled>停止并释放显存</button>
+              </div>
+            </div>
             <div class="voice-motion-control">
               <div>
                 <strong>语音 / 文字运动控制</strong>
@@ -265,12 +275,12 @@
               </label>
             </div>
             <div class="voice-input-actions">
-              <button class="button button--primary voice-start-button" id="voiceStartButton" type="button" disabled>
+              <button class="button button--violet voice-start-button" id="voiceStartButton" type="button" disabled>
                 <span aria-hidden="true">◉</span><span id="voiceStartText">启动对话</span>
               </button>
               <button class="button button--soft voice-cancel-button" id="voiceCancelButton" type="button" disabled>取消当前</button>
             </div>
-            <p class="voice-hint" id="voiceInputHint">中文默认使用机器人独立麦克风，通过本地 Paraformer 与 Qwen3-ASR 双阶段识别。</p>
+            <p class="voice-hint" id="voiceInputHint">使用机器人独立麦克风，默认通过云端识别和合成中文语音。</p>
 
             <div class="voice-playback">
               <div class="voice-playback-heading">
@@ -278,14 +288,13 @@
                 <label><input id="voiceAutoplay" type="checkbox"> 自动播放到本网页</label>
               </div>
               <audio id="voiceAudio" controls preload="none"></audio>
-              <small>机器人扬声器会照常播报；这里可回放最近一条回复。</small>
             </div>
           </article>
 
           <article class="panel voice-transcript-panel">
             <div class="panel-heading panel-heading--compact">
               <div class="side-badge side-badge--voice">话</div>
-              <div><h2>本轮对话</h2><p>识别文字与小达回复</p></div>
+              <div><h2>本轮对话</h2></div>
             </div>
             <div class="voice-transcript" id="voiceTranscript" aria-live="polite">
               <div class="voice-empty">尚未开始对话</div>
@@ -294,9 +303,9 @@
               <label class="voice-text-label" for="voiceTextInput">键盘输入</label>
               <div class="voice-text-row">
                 <input id="voiceTextInput" type="text" maxlength="1000" autocomplete="off" placeholder="输入对话内容或机器人指令…" disabled>
-                <button class="button button--primary" id="voiceTextSend" type="submit" disabled>发送</button>
+                <button class="button button--violet" id="voiceTextSend" type="submit" disabled>发送</button>
               </div>
-              <small id="voiceTextHint">语音服务就绪后可按 Enter 发送</small>
+              <small id="voiceTextHint"></small>
             </form>
           </article>
         </div>
@@ -305,7 +314,6 @@
       <section class="page page--pi05" id="pi05Page" role="tabpanel" hidden>
         <div class="page-heading pi05-heading">
           <div>
-            <p class="eyebrow">ZERITH · REMOTE POLICY EXECUTOR</p>
             <h1>推理</h1>
           </div>
           <span class="pi05-phase-badge" id="pi05PhaseBadge" data-phase="unknown">
@@ -317,7 +325,7 @@
           <article class="panel pi05-control-panel">
             <div class="panel-heading panel-heading--compact">
               <div class="side-badge side-badge--pi05">π</div>
-              <div><h2>推理配置</h2><p>连接远端、验证观测，再由操作员确认真机执行</p></div>
+              <div><h2>推理配置</h2></div>
             </div>
 
             <div class="pi05-control-body">
@@ -332,47 +340,92 @@
                 </label>
               </div>
 
-              <label class="pi05-field" for="pi05Prompt">
-                <span>任务提示词</span>
-                <textarea id="pi05Prompt" rows="4" maxlength="1000" spellcheck="false">Grasp AD Calcium Milk with the left hand and then grasp Dahongpao Milk Tea with the right hand</textarea>
-                <small>真机启动的提示词必须与当前连接下成功 dry-run 的提示词完全一致。</small>
-              </label>
+              <fieldset class="pi05-prompt-builder">
+                <legend>任务提示词</legend>
+
+                <div class="pi05-mode-switch" role="radiogroup" aria-label="推理任务类型">
+                  <label>
+                    <input id="pi05TaskSingle" name="pi05TaskType" type="radio" value="single" checked>
+                    <span>单手推理</span>
+                  </label>
+                  <label>
+                    <input id="pi05TaskDual" name="pi05TaskType" type="radio" value="dual">
+                    <span>双手推理</span>
+                  </label>
+                </div>
+
+                <div class="pi05-template-grid" id="pi05SingleFields">
+                  <label class="pi05-field" for="pi05SingleItem">
+                    <span>物品</span>
+                    <select id="pi05SingleItem" data-default="AD Calcium Milk"></select>
+                  </label>
+                  <label class="pi05-field" for="pi05SingleHand">
+                    <span>执行手</span>
+                    <select id="pi05SingleHand">
+                      <option value="left">Left hand</option>
+                      <option value="right">Right hand</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="pi05-dual-fields" id="pi05DualFields" hidden>
+                  <div class="pi05-template-grid">
+                    <label class="pi05-field" for="pi05DualLeftItem">
+                      <span>Left hand item</span>
+                      <select id="pi05DualLeftItem" data-default="Coca-Cola"></select>
+                    </label>
+                    <label class="pi05-field" for="pi05DualRightItem">
+                      <span>Right hand item</span>
+                      <select id="pi05DualRightItem" data-default="NEVER Coconut Latte"></select>
+                    </label>
+                  </div>
+                  <div class="pi05-mode-switch pi05-mode-switch--sub" role="radiogroup" aria-label="双手推理模式">
+                    <label>
+                      <input id="pi05DualContinuous" name="pi05DualMode" type="radio" value="continuous" checked>
+                      <span>双手连续</span>
+                    </label>
+                    <label>
+                      <input id="pi05DualSeparate" name="pi05DualMode" type="radio" value="separate">
+                      <span>双手分开</span>
+                    </label>
+                  </div>
+                </div>
+
+                <label class="pi05-field pi05-custom-prompt" id="pi05CustomPromptField" for="pi05Prompt">
+                  <span>自定义 Prompt（可选）</span>
+                  <textarea id="pi05Prompt" rows="2" maxlength="1000" spellcheck="false" placeholder="留空时使用上方选择生成的模板"></textarea>
+                </label>
+
+                <div class="pi05-prompt-preview" aria-live="polite">
+                  <span>Prompt 预览</span>
+                  <pre id="pi05PromptPreview"></pre>
+                </div>
+              </fieldset>
 
               <div class="pi05-parameter-grid">
                 <label class="pi05-field" for="pi05JointSpeed">
                   <span>关节速度（deg/s）</span>
                   <input id="pi05JointSpeed" type="number" min="0.1" step="1" value="30" inputmode="decimal">
-                  <small>限制双臂 14 个关节目标的变化速度，默认 30 deg/s；以“上一条成功下发目标”为基准，不影响夹爪和升降柱。</small>
                 </label>
                 <label class="pi05-field" for="pi05ControlRate">
                   <span>发送频率（Hz）</span>
                   <input id="pi05ControlRate" type="number" step="1" value="30" inputmode="decimal">
-                  <small>每秒向机器人发送动作点的次数，默认 30 Hz。</small>
                 </label>
                 <label class="pi05-field" for="pi05StepsPerChunk">
                   <span>每个 Chunk 执行步数 N</span>
                   <input id="pi05StepsPerChunk" type="number" min="1" max="50" step="1" value="30" inputmode="numeric">
-                  <small>服务端每包返回 50 步；执行前 N 步完成后，重新采集最新状态和图片并同步请求下一包。没有总 Chunk 或总执行步数上限。</small>
                 </label>
               </div>
 
-              <div class="pi05-prerequisites" aria-label="真机启动条件">
-                <div class="pi05-prerequisite" id="pi05ConnectionGate" data-ready="false"><i aria-hidden="true"></i><span>远端连接和 metadata 待验证</span></div>
-                <div class="pi05-prerequisite" id="pi05LeaseGate" data-ready="false"><i aria-hidden="true"></i><span>当前页面持有控制租约</span></div>
-                <div class="pi05-prerequisite" id="pi05InitGate" data-ready="false"><i aria-hidden="true"></i><span>机器人已初始化</span></div>
-                <div class="pi05-prerequisite" id="pi05ModeGate" data-ready="false"><i aria-hidden="true"></i><span>LOW_LEVEL 控制模式</span></div>
-                <div class="pi05-prerequisite" id="pi05DryRunGate" data-ready="false"><i aria-hidden="true"></i><span>当前连接的 dry-run 已通过且提示词未变化</span></div>
-              </div>
-
               <div class="pi05-actions">
-                <button class="button button--soft" id="pi05ProbeButton" type="button">重新验证 metadata</button>
-                <button class="button button--primary" id="pi05DryRunButton" type="button" disabled>执行 dry-run</button>
-                <button class="button button--danger pi05-start-button" id="pi05StartButton" type="button" disabled>确认并启动真机</button>
+                <button class="button button--info" id="pi05ProbeButton" type="button">重新验证 metadata</button>
+                <button class="button button--violet" id="pi05DryRunButton" type="button" disabled>执行 dry-run</button>
+                <button class="button button--warning pi05-start-button" id="pi05StartButton" type="button" disabled>确认并启动真机</button>
               </div>
 
               <div class="pi05-safety-note">
                 <strong>真机执行边界</strong>
-                <p>双臂动作按可调关节速度限幅，基准是上一条成功下发目标，不使用滞后反馈重置目标；夹爪和升降柱不经过该限幅。腰和头保持最新观测位置，底盘线/角速度强制为 0。网络、图像、状态或动作异常会停止并锁存，必须人工清故障后重新探针和 dry-run。</p>
+                <p>腰和头保持推理启动姿态，底盘锁定零速；异常会停止并锁存。</p>
               </div>
             </div>
           </article>
@@ -380,23 +433,27 @@
           <aside class="panel pi05-status-panel" aria-label="推理状态与安全控制">
             <div class="panel-heading panel-heading--compact">
               <div class="side-badge side-badge--pi05-status">◎</div>
-              <div><h2>状态与安全</h2><p>只轮询状态；不会自动启动或自动重连</p></div>
+              <div><h2>状态与安全</h2></div>
               <span class="pi05-poll-state" id="pi05PollState">连接中</span>
             </div>
 
             <div class="pi05-safety-controls">
-              <button class="pi05-emergency-button" id="pi05EmergencyStopButton" type="button">
-                <span aria-hidden="true">■</span><strong>急停</strong><small>停止推理和普通运动；这不是实体急停</small>
-              </button>
+              <div class="pi05-primary-safety-actions">
+                <button class="pi05-emergency-button" id="pi05EmergencyStopButton" type="button">
+                  <span aria-hidden="true">■</span><strong>急停</strong><small>软件停止</small>
+                </button>
+                <button class="pi05-arm-home-button" id="pi05ArmHomeButton" type="button" disabled>
+                  <span aria-hidden="true">↶</span><strong>机械臂归位</strong><small>升降柱保持当前高度</small>
+                </button>
+              </div>
               <div class="pi05-connection-buttons">
-                <button class="button button--soft" id="pi05DisconnectButton" type="button">断开连接</button>
-                <button class="button button--primary" id="pi05ReconnectButton" type="button">重新连接</button>
+                <button class="button button--neutral" id="pi05DisconnectButton" type="button">断开连接</button>
+                <button class="button button--success" id="pi05ReconnectButton" type="button">重新连接</button>
               </div>
               <div class="pi05-secondary-safety-actions">
                 <button class="pi05-stop-button" id="pi05StopButton" type="button"><span aria-hidden="true">■</span> 停止推理</button>
-                <button class="button button--soft" id="pi05ResetFaultButton" type="button" disabled>清除锁存故障</button>
+                <button class="button button--warning" id="pi05ResetFaultButton" type="button" disabled>清除锁存故障</button>
               </div>
-              <p class="pi05-connection-note">断开仅关闭远端推理连接，不会反初始化机器人，也不会调用可能导致掉力的 deinit。</p>
             </div>
 
             <div class="pi05-endpoint-row">
@@ -407,6 +464,8 @@
             <div class="pi05-metrics">
               <div><span>Metadata</span><strong id="pi05MetadataState">未验证</strong></div>
               <div><span>Dry-run</span><strong id="pi05DryRunState">未执行</strong></div>
+              <div><span>任务阶段</span><strong id="pi05TaskStage">--</strong></div>
+              <div><span>左夹爪闭合计数</span><strong id="pi05LeftGripperProgress">--</strong></div>
               <div><span>推理延迟</span><strong id="pi05Latency">--</strong></div>
               <div><span>Chunk</span><strong id="pi05Chunk">--</strong></div>
               <div><span>请求时序</span><strong id="pi05ChunkRequestMode">包尾同步</strong></div>
@@ -433,7 +492,7 @@
 
             <div class="pi05-camera-status">
               <div class="pi05-camera-heading">
-                <div><h3>观测相机映射</h3><p>CameraService / CameraClient BGR → JPEG</p></div>
+                <div><h3>观测相机映射</h3></div>
                 <span id="pi05CameraLimit">最近观测帧龄</span>
               </div>
               <div class="pi05-camera-row">
@@ -451,6 +510,69 @@
             </div>
           </aside>
         </div>
+      </section>
+
+      <section class="page page--replay" id="replayPage" role="tabpanel" hidden>
+        <div class="page-heading replay-heading">
+          <div><h1>真机回放</h1></div>
+          <span class="replay-phase-badge" id="replayPhaseBadge" data-phase="idle">
+            <i aria-hidden="true"></i><span id="replayPhaseText">待机</span>
+          </span>
+        </div>
+
+        <article class="panel replay-panel">
+          <div class="replay-form">
+            <label class="replay-field replay-field--directory" for="replayDatasetDir">
+              <span>数据集目录</span>
+              <div class="replay-directory-row">
+                <input id="replayDatasetDir" type="text" list="replayDirectoryOptions" value="/data/zerith_data/Pepsi_DailyCOrangeJuice2" autocomplete="off" spellcheck="false">
+                <datalist id="replayDirectoryOptions"></datalist>
+                <button class="button button--neutral" id="replayDirectoryRefreshButton" type="button">刷新目录</button>
+                <button class="button button--info" id="replayScanButton" type="button">读取数据</button>
+              </div>
+            </label>
+
+            <label class="replay-field" for="replayEpisode">
+              <span>回放数据</span>
+              <select id="replayEpisode" disabled>
+                <option value="">请先读取目录</option>
+              </select>
+            </label>
+
+            <div class="replay-options">
+              <label class="replay-field" for="replaySource">
+                <span>回放源</span>
+                <select id="replaySource">
+                  <option value="action" selected>action</option>
+                  <option value="state">state</option>
+                </select>
+              </label>
+              <label class="replay-field" for="replayMode">
+                <span>回放模式</span>
+                <select id="replayMode">
+                  <option value="arms" selected>双臂动作 + 夹爪</option>
+                  <option value="full">全部 23 维</option>
+                </select>
+              </label>
+              <label class="replay-field" for="replaySpeed">
+                <span>回放速度 <output id="replaySpeedValue">1.0×</output></span>
+                <input id="replaySpeed" type="range" min="0.5" max="2" step="0.1" value="1">
+              </label>
+            </div>
+
+            <div class="replay-selection" id="replaySelection">请选择数据集目录并读取</div>
+
+            <div class="replay-progress" aria-label="回放进度">
+              <div><span id="replayProgressText">0 / 0 帧</span><strong id="replayProgressPercent">0%</strong></div>
+              <progress id="replayProgress" max="1" value="0"></progress>
+            </div>
+
+            <div class="replay-actions">
+              <button class="button button--success" id="replayStartButton" type="button" disabled>确认并开始回放</button>
+              <button class="button button--danger" id="replayStopButton" type="button" disabled>■ 紧急停止</button>
+            </div>
+          </div>
+        </article>
       </section>
     </main>
   </div>

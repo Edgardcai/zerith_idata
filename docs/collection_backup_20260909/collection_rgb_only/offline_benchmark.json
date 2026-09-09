@@ -1,0 +1,20 @@
+{
+  "baseline_rgbd_ms": [
+    364.2330689999653,
+    356.1586619998707,
+    405.94345399949816,
+    365.14540299867804
+  ],
+  "rgb_only_ms": [
+    103.03541400026006,
+    98.78102500078967,
+    116.22059000001173,
+    113.5949219988106
+  ],
+  "frames": 40,
+  "nondepth_datasets_and_encoded_images_identical": true,
+  "decoded_videos_identical": true,
+  "depth_acquisition_and_storage_disabled": true,
+  "paced_30hz_frames": 200,
+  "paced_batch_p95_ms": 112.444769751437
+}

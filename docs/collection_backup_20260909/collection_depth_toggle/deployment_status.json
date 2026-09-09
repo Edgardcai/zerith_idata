@@ -1,0 +1,27 @@
+{
+  "deployed": true,
+  "checked_at": "2026-09-09T14:46:40.450639",
+  "sha256": "6898cc7c231a874597abbe643e8eab16a4a4c87015de4c23a46856e6a9e031a6",
+  "default_record_depth": false,
+  "live_camera_modes_tested": [
+    false,
+    true,
+    false
+  ],
+  "profiles_after_test": {
+    "rs/cam_left_wrist": [
+      "color"
+    ],
+    "rs/cam_high": [
+      "color"
+    ],
+    "rs/cam_right_wrist": [
+      "color"
+    ]
+  },
+  "camera_healthy": true,
+  "collection_phase": "idle",
+  "web_tests_passed": 37,
+  "live_new_recording_tested": false,
+  "robot_motion_sent": false
+}

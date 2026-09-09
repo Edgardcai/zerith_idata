@@ -47,6 +47,8 @@ from .pi05_protocol import (
     ProtocolTransportError,
     ProtocolValidationError,
 )
+from .replay_controller import ACTIVE_PHASES as REPLAY_ACTIVE_PHASES
+from .replay_controller import ReplayController
 from .robot_service import (
     RobotCallTimeout,
     RobotCommandRejected,
@@ -170,6 +172,7 @@ class WebControlApp:
         voice: VoiceGateway | None = None,
         voice_motion: VoiceMotionController | None = None,
         pi05: Pi05Executor | None = None,
+        replay: ReplayController | None = None,
         pi05_host: str = "192.168.1.154",
         pi05_port: int = 9973,
         pi05_inference_timeout_s: float = 10.0,
@@ -190,12 +193,14 @@ class WebControlApp:
             camera_acquire=self.cameras.enter,
             camera_release=self.cameras.leave,
         )
+        self.replay = replay or ReplayController(self.robot)
         self.control_token = control_token
         self.static_dir = static_dir.resolve()
 
     def close(self) -> None:
         # Stop policy/network/camera work before releasing the unique SDK
         # owner.  Pi05Executor.close() never calls robot_deinit().
+        self.replay.close()
         self.pi05.close()
         self.voice_motion.close()
         self.cameras.close()
@@ -282,7 +287,18 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             state = self.app.robot.state()
             state["camera"] = self.app.cameras.status()
             state["pi05"] = self.app.pi05.status()
+            state["replay"] = self.app.replay.status()
             self._send_json(HTTPStatus.OK, state)
+            return
+        if path == "/api/replay/status":
+            if not self._require_authorized():
+                return
+            self._send_json(HTTPStatus.OK, self.app.replay.status())
+            return
+        if path == "/api/replay/directories":
+            if not self._require_authorized():
+                return
+            self._send_json(HTTPStatus.OK, self.app.replay.directories())
             return
         if path == "/api/pi05/status":
             if not self._require_authorized():
@@ -350,6 +366,37 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             body = self._read_json()
             path = urlsplit(self.path).path
             lease = self.headers.get("X-Control-Lease", "")
+            if path == "/api/replay/scan":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.replay.scan(body.get("dataset_dir")),
+                )
+                return
+            if path == "/api/replay/start":
+                self._require_pi05_control_unlocked("真机回放启动")
+                self.app.voice_motion.disable(
+                    reason="replay_start",
+                    requested_lease=lease,
+                )
+                self._send_json(
+                    HTTPStatus.ACCEPTED,
+                    self.app.replay.start(
+                        body.get("dataset_dir"),
+                        body.get("episode"),
+                        body.get("source", "action"),
+                        body.get("mode", "arms"),
+                        body.get("speed", 1.0),
+                        lease,
+                        confirmation=body.get("confirmation"),
+                    ),
+                )
+                return
+            if path == "/api/replay/stop":
+                self._send_json(
+                    HTTPStatus.OK,
+                    self.app.replay.stop(reason="web_operator_stop"),
+                )
+                return
             if path == "/api/pi05/reconnect":
                 self._send_json(
                     HTTPStatus.OK,
@@ -366,12 +413,20 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.OK, self.app.pi05.probe())
                 return
             if path == "/api/pi05/dry-run":
+                self._require_replay_control_unlocked("推理 dry-run")
                 self._send_json(
                     HTTPStatus.OK,
-                    self.app.pi05.dry_run(body.get("prompt"), lease),
+                    self.app.pi05.dry_run(
+                        body.get("prompt"),
+                        lease,
+                        inference_mode=body.get("inference_mode", "custom"),
+                        active_hand=body.get("active_hand"),
+                        right_prompt=body.get("right_prompt"),
+                    ),
                 )
                 return
             if path == "/api/pi05/start":
+                self._require_replay_control_unlocked("推理启动")
                 # A voice action must be cancelled before the policy session
                 # synchronously obtains RobotService's exclusive controller.
                 self.app.voice_motion.disable(
@@ -387,6 +442,9 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                         steps_per_chunk=body.get("steps_per_chunk", 30),
                         control_rate_hz=body.get("control_rate_hz", 30),
                         joint_speed_deg_s=body.get("joint_speed_deg_s", 30),
+                        inference_mode=body.get("inference_mode", "custom"),
+                        active_hand=body.get("active_hand"),
+                        right_prompt=body.get("right_prompt"),
                     ),
                 )
                 return
@@ -398,6 +456,14 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/pi05/reset-fault":
                 self._send_json(HTTPStatus.OK, self.app.pi05.reset_fault())
+                return
+            if path == "/api/voice/local-speech":
+                enabled = body.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise RobotCommandRejected("enabled 必须是布尔值")
+                if enabled:
+                    self._require_pi05_control_unlocked("本地语音模型启动")
+                self._send_json(HTTPStatus.ACCEPTED, self.app.voice.set_local_speech(enabled))
                 return
             if path == "/api/voice/start":
                 self._require_pi05_control_unlocked("语音会话启动")
@@ -445,6 +511,7 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                     self._require_pi05_control_unlocked("控制权接管")
                     result = self.app.robot.acquire(body.get("client_id"))
                 else:
+                    self.app.replay.stop(reason="takeover_released")
                     self.app.pi05.stop(reason="takeover_released")
                     self.app.voice_motion.disable(
                         reason="takeover_released",
@@ -477,6 +544,17 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 )
                 self._send_json(HTTPStatus.OK, result)
                 return
+            if path == "/api/actions/recover-deinit":
+                self._require_pi05_control_unlocked("恢复反初始化")
+                voice = self.app.voice_motion.status()
+                if voice.get("enabled") is not False or "active_action" not in voice or voice["active_action"] is not None:
+                    raise RobotConflict("语音控制未明确空闲，拒绝恢复反初始化")
+                result = self.app.robot.recover_deinitialize(
+                    lease, confirmation=body.get("confirmation"),
+                    manual_control_released=body.get("manual_control_released"),
+                )
+                self._send_json(HTTPStatus.OK, result)
+                return
             if path == "/api/actions/init":
                 self._require_pi05_control_unlocked("机器人初始化")
                 result = self.app.robot.initialize(lease)
@@ -502,7 +580,17 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 result.setdefault("message", "已到初始位姿并保持")
                 self._send_json(HTTPStatus.OK, result)
                 return
+            if path == "/api/actions/arm-home":
+                self._require_pi05_control_unlocked("机械臂归位")
+                result = self.app.robot.move_arm_home(
+                    lease,
+                    speed_scale=body.get("speed_scale", 1.0),
+                )
+                result.setdefault("message", "机械臂已归位，升降柱保持原高度")
+                self._send_json(HTTPStatus.OK, result)
+                return
             if path == "/api/stop":
+                self.app.replay.stop(reason="global_software_stop")
                 self.app.pi05.stop(reason="global_software_stop")
                 self.app.voice_motion.cancel_active(lease)
                 self._send_json(HTTPStatus.OK, self.app.robot.stop_motion(lease))
@@ -974,6 +1062,18 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             raise RobotConflict(
                 f"Pi0.5 phase={label}，已阻止{operation}；请先安全停止或清除故障"
             )
+        self._require_replay_control_unlocked(operation)
+
+    def _require_replay_control_unlocked(self, operation: str) -> None:
+        try:
+            report = self.app.replay.status()
+        except Exception as exc:
+            raise RobotConflict(f"无法确认真机回放状态，已阻止{operation}") from exc
+        phase = report.get("phase") if isinstance(report, dict) else None
+        if phase in REPLAY_ACTIVE_PHASES:
+            raise RobotConflict(
+                f"真机回放 phase={phase}，已阻止{operation}；请先停止回放"
+            )
 
     @staticmethod
     def _is_exact_zero_chassis_command(body: dict[str, Any]) -> bool:
@@ -1089,7 +1189,9 @@ def _validate_access_policy(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ZERITH H1 PRO local web console")
-    parser.add_argument("--host", default="172.16.18.43")
+    # Listen on every local interface so the same single-owner service is
+    # reachable from Wi-Fi and both wired robot networks.
+    parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument(
         "--token",
@@ -1166,6 +1268,7 @@ def main(argv: list[str] | None = None) -> int:
         robot_service = RobotService()
     camera_service = CameraService(
         grpc_target=args.camera_target,
+        enable_depth=os.environ.get('ZERITH_CAMERA_DEPTH', '1') != '0',
         client_factory=fake_camera_factory if args.simulate_cameras else None,
     )
     app = WebControlApp(

@@ -45,6 +45,11 @@ def validate_finished(directory):
             if f[k].shape!=(n,width) or not np.isfinite(f[k][:]).all():raise ValueError(f'字段不完整：{k}')
         for name in ['cam_high','cam_left_wrist','cam_right_wrist']:
             if f[f'observation/images/rs/{name}/color'].shape[0]!=n:raise ValueError('图像帧数不一致')
+            depth_path=f'observation/images/rs/{name}/depth'
+            if bool(f.attrs.get('depth_recorded',False)):
+                if depth_path not in f or f[depth_path].shape[0]!=n:
+                    raise ValueError('已选择记录深度，但深度图缺失或帧数不一致')
+                if any(len(v)==0 for v in f[depth_path]):raise ValueError('深度图存在空帧')
             v=directory/'videos'/'rs'/(name+'.mp4')
             if not v.is_file() or v.stat().st_size<32:raise ValueError('视频缺失或尚未保存')
         if int(f.attrs.get('total_frames',-1))!=n:raise ValueError('最终帧数尚未确认')
@@ -58,8 +63,14 @@ def validate_finished(directory):
         rate=float(f.attrs.get('control_frequency',30)); actual=(n-1)/duration if duration>0 else 0
         if n>1 and actual<rate*.9:warnings.append(f'实际采样 {actual:.1f} Hz')
         if len(dt) and (dt==0).any():warnings.append(f'{int((dt==0).sum())} 个重复时间戳')
+        long_intervals=int(np.count_nonzero(dt > 1.5/rate))
+        max_interval_ms=float(dt.max()*1000) if len(dt) else 0.0
+        if long_intervals:
+            warnings.append(f'{long_intervals} 处采样间断，最大 {max_interval_ms:.1f} ms；回放需按实际时间插值')
         return {'frames':n,'duration_s':duration,'rate_hz':rate,'actual_hz':actual,'completed_steps':completed,
-            'total_steps':total,'steps':steps,'warnings':warnings,'timestamp_unit':'ms' if scale==1000 else 's'}
+            'total_steps':total,'steps':steps,'warnings':warnings,'timestamp_unit':'ms' if scale==1000 else 's',
+            'long_interval_count':long_intervals,'max_interval_ms':max_interval_ms,
+            'record_depth':all(f'observation/images/rs/{name}/depth' in f for name in ['cam_high','cam_left_wrist','cam_right_wrist'])}
 
 
 class EpisodeStore:
@@ -131,10 +142,29 @@ class EpisodeStore:
         for k in ['config','targets','baseline']:value[k]=json.loads(value[k])
         return value
 
-    def list(self,session_id=None):
+    def groups(self):
         with self.lock:
-            sql='SELECT * FROM episodes'+(' WHERE session_id=?' if session_id else '')+' ORDER BY id DESC LIMIT 1000'
-            rows=self.db.execute(sql,(session_id,) if session_id else ()).fetchall()
+            rows=self.db.execute('''SELECT dataset, COUNT(*) AS total, MAX(id) AS latest_id,
+                SUM(state='completed') AS completed, SUM(state='deleted') AS deleted,
+                SUM(state='completed' AND grade='A') AS A,
+                SUM(state='completed' AND grade='B') AS B,
+                SUM(state='completed' AND grade='F') AS F
+                FROM episodes GROUP BY dataset ORDER BY MAX(id) DESC''').fetchall()
+        return [dict(row) for row in rows]
+
+    def get(self,ident):
+        with self.lock:
+            row=self.db.execute('SELECT id,state,path FROM episodes WHERE id=?',(ident,)).fetchone()
+        return dict(row) if row else None
+
+    def list(self,session_id=None,dataset=None):
+        with self.lock:
+            clauses=[];params=[]
+            if session_id:clauses.append('session_id=?');params.append(session_id)
+            if dataset is not None:clauses.append('dataset=?');params.append(dataset)
+            sql='SELECT * FROM episodes'+(' WHERE '+' AND '.join(clauses) if clauses else '')+' ORDER BY id DESC'
+            if dataset is None:sql+=' LIMIT 1000'
+            rows=self.db.execute(sql,params).fetchall()
         result=[]
         for row in rows:
             value=dict(row)

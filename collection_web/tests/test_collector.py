@@ -28,13 +28,13 @@ class CollectorTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)/'data';self.root.mkdir()
         self.runtime=Path(self.tmp.name)/'runtime';self.store=EpisodeStore(self.runtime,self.root)
-        self.cancelled=threading.Event();self.fail=threading.Event()
+        self.cancelled=threading.Event();self.fail_event=threading.Event()
         def meta(request,context):
             config=json.loads(request.json_config);p=self.root/f"{config['task_id']}_{config['task_name']}";p.mkdir(exist_ok=True);atomic_json(p/'task_meta.json',config)
             context.add_callback(self.cancelled.set)
             yield MetaData(json_data='{"message":"accepted"}')
             while context.is_active():
-                if self.fail.is_set():context.abort(grpc.StatusCode.UNAVAILABLE,'simulated transport loss')
+                if self.fail_event.is_set():context.abort(grpc.StatusCode.UNAVAILABLE,'simulated transport loss')
                 time.sleep(.02)
         self.server=grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
         h=grpc.unary_stream_rpc_method_handler(meta,request_deserializer=MetaRequest.FromString,response_serializer=MetaData.SerializeToString)
@@ -48,6 +48,30 @@ class CollectorTests(unittest.TestCase):
         self.start();self.assertEqual(self.collector.status()['phase'],'waiting')
         self.collector.end();self.assertTrue(self.cancelled.wait(2));self.assertEqual(self.collector.status()['phase'],'closed')
         with self.assertRaises(ValueError):self.collector.preflight({'task_name':'bad/path'})
+    def test_depth_choice_reaches_rpc_and_session_metadata(self):
+        self.collector.start({'task_name':'test','record_depth':True})
+        eventually(lambda:self.collector.status()['accepted'])
+        self.assertIs(self.collector.status()['session']['config']['record_depth'],True)
+        actual=json.loads((self.root/'1_test'/'task_meta.json').read_text())
+        self.assertIs(actual['record_depth'],True)
+        self.collector.end();self.start()
+        self.assertIs(self.collector.status()['session']['config']['record_depth'],False)
+    def test_default_two_stages_and_live_progress(self):
+        self.start()
+        actual=json.loads((self.root/'1_test'/'task_meta.json').read_text())
+        self.assertEqual(actual['subtask_num'],2)
+        self.assertEqual(actual['step_list'],[])
+        p=episode(self.root/'1_test',finished=False)
+        (p/'collection.log').write_text('采集会话启动\n')
+        eventually(lambda:self.collector.status()['current'] is not None)
+        uid=self.collector.status()['current']['uuid']
+        with self.collector.lock:
+            self.collector.responses.append({'at':time.time(),'value':{
+                'event_type':'EPISODE_PROGRESS','uid':uid,'completed_subtask_index':1}})
+        status=self.collector.status()
+        self.assertEqual(status['current']['progress']['completed_steps'],1)
+        self.assertEqual(status['current']['state'],'recording')
+        self.assertEqual(status['phase'],'waiting')
     def test_duplicate_start_and_active_end_rejected(self):
         self.start()
         with self.assertRaises(ValueError):self.collector.start({'task_name':'other'})
@@ -55,7 +79,7 @@ class CollectorTests(unittest.TestCase):
         with self.assertRaises(ValueError):self.collector.end()
         self.assertTrue(p.exists());self.assertEqual(self.collector.status()['phase'],'waiting')
     def test_connection_loss_does_not_reconnect_or_claim_external_episode(self):
-        self.start();self.fail.set();eventually(lambda:self.collector.status()['phase']=='disconnected')
+        self.start();self.fail_event.set();eventually(lambda:self.collector.status()['phase']=='disconnected')
         episode(self.root/'1_test');time.sleep(.7)
         self.assertEqual(self.store.list(),[])
         self.assertEqual(self.collector.status()['phase'],'disconnected')

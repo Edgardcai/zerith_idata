@@ -1,0 +1,9 @@
+{
+  "sha256": "6898cc7c231a874597abbe643e8eab16a4a4c87015de4c23a46856e6a9e031a6",
+  "original_sha256": "2e311a08afd94990972258bcf13beb46ea30fdd7f45b0b630ca747268838f054",
+  "image_mode": "selectable_depth_default_off",
+  "changed_entries": [
+    "server"
+  ],
+  "preserved_entries": 1751
+}

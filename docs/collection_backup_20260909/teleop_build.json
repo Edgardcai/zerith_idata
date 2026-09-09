@@ -1,0 +1,11 @@
+{
+  "original_sha256": "3c807604a116128c27bcf0ca52310a4102e436c1a277af1c0301b1ef452f7282",
+  "sha256": "33e79508de701975f0b8faafb756e32f8c6401ff3eb0d00f6b52dbb3d5ea64be",
+  "changed_entries": [
+    "teleop"
+  ],
+  "preserved_entries": 643,
+  "python": "3.10",
+  "version": "collection-1.0-warn-lift-status",
+  "physical_validation": "pending"
+}

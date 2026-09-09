@@ -71,6 +71,35 @@ class CameraServiceTests(unittest.TestCase):
         self.assertFalse(self.created[0].started)
         self.assertIsNone(self.service.get_latest("head", "rgb"))
 
+    def test_rgb_only_does_not_request_or_require_depth(self) -> None:
+        class ColorClient(FakeCameraClient):
+            depth_calls = 0
+
+            def get_latest_depth(self, camera_name):
+                self.depth_calls += 1
+                raise AssertionError("depth must not be polled")
+
+        client = ColorClient()
+        self.service = CameraService(
+            enable_depth=False, client_factory=lambda **kw: self._color_client(client, kw),
+            poll_interval_s=0.005,
+        )
+        self.service.start()
+        for camera in ("left_wrist", "head", "right_wrist"):
+            self.assertIsNotNone(self.service.wait_for_frame(camera, "rgb", timeout=1.0))
+            self.assertEqual(self.service.available_streams(camera), ("rgb",))
+        status = self.service.get_status()
+        self.assertFalse(client.kwargs["enable_depth"])
+        self.assertFalse(status["depth_enabled"])
+        self.assertEqual(status["missing_expected_streams"], [])
+        self.assertTrue(status["healthy"])
+        self.assertEqual(client.depth_calls, 0)
+
+    @staticmethod
+    def _color_client(client, kwargs):
+        client.kwargs = kwargs
+        return client
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -61,9 +61,13 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             path=urlparse(self.path).path
-            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_PROMPT})
+            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_PROMPT,'depth_recording_supported':True})
             if path=='/api/status':return self.json(self.app.status())
-            if path=='/api/episodes':return self.json({'episodes':self.app.store.list()})
+            if path=='/api/episode-groups':return self.json({'groups':self.app.store.groups()})
+            if path=='/api/episodes':
+                from urllib.parse import parse_qs
+                dataset=parse_qs(urlparse(self.path).query).get('dataset',[None])[0]
+                return self.json({'episodes':self.app.store.list(dataset=dataset)})
             if path.startswith('/api/camera/'):
                 name=path.rsplit('/',1)[1]
                 if name not in NAMES:raise ValueError('未知相机')
@@ -72,8 +76,8 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith('/api/video/'):
                 _,_,_,ident,name=path.split('/')
                 if name not in NAMES:raise ValueError('未知相机')
-                row=next((r for r in self.app.store.list() if r['id']==int(ident) and r['state']=='completed'),None)
-                if not row:raise ValueError('数据不存在或尚未保存')
+                row=self.app.store.get(int(ident))
+                if not row or row['state']!='completed':raise ValueError('数据不存在或尚未保存')
                 directory=self.app.store.safe(row['path'])
                 target=directory/'videos'/'rs'/(NAMES[name]+'.mp4')
                 if target.is_symlink() or not target.resolve().is_relative_to(directory):raise ValueError('视频路径无效')

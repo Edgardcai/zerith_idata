@@ -39,9 +39,9 @@ def valid_metadata() -> dict:
 def valid_chunk() -> np.ndarray:
     actions = np.zeros((50, 23), dtype=np.float64)
     actions[:, :7] = 0.01
-    actions[:, 7] = 0.0
+    actions[:, 7] = 0.4
     actions[:, 8:15] = -0.01
-    actions[:, 15] = 1.5
+    actions[:, 15] = 0.8
     actions[:, 16] = 0.25
     actions[:, 17:21] = np.asarray((9.0, 8.0, 7.0, 6.0))
     actions[:, 21:23] = np.asarray((4.0, -4.0))
@@ -56,8 +56,11 @@ class FakePolicyClient:
         self.infer_calls = 0
         self.infer_inputs: list[tuple[np.ndarray, dict[str, np.ndarray], str]] = []
         self.mode = "valid"
+        self.metadata_value = valid_metadata()
+        self.raw_factory = None
         self.delay_s = 0.0
         self.block = False
+        self.block_on_infer_call: int | None = None
         self.fail_on_infer_call: int | None = None
         self.chunk_factory = None
         self.on_infer = None
@@ -70,7 +73,7 @@ class FakePolicyClient:
     def metadata(self, *, timeout: float = 5.0) -> dict:
         del timeout
         self.metadata_calls += 1
-        return valid_metadata()
+        return dict(self.metadata_value)
 
     def infer(self, state, images, prompt, *, jpeg_quality=90, timeout=None):
         del jpeg_quality, timeout
@@ -90,7 +93,7 @@ class FakePolicyClient:
                     prompt,
                 )
             )
-            if self.block:
+            if self.block or call_number == self.block_on_infer_call:
                 self._closed_event.wait(5.0)
                 raise RuntimeError("policy connection closed while blocked")
             if call_number == self.fail_on_infer_call:
@@ -106,9 +109,12 @@ class FakePolicyClient:
                 actions[0, 0] = np.nan
             elif self.mode == "wrong_shape":
                 actions = actions[:-1]
-            elif self.mode == "bad_gripper":
-                actions[0, 7] = 0.4
-            return actions, {"type": "action_chunk", "actions": [object()] * 50}
+            raw = (
+                self.raw_factory(call_number)
+                if self.raw_factory is not None
+                else {"type": "action_chunk", "actions": [object()] * 50}
+            )
+            return actions, raw
         finally:
             with self._lock:
                 self._active -= 1
@@ -134,6 +140,9 @@ class FakeRobot:
         self.stop_calls = 0
         self.deinit_calls = 0
         self.lose_lease_after_steps: int | None = None
+        self.fail_on_step: int | None = None
+        self.track_feedback = False
+        self.session_body_hold: np.ndarray | None = None
 
     def has_live_lease(self, lease_id: str) -> bool:
         return bool(self.live and lease_id == "lease")
@@ -149,7 +158,13 @@ class FakeRobot:
         if not self.has_live_lease(lease_id):
             raise RuntimeError("lease expired")
         self.begin_calls += 1
-        return {"session_id": "policy-session", "state": self.state.tolist()}
+        self.session_body_hold = self.state[17:21].copy()
+        return {
+            "session_id": "policy-session",
+            "state": self.state.tolist(),
+            "body_hold_reference": "session_start_feedback",
+            "body_hold_target": self.session_body_hold.tolist(),
+        }
 
     def policy_step(
         self,
@@ -160,16 +175,29 @@ class FakeRobot:
     ) -> dict:
         if not self.has_live_lease(lease_id) or session_id != "policy-session":
             raise RuntimeError("invalid policy session")
+        if self.fail_on_step is not None and len(self.steps) + 1 == self.fail_on_step:
+            raise RuntimeError("policy step failed deterministically")
         value = np.asarray(action, dtype=np.float64)
         self.steps.append(value.copy())
+        effective = value.copy()
+        if self.session_body_hold is not None:
+            effective[17:21] = self.session_body_hold
+        effective[21:23] = 0.0
+        latest_state = self.state.copy()
         if self.lose_lease_after_steps is not None and len(self.steps) >= self.lose_lease_after_steps:
             self.live = False
-        return {
-            "latest_state": self.state.tolist(),
-            "effective_action": value.tolist(),
-            "sent_action": value[:21].tolist(),
+        result = {
+            "latest_state": latest_state.tolist(),
+            "requested_action": value.tolist(),
+            "effective_action": effective.tolist(),
+            "sent_action": effective[:21].tolist(),
+            "body_hold_reference": "session_start_feedback",
+            "body_hold_target": effective[17:21].tolist(),
             "state_monotonic": time.monotonic(),
         }
+        if self.track_feedback:
+            self.state[:21] = effective[:21]
+        return result
 
     def policy_hold_and_zero(self, lease_id: str, *, session_id=None, reason="operator_stop") -> dict:
         del lease_id
@@ -179,6 +207,7 @@ class FakeRobot:
     def end_policy_session(self, lease_id: str, *, session_id=None, reason="operator_end") -> dict:
         del lease_id
         self.end_calls.append((session_id, reason))
+        self.session_body_hold = None
         return {"ok": True}
 
     def stop_motion(self, lease_id: str, *, renew_lease=False) -> dict:
@@ -355,6 +384,17 @@ class Pi05ExecutorTests(unittest.TestCase):
             time.sleep(0.002)
         self.fail(f"execution did not reach step {minimum}: {self.executor.status()}")
 
+    def wait_for_task_stage(self, stage: str, timeout: float = 3.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self.executor.status()
+            if status["task_stage"] == stage:
+                return status
+            if status["phase"] == PHASE_FAULT:
+                self.fail(f"execution faulted before task stage {stage}: {status}")
+            time.sleep(0.002)
+        self.fail(f"task stage did not become {stage}: {self.executor.status()}")
+
     def test_probe_only_health_and_metadata(self) -> None:
         result = self.executor.probe()
         self.assertEqual(result["health"], "OK")
@@ -369,6 +409,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(self.camera.calls, [])
         self.assertEqual(self.camera_lease.acquired, 0)
         self.assertTrue(result["status"]["connected"])
+        self.assertEqual(result["status"]["metadata_status_mode"], "none")
 
     def test_reconnect_closes_old_connection_and_replaces_endpoint_state(self) -> None:
         self.probe_and_dry_run("旧任务")
@@ -539,7 +580,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual((result["chunk_length"], result["action_dim"]), (50, 23))
         self.assertTrue(result["hold_verified"])
         self.assertTrue(result["base_zero_verified"])
-        self.assertEqual(result["gripper_values"], {"7": [0.0], "15": [1.5]})
+        self.assertEqual(result["gripper_values"], {"7": [0.4], "15": [0.8]})
         effective = np.asarray(result["first_effective_action"])
         np.testing.assert_array_equal(effective[17:21], self.robot.state[17:21])
         np.testing.assert_array_equal(effective[21:23], np.zeros(2))
@@ -548,6 +589,8 @@ class Pi05ExecutorTests(unittest.TestCase):
             0.01,
         )
         self.assertEqual(set(self.policy.infer_inputs[0][1]), {"cam_high", "cam_left_wrist", "cam_right_wrist"})
+        self.assertEqual(float(self.policy.infer_inputs[0][0][7]), 0.4)
+        self.assertEqual(float(self.policy.infer_inputs[0][0][15]), 0.8)
         self.assertEqual(
             self.camera.calls,
             ["head", "left_wrist", "right_wrist"],
@@ -851,6 +894,39 @@ class Pi05ExecutorTests(unittest.TestCase):
             status["last_chunk_first_arm_delta_from_feedback_rad"],
             0.01,
         )
+        expected_body = self.robot.state[17:21]
+        self.assertEqual(
+            status["body_order"],
+            ["waist.pitch", "waist.yaw", "head.yaw", "head.pitch"],
+        )
+        self.assertEqual(
+            status["body_hold_reference"],
+            "policy_session_start_feedback",
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_observation_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_server_body"],
+            np.asarray((9.0, 8.0, 7.0, 6.0)),
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_requested_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_effective_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_feedback_body"],
+            expected_body,
+        )
+        np.testing.assert_array_equal(
+            status["last_chunk_body_hold_target"],
+            expected_body,
+        )
 
     def test_execution_slew_target_keeps_advancing_while_feedback_lags(self) -> None:
         def large_jump_chunk(_call_number: int) -> np.ndarray:
@@ -977,6 +1053,309 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(self.robot.deinit_calls, 0)
         self.executor.close()
         self.assertEqual(self.robot.deinit_calls, 0)
+
+    def test_dual_separate_dry_run_validates_both_prompts_and_gates_full_plan(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.executor.probe()
+        result = self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+
+        self.assertEqual(result["inference_mode"], "dual_separate")
+        self.assertEqual(result["right_prompt"], right_prompt)
+        self.assertEqual(len(result["prompt_results"]), 2)
+        left_preview = np.asarray(
+            result["prompt_results"][0]["first_effective_action"]
+        )
+        right_preview = np.asarray(
+            result["prompt_results"][1]["first_effective_action"]
+        )
+        np.testing.assert_array_equal(left_preview[8:16], self.robot.state[8:16])
+        np.testing.assert_array_equal(right_preview[:7], np.zeros(7))
+        self.assertEqual(right_preview[7], 1.5)
+        self.assertAlmostEqual(
+            result["prompt_results"][1]["server_first_action"][0],
+            0.01,
+        )
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs],
+            [left_prompt, right_prompt],
+        )
+        status = self.executor.status()
+        self.assertEqual(status["task_stage"], "ready")
+        self.assertEqual(status["active_prompt"], left_prompt)
+        self.assertEqual(status["right_prompt"], right_prompt)
+
+        with self.assertRaisesRegex(Pi05SafetyError, "exactly match"):
+            self.executor.start(
+                left_prompt,
+                "lease",
+                confirmation=REQUIRED_CONFIRMATION,
+                inference_mode="dual_separate",
+                right_prompt="Grasp Pepsi with the right hand",
+            )
+        self.assertEqual(self.robot.begin_calls, 0)
+
+    def test_prompt_status_rejects_ambiguous_plans_before_camera_or_inference(self) -> None:
+        self.policy.metadata_value["status_mode"] = "prompt"
+        self.executor.probe()
+
+        with self.assertRaisesRegex(Pi05SafetyError, "dual_continuous"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand and Pepsi with the right hand",
+                "lease",
+                inference_mode="dual_continuous",
+            )
+        with self.assertRaisesRegex(Pi05SafetyError, "exactly one"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola",
+                "lease",
+                inference_mode="custom",
+            )
+        with self.assertRaisesRegex(Pi05SafetyError, "match active_hand"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand",
+                "lease",
+                inference_mode="single",
+                active_hand="right",
+            )
+
+        self.assertEqual(self.policy.infer_calls, 0)
+        self.assertEqual(self.camera_lease.acquired, 0)
+        self.assertEqual(self.executor.status()["phase"], PHASE_IDLE)
+
+    def test_non_none_status_requires_is_success_and_true_stops_before_chunk(self) -> None:
+        self.policy.metadata_value["status_mode"] = "left"
+        self.executor.probe()
+        with self.assertRaisesRegex(Pi05SafetyError, "missing is_success"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand",
+                "lease",
+                inference_mode="single",
+                active_hand="left",
+            )
+        self.assertEqual(self.executor.status()["phase"], PHASE_FAULT)
+
+        self.executor.close()
+        self.setUp()
+        self.policy.raw_factory = lambda call: {
+            "type": "action_chunk",
+            "actions": [object()] * 50,
+            "is_success": call >= 2,
+        }
+        prompt = "custom task"
+        self.probe_and_dry_run(prompt)
+        self.executor.start(
+            prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+        )
+        status = self.wait_for_phase(PHASE_IDLE)
+        self.assertEqual(self.robot.steps, [])
+        self.assertTrue(status["last_is_success"])
+        self.assertEqual(status["completion_reason"], "server_success")
+        self.assertEqual(status["task_stage"], "completed")
+        self.assertEqual(self.robot.hold_calls[-1][1], "server_success")
+
+    def test_single_mode_freezes_the_inactive_side_at_run_initial_state(self) -> None:
+        self.robot.state[8:15] = np.linspace(0.11, 0.17, 7)
+        self.robot.state[15] = 0.63
+        prompt = "Grasp Coca-Cola with the left hand"
+        self.executor.probe()
+        self.executor.dry_run(
+            prompt,
+            "lease",
+            inference_mode="single",
+            active_hand="left",
+        )
+        self.executor.start(
+            prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="single",
+            active_hand="left",
+            steps_per_chunk=50,
+            control_rate_hz=120,
+        )
+        self.wait_for_executed_steps(2)
+        status = self.executor.stop(timeout=1.0)
+
+        self.assertGreaterEqual(len(self.robot.steps), 2)
+        for action in self.robot.steps:
+            np.testing.assert_array_equal(action[8:16], self.robot.state[8:16])
+        self.assertEqual(status["inference_mode"], "single")
+        self.assertEqual(status["active_hand"], "left")
+
+    def test_dual_separate_counts_executed_left_gripper_homes_and_stops_on_right_success(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.state[8:15] = np.linspace(0.11, 0.17, 7)
+        self.robot.state[15] = 0.63
+        self.robot.state[16] = 0.41
+        initial_right = self.robot.state[8:16].copy()
+        self.robot.track_feedback = True
+        self.policy.raw_factory = lambda call: {
+            "type": "action_chunk",
+            "actions": [object()] * 50,
+            "is_success": call == 7,
+        }
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        self.executor.start(
+            left_prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+            steps_per_chunk=50,
+            control_rate_hz=1000,
+            joint_speed_deg_s=100000,
+        )
+        status = self.wait_for_phase(PHASE_IDLE, timeout=3.0)
+
+        self.assertEqual(status["completion_reason"], "server_success")
+        self.assertTrue(status["last_is_success"])
+        self.assertEqual(status["task_stage"], "completed")
+        self.assertEqual(status["active_prompt"], right_prompt)
+        self.assertEqual(status["left_gripper_consecutive"], 150)
+        self.assertEqual(status["executed_steps"], 200)
+        self.assertGreaterEqual(len(self.robot.steps), 206)
+        for action in self.robot.steps[:150]:
+            np.testing.assert_array_equal(action[8:16], initial_right)
+        home = self.robot.steps[150]
+        np.testing.assert_array_equal(home[list(range(0, 7))], np.zeros(7))
+        np.testing.assert_array_equal(home[list(range(8, 15))], np.zeros(7))
+        self.assertEqual(home[7], 1.5)
+        self.assertEqual(home[15], 0.0)
+        self.assertEqual(home[16], 0.25)
+        for action in self.robot.steps[150:]:
+            np.testing.assert_array_equal(action[:7], np.zeros(7))
+            self.assertEqual(action[7], 1.5)
+        self.assertLessEqual(
+            status["home_feedback_error_rad"],
+            status["home_feedback_tolerance_rad"],
+        )
+        self.assertGreaterEqual(
+            status["home_feedback_stable_steps"],
+            status["home_feedback_required_stable_steps"],
+        )
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs],
+            [
+                left_prompt,
+                right_prompt,
+                left_prompt,
+                left_prompt,
+                left_prompt,
+                right_prompt,
+                right_prompt,
+            ],
+        )
+
+    def test_dual_separate_counter_advances_only_after_successful_policy_step(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.fail_on_step = 150
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        self.executor.start(
+            left_prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+            steps_per_chunk=50,
+            control_rate_hz=1000,
+        )
+        status = self.wait_for_phase(PHASE_FAULT, timeout=3.0)
+        self.assertIn("policy step failed deterministically", status["fault"])
+        self.assertEqual(status["executed_steps"], 149)
+        self.assertEqual(status["left_gripper_consecutive"], 149)
+        self.assertEqual(len(self.robot.steps), 149)
+
+    def test_direction_semantics_and_fixed_status_side_are_checked_before_inference(self) -> None:
+        self.executor.probe()
+        with self.assertRaisesRegex(Pi05SafetyError, "match active_hand"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand",
+                "lease",
+                inference_mode="single",
+                active_hand="right",
+            )
+        self.assertEqual(self.policy.infer_calls, 0)
+
+        self.executor.close()
+        self.setUp()
+        self.policy.metadata_value["status_mode"] = "left"
+        self.executor.probe()
+        with self.assertRaisesRegex(Pi05SafetyError, "incompatible"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the right hand",
+                "lease",
+                inference_mode="single",
+                active_hand="right",
+            )
+        with self.assertRaisesRegex(Pi05SafetyError, "fixed-side"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand",
+                "lease",
+                inference_mode="dual_separate",
+                right_prompt="Grasp Vita Coconut with the right hand",
+            )
+        self.assertEqual(self.policy.infer_calls, 0)
+
+    def test_dual_separate_never_starts_right_stage_before_home_feedback_converges(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.state[0] = 0.5
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        with mock.patch(
+            "control.web_control.pi05_executor.DUAL_SEPARATE_HOME_TIMEOUT_S",
+            0.03,
+        ):
+            self.executor.start(
+                left_prompt,
+                "lease",
+                confirmation=REQUIRED_CONFIRMATION,
+                inference_mode="dual_separate",
+                right_prompt=right_prompt,
+                steps_per_chunk=50,
+                control_rate_hz=1000,
+                joint_speed_deg_s=100000,
+            )
+            status = self.wait_for_phase(PHASE_FAULT, timeout=3.0)
+
+        self.assertIn("home feedback did not converge", status["fault"])
+        # The only right prompt was the read-only second dry-run validation;
+        # execution itself never requested a right-stage chunk.
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs].count(right_prompt),
+            1,
+        )
+        self.assertGreaterEqual(len(self.robot.steps), 151)
+        for action in self.robot.steps[150:]:
+            np.testing.assert_array_equal(action[list(range(0, 7))], np.zeros(7))
+            self.assertEqual(action[7], 1.5)
 
 
 if __name__ == "__main__":

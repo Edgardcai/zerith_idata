@@ -41,6 +41,10 @@ def validate_task(payload):
     if len(prompt.encode('utf-8')) > 230:
         raise ValueError('提示词过长，厂商会将其用作目录名；请控制在 230 UTF-8 字节内')
     result = {'task_name': prompt}
+    record_depth = payload.get('record_depth', False)
+    if type(record_depth) is not bool:
+        raise ValueError('记录深度图必须是布尔值')
+    result['record_depth'] = record_depth
     for key, default, low, high in [('task_id',1,0,999999),('subtask_num',2,1,20),('max_episode_time',1000,1,1200),('frequency',30,1,60)]:
         value = payload.get(key, default)
         if isinstance(value, bool): raise ValueError(f'{key} 必须为整数')

@@ -1,0 +1,13 @@
+[Unit]
+Description=Validated parallel storage extension for ZERITH collection
+After=robotd.service
+PartOf=robotd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/robot/collection_storage_fast/tools/boot.py
+RemainAfterExit=yes
+TimeoutStartSec=240
+
+[Install]
+WantedBy=robotd.service

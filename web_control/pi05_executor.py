@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import math
+import re
 import threading
 import time
 from typing import Any, Callable, Mapping, Protocol, Sequence
@@ -26,10 +27,7 @@ from .pi05_protocol import (
     ACTION_DIM,
     ACTION_HORIZON,
     CAMERA_NAMES,
-    GRIPPER_CLOSED_VALUE,
     GRIPPER_INDICES,
-    GRIPPER_OPEN_VALUE,
-    GRIPPER_VALUE_TOLERANCE,
     STATE_DIM,
     ZerithJsonPolicyClient,
     probe_healthz,
@@ -63,6 +61,18 @@ DEFAULT_JOINT_SPEED_DEG_S = 30.0
 # Backwards-compatible public name used by deployment documentation.
 CONTROL_RATE_HZ = DEFAULT_CONTROL_RATE_HZ
 ARM_JOINT_INDICES = (*range(0, 7), *range(8, 15))
+LEFT_ARM_JOINT_INDICES = tuple(range(0, 7))
+RIGHT_ARM_JOINT_INDICES = tuple(range(8, 15))
+LEFT_SIDE_INDICES = tuple(range(0, 8))
+RIGHT_SIDE_INDICES = tuple(range(8, 16))
+INFERENCE_MODES = ("custom", "single", "dual_continuous", "dual_separate")
+LEFT_GRIPPER_CLOSE_THRESHOLD = 0.2
+LEFT_GRIPPER_CLOSE_REQUIRED_STEPS = 150
+DUAL_SEPARATE_HOME_TOLERANCE_RAD = 0.05
+DUAL_SEPARATE_HOME_STABLE_STEPS = 5
+DUAL_SEPARATE_HOME_TIMEOUT_S = 20.0
+
+_PROMPT_DIRECTION_PATTERN = re.compile(r"\b(left|right)\b", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +138,23 @@ class _Chunk:
     latency_ms: float
     camera_ages_ms: dict[str, float]
     observation_state: np.ndarray
+    server_first_action: np.ndarray
+    is_success: bool
+
+
+@dataclass(frozen=True)
+class _InferencePlan:
+    mode: str
+    prompt: str
+    active_hand: str | None
+    right_prompt: str | None
+
+    @property
+    def prompts(self) -> tuple[str, ...]:
+        if self.mode == "dual_separate":
+            assert self.right_prompt is not None
+            return (self.prompt, self.right_prompt)
+        return (self.prompt,)
 
 
 def _default_policy_factory(host: str, port: int) -> PolicyClientProtocol:
@@ -145,6 +172,138 @@ def _normalise_prompt(prompt: Any) -> str:
     if len(value) > 1000:
         raise Pi05SafetyError("prompt must not exceed 1000 characters")
     return value
+
+
+def _normalise_inference_plan(
+    prompt: Any,
+    *,
+    inference_mode: Any = "custom",
+    active_hand: Any = None,
+    right_prompt: Any = None,
+) -> _InferencePlan:
+    if not isinstance(inference_mode, str):
+        raise Pi05SafetyError(
+            f"inference_mode must be one of {list(INFERENCE_MODES)!r}"
+        )
+    mode = inference_mode.strip().lower()
+    if mode not in INFERENCE_MODES:
+        raise Pi05SafetyError(
+            f"inference_mode must be one of {list(INFERENCE_MODES)!r}"
+        )
+
+    first_prompt = _normalise_prompt(prompt)
+    selected_hand: str | None = None
+    if active_hand is not None:
+        if not isinstance(active_hand, str):
+            raise Pi05SafetyError("active_hand must be 'left' or 'right'")
+        selected_hand = active_hand.strip().lower()
+        if selected_hand not in ("left", "right"):
+            raise Pi05SafetyError("active_hand must be 'left' or 'right'")
+
+    selected_right_prompt: str | None = None
+    if right_prompt is not None:
+        selected_right_prompt = _normalise_prompt(right_prompt)
+
+    if mode == "single":
+        if selected_hand is None:
+            raise Pi05SafetyError("single inference requires active_hand='left' or 'right'")
+        if selected_right_prompt is not None:
+            raise Pi05SafetyError("single inference does not accept right_prompt")
+    elif mode == "dual_separate":
+        if selected_hand is not None:
+            raise Pi05SafetyError("dual_separate inference does not accept active_hand")
+        if selected_right_prompt is None:
+            raise Pi05SafetyError("dual_separate inference requires right_prompt")
+    else:
+        if selected_hand is not None:
+            raise Pi05SafetyError(f"{mode} inference does not accept active_hand")
+        if selected_right_prompt is not None:
+            raise Pi05SafetyError(f"{mode} inference does not accept right_prompt")
+
+    plan = _InferencePlan(
+        mode=mode,
+        prompt=first_prompt,
+        active_hand=selected_hand,
+        right_prompt=selected_right_prompt,
+    )
+    _validate_plan_direction_semantics(plan)
+    return plan
+
+
+def _prompt_direction(prompt: str) -> str | None:
+    directions = {
+        match.group(1).lower()
+        for match in _PROMPT_DIRECTION_PATTERN.finditer(prompt)
+    }
+    if len(directions) != 1:
+        return None
+    return next(iter(directions))
+
+
+def _validate_plan_direction_semantics(plan: _InferencePlan) -> None:
+    """Keep arm masking/stage routing consistent with the natural-language task."""
+
+    if plan.mode == "single" and _prompt_direction(plan.prompt) != plan.active_hand:
+        raise Pi05SafetyError(
+            "single inference prompt must contain exactly one hand direction "
+            "and match active_hand"
+        )
+    if plan.mode == "dual_separate":
+        directions = tuple(_prompt_direction(value) for value in plan.prompts)
+        if directions != ("left", "right"):
+            raise Pi05SafetyError(
+                "dual_separate prompts must identify left first and right second"
+            )
+
+
+def _validate_plan_for_status_mode(
+    plan: _InferencePlan,
+    status_mode: Any,
+) -> None:
+    if (
+        plan.mode == "single"
+        and status_mode in ("left", "right")
+        and status_mode != plan.active_hand
+    ):
+        raise Pi05SafetyError(
+            f"single {plan.active_hand}-hand inference is incompatible with "
+            f"metadata status_mode={status_mode!r}"
+        )
+    if plan.mode == "dual_separate" and status_mode in ("left", "right"):
+        raise Pi05SafetyError(
+            "dual_separate inference requires metadata status_mode='none' or "
+            "'prompt'; a fixed-side status can report success for the wrong stage"
+        )
+    if status_mode != "prompt":
+        return
+    if plan.mode == "dual_continuous":
+        raise Pi05SafetyError(
+            "dual_continuous inference is incompatible with metadata "
+            "status_mode='prompt' because its prompt contains both hands"
+        )
+
+    prompt_directions = tuple(_prompt_direction(value) for value in plan.prompts)
+    if any(direction is None for direction in prompt_directions):
+        raise Pi05SafetyError(
+            "metadata status_mode='prompt' requires every inference prompt "
+            "to contain exactly one of 'left' or 'right'"
+        )
+    if plan.mode == "single" and prompt_directions[0] != plan.active_hand:
+        raise Pi05SafetyError(
+            "single inference prompt direction must match active_hand when "
+            "metadata status_mode='prompt'"
+        )
+    if plan.mode == "dual_separate" and prompt_directions != ("left", "right"):
+        raise Pi05SafetyError(
+            "dual_separate prompts must identify left first and right second "
+            "when metadata status_mode='prompt'"
+        )
+
+
+def _initial_task_stage(plan: _InferencePlan) -> str:
+    if plan.mode == "dual_separate":
+        return "dual_separate_left"
+    return plan.mode
 
 
 def _normalise_host(host: Any) -> str:
@@ -232,35 +391,15 @@ def _strict_chunk(value: Any) -> np.ndarray:
         raise Pi05SafetyError(f"action chunk must have shape {expected}, got {chunk.shape}")
     if not np.isfinite(chunk).all():
         raise Pi05SafetyError("action chunk contains NaN or Inf")
-    for index in GRIPPER_INDICES:
-        values = chunk[:, index]
-        opened = np.isclose(
-            values,
-            GRIPPER_OPEN_VALUE,
-            rtol=0.0,
-            atol=GRIPPER_VALUE_TOLERANCE,
-        )
-        closed = np.isclose(
-            values,
-            GRIPPER_CLOSED_VALUE,
-            rtol=0.0,
-            atol=GRIPPER_VALUE_TOLERANCE,
-        )
-        if not np.logical_or(opened, closed).all():
-            invalid = float(values[np.flatnonzero(~np.logical_or(opened, closed))[0]])
-            raise Pi05SafetyError(
-                f"action gripper index {index} must contain only 0 or 1.5, got {invalid!r}"
-            )
-        # Canonicalise values accepted within the wire tolerance.
-        chunk[:, index] = np.where(opened, GRIPPER_OPEN_VALUE, GRIPPER_CLOSED_VALUE)
     return chunk
 
 
 def _apply_hold_and_zero(chunk: np.ndarray, state: np.ndarray) -> np.ndarray:
     """Apply the executor-side copy of the mandatory final action transform.
 
-    ``RobotService.policy_step`` repeats this transform against a newly read
-    state immediately before each hardware write.  Keeping it here makes a
+    ``RobotService.policy_step`` repeats the final transform immediately before
+    each hardware write, using the fixed waist/head feedback captured when the
+    policy session began.  Keeping an observation-based copy here makes a
     dry-run capable of proving the wire-to-hardware conversion without calling
     a setter and prevents unsafe fields from entering the action buffer.
     """
@@ -271,6 +410,52 @@ def _apply_hold_and_zero(chunk: np.ndarray, state: np.ndarray) -> np.ndarray:
     if not np.isfinite(effective).all():
         raise Pi05SafetyError("effective action chunk contains NaN or Inf")
     return effective
+
+
+def _dry_run_summary(
+    actions: np.ndarray,
+    observation: _Observation,
+    *,
+    prompt: str,
+    latency_ms: float,
+    is_success: bool,
+) -> dict[str, Any]:
+    effective = _apply_hold_and_zero(actions, observation.state)
+    first_arm_delta = float(
+        np.max(
+            np.abs(
+                effective[0, list(ARM_JOINT_INDICES)]
+                - observation.state[list(ARM_JOINT_INDICES)]
+            )
+        )
+    )
+    hold_ok = bool(
+        np.array_equal(
+            effective[:, 17:21],
+            np.broadcast_to(observation.state[17:21], (ACTION_HORIZON, 4)),
+        )
+    )
+    base_zero_ok = bool(np.count_nonzero(effective[:, 21:23]) == 0)
+    if not hold_ok or not base_zero_ok:
+        raise Pi05SafetyError("dry-run hold/zero transformation did not verify")
+    return {
+        "ok": True,
+        "prompt": prompt,
+        "is_success": is_success,
+        "state_dim": int(observation.state.shape[0]),
+        "chunk_length": int(actions.shape[0]),
+        "action_dim": int(actions.shape[1]),
+        "hold_verified": hold_ok,
+        "base_zero_verified": base_zero_ok,
+        "gripper_values": {
+            str(index): sorted(float(value) for value in np.unique(actions[:, index]))
+            for index in GRIPPER_INDICES
+        },
+        "first_effective_action": effective[0].tolist(),
+        "first_arm_delta_from_observation_rad": first_arm_delta,
+        "camera_ages_ms": dict(observation.camera_ages_ms),
+        "inference_latency_ms": latency_ms,
+    }
 
 
 class Pi05Executor:
@@ -339,7 +524,18 @@ class Pi05Executor:
         self._dry_run_ok = False
         self._dry_run_monotonic: float | None = None
         self._dry_run_prompt: str | None = None
+        self._dry_run_plan: _InferencePlan | None = None
         self._prompt = ""
+        self._inference_mode = "custom"
+        self._task_stage = "idle"
+        self._active_prompt = ""
+        self._right_prompt: str | None = None
+        self._active_hand: str | None = None
+        self._last_is_success = False
+        self._completion_reason: str | None = None
+        self._left_gripper_consecutive = 0
+        self._home_feedback_error_rad: float | None = None
+        self._home_feedback_stable_steps = 0
         self._lease_id: str | None = None
         self._session_id: str | None = None
         self._steps_per_chunk = DEFAULT_STEPS_PER_CHUNK
@@ -356,6 +552,12 @@ class Pi05Executor:
         self._last_chunk_first_arm_delta_from_observation_rad: float | None = None
         self._last_chunk_first_arm_delta_from_feedback_rad: float | None = None
         self._max_chunk_first_arm_delta_from_feedback_rad: float | None = None
+        self._last_chunk_observation_body: list[float] | None = None
+        self._last_chunk_server_body: list[float] | None = None
+        self._last_chunk_requested_body: list[float] | None = None
+        self._last_chunk_effective_body: list[float] | None = None
+        self._last_chunk_feedback_body: list[float] | None = None
+        self._last_chunk_body_hold_target: list[float] | None = None
 
     # ------------------------------------------------------------------
     # Public status and transitions
@@ -387,9 +589,31 @@ class Pi05Executor:
                 "active": phase in (PHASE_RUNNING, PHASE_STOPPING),
                 "fault": self._fault,
                 "metadata_ok": self._metadata_ok,
+                "metadata_status_mode": (
+                    (self._metadata or {}).get("status_mode")
+                ),
                 "dry_run_ok": self._dry_run_ok,
                 "dry_run_age_ms": dry_run_age_ms,
                 "prompt": self._prompt,
+                "inference_mode": self._inference_mode,
+                "task_stage": self._task_stage,
+                "active_prompt": self._active_prompt,
+                "right_prompt": self._right_prompt,
+                "active_hand": self._active_hand,
+                "last_is_success": self._last_is_success,
+                "completion_reason": self._completion_reason,
+                "left_gripper_consecutive": self._left_gripper_consecutive,
+                "left_gripper_close_threshold": LEFT_GRIPPER_CLOSE_THRESHOLD,
+                "left_gripper_close_required_steps": (
+                    LEFT_GRIPPER_CLOSE_REQUIRED_STEPS
+                ),
+                "home_feedback_error_rad": self._home_feedback_error_rad,
+                "home_feedback_tolerance_rad": DUAL_SEPARATE_HOME_TOLERANCE_RAD,
+                "home_feedback_stable_steps": self._home_feedback_stable_steps,
+                "home_feedback_required_stable_steps": (
+                    DUAL_SEPARATE_HOME_STABLE_STEPS
+                ),
+                "home_timeout_s": DUAL_SEPARATE_HOME_TIMEOUT_S,
                 "inference_latency_ms": self._inference_latency_ms,
                 "chunk_length": self._chunk_length,
                 "executed_steps": self._executed_steps,
@@ -415,6 +639,43 @@ class Pi05Executor:
                 ),
                 "max_chunk_first_arm_delta_from_feedback_rad": (
                     self._max_chunk_first_arm_delta_from_feedback_rad
+                ),
+                "body_order": [
+                    "waist.pitch",
+                    "waist.yaw",
+                    "head.yaw",
+                    "head.pitch",
+                ],
+                "body_hold_reference": "policy_session_start_feedback",
+                "last_chunk_observation_body": (
+                    list(self._last_chunk_observation_body)
+                    if self._last_chunk_observation_body is not None
+                    else None
+                ),
+                "last_chunk_server_body": (
+                    list(self._last_chunk_server_body)
+                    if self._last_chunk_server_body is not None
+                    else None
+                ),
+                "last_chunk_requested_body": (
+                    list(self._last_chunk_requested_body)
+                    if self._last_chunk_requested_body is not None
+                    else None
+                ),
+                "last_chunk_effective_body": (
+                    list(self._last_chunk_effective_body)
+                    if self._last_chunk_effective_body is not None
+                    else None
+                ),
+                "last_chunk_feedback_body": (
+                    list(self._last_chunk_feedback_body)
+                    if self._last_chunk_feedback_body is not None
+                    else None
+                ),
+                "last_chunk_body_hold_target": (
+                    list(self._last_chunk_body_hold_target)
+                    if self._last_chunk_body_hold_target is not None
+                    else None
                 ),
                 "default_steps_per_chunk": DEFAULT_STEPS_PER_CHUNK,
                 "default_control_rate_hz": DEFAULT_CONTROL_RATE_HZ,
@@ -456,6 +717,13 @@ class Pi05Executor:
                 self.host = selected_host
                 self.port = selected_port
                 self._fault = None
+                self._task_stage = "idle"
+                self._active_prompt = ""
+                self._last_is_success = False
+                self._completion_reason = None
+                self._left_gripper_consecutive = 0
+                self._home_feedback_error_rad = None
+                self._home_feedback_stable_steps = 0
                 self._clear_connection_readiness_locked()
 
             client: PolicyClientProtocol | None = None
@@ -511,10 +779,23 @@ class Pi05Executor:
                     self._finish_idle_locked()
         return self.status()
 
-    def dry_run(self, prompt: str, lease_id: str) -> dict[str, Any]:
-        """Request and validate exactly one chunk without any hardware setter."""
+    def dry_run(
+        self,
+        prompt: str,
+        lease_id: str,
+        *,
+        inference_mode: str = "custom",
+        active_hand: str | None = None,
+        right_prompt: str | None = None,
+    ) -> dict[str, Any]:
+        """Validate every prompt in a plan without calling a hardware setter."""
 
-        prompt = _normalise_prompt(prompt)
+        plan = _normalise_inference_plan(
+            prompt,
+            inference_mode=inference_mode,
+            active_hand=active_hand,
+            right_prompt=right_prompt,
+        )
         if not isinstance(lease_id, str) or not lease_id:
             raise Pi05SafetyError("dry-run requires a non-empty control lease")
         with self._operation_lock:
@@ -524,60 +805,93 @@ class Pi05Executor:
                     raise Pi05StateError(f"dry-run is not allowed while phase={self._phase}")
                 if not self._metadata_ok or self._policy is None:
                     raise Pi05StateError("probe metadata successfully before dry-run")
+                metadata = dict(self._metadata or {})
+            _validate_plan_for_status_mode(plan, metadata.get("status_mode"))
+            with self._lock:
                 self._dry_run_ok = False
-                self._prompt = prompt
+                self._dry_run_plan = None
+                self._prompt = plan.prompt
+                self._inference_mode = plan.mode
+                self._task_stage = "dry_run"
+                self._active_prompt = plan.prompt
+                self._right_prompt = plan.right_prompt
+                self._active_hand = plan.active_hand
+                self._last_is_success = False
+                self._completion_reason = None
+                self._left_gripper_consecutive = 0
+                self._home_feedback_error_rad = None
+                self._home_feedback_stable_steps = 0
 
             camera_acquired = False
             try:
                 self._require_live_lease(lease_id)
                 camera_acquired = self._acquire_camera()
-                observation = self._capture_initial_observation(
-                    lease_id,
-                    session_id=None,
-                )
-                request_started = self._clock()
-                actions, _raw = self._infer(observation, prompt)
+                summaries: list[dict[str, Any]] = []
                 response_time = self._clock()
-                latency_ms = max(0.0, (response_time - request_started) * 1000.0)
-                effective = _apply_hold_and_zero(actions, observation.state)
-                first_arm_delta = float(
-                    np.max(
-                        np.abs(
-                            effective[0, list(ARM_JOINT_INDICES)]
-                            - observation.state[list(ARM_JOINT_INDICES)]
-                        )
+                for prompt_index, selected_prompt in enumerate(plan.prompts):
+                    observation = (
+                        self._capture_initial_observation(lease_id, session_id=None)
+                        if prompt_index == 0
+                        else self._capture_observation(lease_id, session_id=None)
                     )
-                )
-                hold_ok = bool(
-                    np.array_equal(effective[:, 17:21], np.broadcast_to(observation.state[17:21], (ACTION_HORIZON, 4)))
-                )
-                base_zero_ok = bool(np.count_nonzero(effective[:, 21:23]) == 0)
-                if not hold_ok or not base_zero_ok:
-                    raise Pi05SafetyError("dry-run hold/zero transformation did not verify")
+                    request_started = self._clock()
+                    actions, raw = self._infer(observation, selected_prompt)
+                    response_time = self._clock()
+                    latency_ms = max(
+                        0.0,
+                        (response_time - request_started) * 1000.0,
+                    )
+                    is_success = self._response_is_success(raw)
+                    dry_run_stage = (
+                        "dual_separate_right"
+                        if plan.mode == "dual_separate" and prompt_index == 1
+                        else _initial_task_stage(plan)
+                    )
+                    executable_actions = np.stack(
+                        [
+                            self._apply_plan_action_mask(
+                                action,
+                                plan=plan,
+                                task_stage=dry_run_stage,
+                                run_initial_state=observation.state,
+                            )
+                            for action in actions
+                        ]
+                    )
+                    summary = _dry_run_summary(
+                        executable_actions,
+                        observation,
+                        prompt=selected_prompt,
+                        latency_ms=latency_ms,
+                        is_success=is_success,
+                    )
+                    summary["server_first_action"] = actions[0].tolist()
+                    summary["task_stage"] = dry_run_stage
+                    summaries.append(summary)
+                    with self._lock:
+                        self._active_prompt = selected_prompt
+                        self._last_is_success = is_success
+                        self._inference_latency_ms = latency_ms
+                        self._chunk_length = int(actions.shape[0])
+                        self._camera_ages_ms = dict(observation.camera_ages_ms)
                 with self._lock:
                     self._phase = PHASE_DRY_RUN_READY
                     self._dry_run_ok = True
                     self._dry_run_monotonic = response_time
-                    self._dry_run_prompt = prompt
-                    self._inference_latency_ms = latency_ms
-                    self._chunk_length = int(actions.shape[0])
-                    self._camera_ages_ms = dict(observation.camera_ages_ms)
-                return {
-                    "ok": True,
-                    "state_dim": int(observation.state.shape[0]),
-                    "chunk_length": int(actions.shape[0]),
-                    "action_dim": int(actions.shape[1]),
-                    "hold_verified": hold_ok,
-                    "base_zero_verified": base_zero_ok,
-                    "gripper_values": {
-                        str(index): sorted(float(value) for value in np.unique(actions[:, index]))
-                        for index in GRIPPER_INDICES
-                    },
-                    "first_effective_action": effective[0].tolist(),
-                    "first_arm_delta_from_observation_rad": first_arm_delta,
-                    "camera_ages_ms": dict(observation.camera_ages_ms),
-                    "inference_latency_ms": latency_ms,
-                }
+                    self._dry_run_prompt = plan.prompt
+                    self._dry_run_plan = plan
+                    self._task_stage = "ready"
+                    self._active_prompt = plan.prompt
+                result = dict(summaries[0])
+                result.update(
+                    {
+                        "inference_mode": plan.mode,
+                        "active_hand": plan.active_hand,
+                        "right_prompt": plan.right_prompt,
+                        "prompt_results": summaries,
+                    }
+                )
+                return result
             except BaseException as exc:
                 self._latch_fault(exc)
                 raise
@@ -594,6 +908,9 @@ class Pi05Executor:
         steps_per_chunk: int = DEFAULT_STEPS_PER_CHUNK,
         control_rate_hz: float = DEFAULT_CONTROL_RATE_HZ,
         joint_speed_deg_s: float = DEFAULT_JOINT_SPEED_DEG_S,
+        inference_mode: str = "custom",
+        active_hand: str | None = None,
+        right_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Start continuous background execution after all operator gates pass.
 
@@ -603,7 +920,12 @@ class Pi05Executor:
         an explicit stop, a fault, or lease loss.
         """
 
-        prompt = _normalise_prompt(prompt)
+        plan = _normalise_inference_plan(
+            prompt,
+            inference_mode=inference_mode,
+            active_hand=active_hand,
+            right_prompt=right_prompt,
+        )
         if confirmation != REQUIRED_CONFIRMATION:
             raise Pi05SafetyError("exact Pi0.5 motion confirmation phrase is required")
         if (
@@ -634,8 +956,14 @@ class Pi05Executor:
                     raise Pi05StateError("a successful dry-run is required before start")
                 if not self._metadata_ok or not self._dry_run_ok:
                     raise Pi05StateError("probe and dry-run must both be successful")
-                if prompt != self._dry_run_prompt:
-                    raise Pi05SafetyError("start prompt must exactly match the validated dry-run prompt")
+                _validate_plan_for_status_mode(
+                    plan,
+                    (self._metadata or {}).get("status_mode"),
+                )
+                if plan != self._dry_run_plan:
+                    raise Pi05SafetyError(
+                        "start inference plan must exactly match the validated dry-run plan"
+                    )
                 if self._policy is None or not bool(getattr(self._policy, "usable", True)):
                     raise Pi05StateError("policy connection is not usable; probe again")
                 # Register this start attempt with a fresh stop token before
@@ -682,7 +1010,17 @@ class Pi05Executor:
                         start_cancelled = False
                         self._phase = PHASE_RUNNING
                         self._fault = None
-                        self._prompt = prompt
+                        self._prompt = plan.prompt
+                        self._inference_mode = plan.mode
+                        self._task_stage = _initial_task_stage(plan)
+                        self._active_prompt = plan.prompt
+                        self._right_prompt = plan.right_prompt
+                        self._active_hand = plan.active_hand
+                        self._last_is_success = False
+                        self._completion_reason = None
+                        self._left_gripper_consecutive = 0
+                        self._home_feedback_error_rad = None
+                        self._home_feedback_stable_steps = 0
                         self._lease_id = lease_id
                         self._session_id = session_id
                         self._steps_per_chunk = steps_per_chunk
@@ -696,10 +1034,16 @@ class Pi05Executor:
                         self._last_chunk_first_arm_delta_from_observation_rad = None
                         self._last_chunk_first_arm_delta_from_feedback_rad = None
                         self._max_chunk_first_arm_delta_from_feedback_rad = None
+                        self._last_chunk_observation_body = None
+                        self._last_chunk_server_body = None
+                        self._last_chunk_requested_body = None
+                        self._last_chunk_effective_body = None
+                        self._last_chunk_feedback_body = None
+                        self._last_chunk_body_hold_target = None
                         thread = threading.Thread(
                             target=self._run,
                             args=(
-                                prompt,
+                                plan,
                                 lease_id,
                                 steps_per_chunk,
                                 session_id,
@@ -773,6 +1117,9 @@ class Pi05Executor:
             thread = self._thread
             if self._phase in (PHASE_RUNNING, PHASE_STOPPING):
                 self._phase = PHASE_STOPPING
+                self._task_stage = "stopping"
+                if self._completion_reason is None:
+                    self._completion_reason = str(reason).strip() or "operator_stop"
             self._stop_event.set()
             lease_id = self._lease_id
             session_id = self._session_id
@@ -848,7 +1195,7 @@ class Pi05Executor:
     # ------------------------------------------------------------------
     def _run(
         self,
-        prompt: str,
+        plan: _InferencePlan,
         lease_id: str,
         steps_per_chunk: int,
         session_id: str,
@@ -857,6 +1204,7 @@ class Pi05Executor:
     ) -> None:
         camera_acquired = False
         normal_stop = False
+        completion_reason: str | None = None
         try:
             camera_acquired = self._acquire_camera()
             self._require_live_lease(lease_id)
@@ -869,20 +1217,26 @@ class Pi05Executor:
             chunk = self._request_chunk(
                 lease_id,
                 session_id,
-                prompt,
+                plan.prompt,
                 True,
             )
-            active_actions = self._activate_chunk(
-                chunk,
-                steps_per_chunk,
-            )
+            if chunk.is_success:
+                normal_stop = True
+                completion_reason = "server_success"
+                self._mark_server_success(plan.prompt)
+                active_actions = np.empty((0, ACTION_DIM), dtype=np.float64)
+            else:
+                active_actions = self._activate_chunk(chunk, steps_per_chunk)
             previous_command = chunk.observation_state.copy()
+            run_initial_state = chunk.observation_state.copy()
             max_arm_step_rad = (
                 math.radians(joint_speed_deg_s) / control_rate_hz
             )
             index = 0
+            task_stage = _initial_task_stage(plan)
+            active_prompt = plan.prompt
 
-            while True:
+            while not normal_stop:
                 if self._stop_event.is_set():
                     normal_stop = True
                     break
@@ -898,12 +1252,14 @@ class Pi05Executor:
                     chunk = self._request_chunk(
                         lease_id,
                         session_id,
-                        prompt,
+                        active_prompt,
                     )
-                    active_actions = self._activate_chunk(
-                        chunk,
-                        steps_per_chunk,
-                    )
+                    if chunk.is_success:
+                        normal_stop = True
+                        completion_reason = "server_success"
+                        self._mark_server_success(active_prompt)
+                        break
+                    active_actions = self._activate_chunk(chunk, steps_per_chunk)
                     index = 0
                     remaining = len(active_actions)
 
@@ -918,16 +1274,22 @@ class Pi05Executor:
                     self._require_live_lease(lease_id)
                     tick_started = self._clock()
                     raw_action = active_actions[index]
-                    action, limited_indices = _slew_limit_arm_action(
+                    requested_action = self._apply_plan_action_mask(
                         raw_action,
+                        plan=plan,
+                        task_stage=task_stage,
+                        run_initial_state=run_initial_state,
+                    )
+                    action, limited_indices = _slew_limit_arm_action(
+                        requested_action,
                         previous_command,
                         max_arm_step_rad,
                     )
                     # RobotService re-reads the latest 23-D state, reapplies
-                    # hold/zero, and only then sends action[:21].  Keeping the
-                    # synchronous call inside the barrier gives STOP a clear
-                    # drain point without interrupting an already in-flight
-                    # SDK operation.
+                    # the policy-session-start waist/head hold plus base zero,
+                    # and only then sends action[:21].  Keeping the synchronous
+                    # call inside the barrier gives STOP a clear drain point
+                    # without interrupting an already in-flight SDK operation.
                     step_result = self.robot.policy_step(
                         lease_id,
                         action.tolist(),
@@ -935,9 +1297,7 @@ class Pi05Executor:
                     )
                     if index == 0:
                         self._record_chunk_first_feedback_delta(step_result)
-                    previous_command[list(ARM_JOINT_INDICES)] = action[
-                        list(ARM_JOINT_INDICES)
-                    ]
+                    previous_command = action.copy()
                     with self._lock:
                         self._last_arm_slew_limited_indices = limited_indices
                         if limited_indices:
@@ -945,11 +1305,43 @@ class Pi05Executor:
                 index += 1
                 with self._lock:
                     self._executed_steps += 1
+                    if task_stage == "dual_separate_left":
+                        if float(raw_action[7]) > LEFT_GRIPPER_CLOSE_THRESHOLD:
+                            self._left_gripper_consecutive += 1
+                        else:
+                            self._left_gripper_consecutive = 0
+                        transition_to_right = (
+                            self._left_gripper_consecutive
+                            >= LEFT_GRIPPER_CLOSE_REQUIRED_STEPS
+                        )
+                    else:
+                        transition_to_right = False
                 elapsed = max(0.0, self._clock() - tick_started)
                 delay = max(0.0, 1.0 / control_rate_hz - elapsed)
                 if self._stop_event.wait(delay):
                     normal_stop = True
                     break
+                if transition_to_right:
+                    with self._lock:
+                        self._task_stage = "dual_separate_home"
+                    previous_command = self._home_dual_separate_arms(
+                        lease_id,
+                        session_id,
+                        previous_command,
+                        max_arm_step_rad=max_arm_step_rad,
+                        control_rate_hz=control_rate_hz,
+                    )
+                    assert plan.right_prompt is not None
+                    task_stage = "dual_separate_right"
+                    active_prompt = plan.right_prompt
+                    with self._lock:
+                        self._task_stage = task_stage
+                        self._active_prompt = active_prompt
+                    # Discard the unexecuted tail of the left chunk.  The next
+                    # loop iteration captures the post-home state and requests
+                    # the first right-hand chunk synchronously.
+                    active_actions = np.empty((0, ACTION_DIM), dtype=np.float64)
+                    index = 0
         except BaseException as exc:
             if self._stop_event.is_set() and self._phase_is_stopping():
                 normal_stop = True
@@ -961,15 +1353,21 @@ class Pi05Executor:
             self._close_policy(invalidate=True)
             with self._lock:
                 session_id = self._session_id
+                if completion_reason is None:
+                    completion_reason = self._completion_reason
+            cleanup_reason = (
+                completion_reason
+                or ("execution_stopped" if normal_stop else "executor_fault")
+            )
             self._best_effort_hold_zero(
                 lease_id,
                 session_id,
-                "execution_stopped" if normal_stop else "executor_fault",
+                cleanup_reason,
             )
             self._best_effort_end_session(
                 lease_id,
                 session_id,
-                "execution_stopped" if normal_stop else "executor_fault",
+                cleanup_reason,
             )
             if camera_acquired:
                 self._release_camera_best_effort()
@@ -978,7 +1376,161 @@ class Pi05Executor:
                 self._lease_id = None
                 self._thread = None
                 if normal_stop and self._phase != PHASE_FAULT:
+                    if self._completion_reason is None:
+                        self._completion_reason = completion_reason or "execution_stopped"
+                    if self._completion_reason == "server_success":
+                        self._task_stage = "completed"
+                    else:
+                        self._task_stage = "stopped"
                     self._finish_idle_locked()
+
+    @staticmethod
+    def _apply_plan_action_mask(
+        action: np.ndarray,
+        *,
+        plan: _InferencePlan,
+        task_stage: str,
+        run_initial_state: np.ndarray,
+    ) -> np.ndarray:
+        requested = np.asarray(action, dtype=np.float64).copy()
+        if requested.shape != (ACTION_DIM,):
+            raise Pi05SafetyError("activated policy action must be 23-D")
+        if plan.mode == "single":
+            inactive = (
+                RIGHT_SIDE_INDICES
+                if plan.active_hand == "left"
+                else LEFT_SIDE_INDICES
+            )
+            requested[list(inactive)] = run_initial_state[list(inactive)]
+        elif task_stage == "dual_separate_left":
+            requested[list(RIGHT_SIDE_INDICES)] = run_initial_state[
+                list(RIGHT_SIDE_INDICES)
+            ]
+        elif task_stage == "dual_separate_right":
+            requested[list(LEFT_ARM_JOINT_INDICES)] = 0.0
+            requested[7] = 1.5
+        if not np.isfinite(requested).all():
+            raise Pi05SafetyError("masked policy action contains NaN or Inf")
+        return requested
+
+    def _home_dual_separate_arms(
+        self,
+        lease_id: str,
+        session_id: str,
+        previous_command: np.ndarray,
+        *,
+        max_arm_step_rad: float,
+        control_rate_hz: float,
+    ) -> np.ndarray:
+        """Command both arms to zero while retaining the left-hand grasp.
+
+        The command first slews to zero, then remains at zero until all 14 arm
+        feedback joints stay inside the home tolerance for several consecutive
+        control ticks.  A bounded timeout faults instead of starting the right
+        stage while the physical arms may still be moving.
+        """
+
+        self._require_live_lease(lease_id)
+        state_result = self.robot.read_policy_state(
+            lease_id,
+            session_id=session_id,
+        )
+        if not isinstance(state_result, Mapping):
+            raise Pi05SafetyError("read_policy_state must return an object")
+        switch_state = _finite_vector(
+            state_result.get("state"),
+            STATE_DIM,
+            "dual_separate switch state",
+        )
+        target = np.asarray(previous_command, dtype=np.float64).copy()
+        target[list(ARM_JOINT_INDICES)] = 0.0
+        target[7] = 1.5
+        target[15] = 0.0
+        target[16] = switch_state[16]
+        target[17:21] = switch_state[17:21]
+        target[21:23] = 0.0
+        command = np.asarray(previous_command, dtype=np.float64).copy()
+        started = self._clock()
+        stable_steps = 0
+
+        while True:
+            if self._clock() - started > DUAL_SEPARATE_HOME_TIMEOUT_S:
+                raise Pi05SafetyError(
+                    "dual_separate arm home feedback did not converge within "
+                    f"{DUAL_SEPARATE_HOME_TIMEOUT_S:g}s"
+                )
+            with self._step_stop_barrier:
+                if self._stop_event.is_set():
+                    raise Pi05StateError("execution is stopping during arm home")
+                self._require_live_lease(lease_id)
+                tick_started = self._clock()
+                action, limited_indices = _slew_limit_arm_action(
+                    target,
+                    command,
+                    max_arm_step_rad,
+                )
+                step_result = self.robot.policy_step(
+                    lease_id,
+                    action.tolist(),
+                    session_id=session_id,
+                )
+                command = action.copy()
+                if not isinstance(step_result, Mapping):
+                    raise Pi05SafetyError("policy_step must return an object during arm home")
+                latest_state = _finite_vector(
+                    step_result.get("latest_state"),
+                    STATE_DIM,
+                    "dual_separate arm home feedback",
+                )
+                feedback_error = float(
+                    np.max(
+                        np.abs(latest_state[list(ARM_JOINT_INDICES)])
+                    )
+                )
+                command_at_home = bool(
+                    np.count_nonzero(command[list(ARM_JOINT_INDICES)]) == 0
+                )
+                if command_at_home and feedback_error <= DUAL_SEPARATE_HOME_TOLERANCE_RAD:
+                    stable_steps += 1
+                else:
+                    stable_steps = 0
+                with self._lock:
+                    self._last_arm_slew_limited_indices = limited_indices
+                    if limited_indices:
+                        self._arm_slew_limited_steps += 1
+                    self._home_feedback_error_rad = feedback_error
+                    self._home_feedback_stable_steps = stable_steps
+
+            if stable_steps >= DUAL_SEPARATE_HOME_STABLE_STEPS:
+                return command
+            elapsed = max(0.0, self._clock() - tick_started)
+            delay = max(0.0, 1.0 / control_rate_hz - elapsed)
+            if self._stop_event.wait(delay):
+                raise Pi05StateError("execution is stopping during arm home")
+
+    def _mark_server_success(self, prompt: str) -> None:
+        with self._lock:
+            self._last_is_success = True
+            self._completion_reason = "server_success"
+            self._task_stage = "completed"
+            self._active_prompt = prompt
+
+    def _response_is_success(self, raw: Mapping[str, Any]) -> bool:
+        if "is_success" in raw:
+            value = raw["is_success"]
+            if type(value) is not bool:
+                raise Pi05SafetyError(
+                    "policy response is_success must be a JSON boolean"
+                )
+            return value
+        with self._lock:
+            status_mode = (self._metadata or {}).get("status_mode")
+        if status_mode != "none":
+            raise Pi05SafetyError(
+                "policy response is missing is_success while metadata "
+                f"status_mode={status_mode!r}"
+            )
+        return False
 
     def _request_chunk(
         self,
@@ -996,20 +1548,25 @@ class Pi05Executor:
             else self._capture_observation(lease_id, session_id=session_id)
         )
         request_started = self._clock()
-        actions, _raw = self._infer(observation, prompt)
+        actions, raw = self._infer(observation, prompt)
+        is_success = self._response_is_success(raw)
         response_monotonic = self._clock()
         latency_ms = max(0.0, (response_monotonic - request_started) * 1000.0)
+        server_first_action = actions[0].copy()
         effective = _apply_hold_and_zero(actions, observation.state)
         with self._lock:
             self._inference_latency_ms = latency_ms
             self._chunk_length = int(actions.shape[0])
             self._camera_ages_ms = dict(observation.camera_ages_ms)
+            self._last_is_success = is_success
         return _Chunk(
             actions=effective.copy(),
             raw_length=int(actions.shape[0]),
             latency_ms=latency_ms,
             camera_ages_ms=dict(observation.camera_ages_ms),
             observation_state=observation.state.copy(),
+            server_first_action=server_first_action,
+            is_success=is_success,
         )
 
     def _activate_chunk(
@@ -1037,10 +1594,20 @@ class Pi05Executor:
             self._chunk_sequence += 1
             sequence = self._chunk_sequence
             self._last_chunk_first_arm_delta_from_observation_rad = first_delta
+            self._last_chunk_observation_body = (
+                chunk.observation_state[17:21].tolist()
+            )
+            self._last_chunk_server_body = (
+                chunk.server_first_action[17:21].tolist()
+            )
         logger.info(
-            "Pi0.5 chunk %d activated synchronously: first_arm_delta_from_observation=%.6f rad",
+            "Pi0.5 chunk %d activated synchronously: "
+            "first_arm_delta_from_observation=%.6f rad, "
+            "observation_body=%s, server_body=%s",
             sequence,
             first_delta,
+            chunk.observation_state[17:21].tolist(),
+            chunk.server_first_action[17:21].tolist(),
         )
         return selected
 
@@ -1052,11 +1619,27 @@ class Pi05Executor:
         try:
             latest = np.asarray(step_result.get("latest_state"), dtype=np.float64)
             effective = np.asarray(step_result.get("effective_action"), dtype=np.float64)
+            requested = np.asarray(
+                step_result.get("requested_action", effective),
+                dtype=np.float64,
+            )
+            hold_target = np.asarray(
+                step_result.get("body_hold_target", effective[17:21]),
+                dtype=np.float64,
+            )
         except (TypeError, ValueError):
             return
-        if latest.shape != (STATE_DIM,) or effective.shape != (ACTION_DIM,):
+        if (
+            latest.shape != (STATE_DIM,)
+            or effective.shape != (ACTION_DIM,)
+            or requested.shape != (ACTION_DIM,)
+            or hold_target.shape != (4,)
+        ):
             return
-        if not np.isfinite(latest).all() or not np.isfinite(effective).all():
+        if not all(
+            np.isfinite(values).all()
+            for values in (latest, effective, requested, hold_target)
+        ):
             return
         delta = float(
             np.max(
@@ -1072,10 +1655,26 @@ class Pi05Executor:
             if current_max is None or delta > current_max:
                 self._max_chunk_first_arm_delta_from_feedback_rad = delta
             sequence = self._chunk_sequence
+            self._last_chunk_requested_body = requested[17:21].tolist()
+            self._last_chunk_effective_body = effective[17:21].tolist()
+            self._last_chunk_feedback_body = latest[17:21].tolist()
+            self._last_chunk_body_hold_target = hold_target.tolist()
+            observation_body = self._last_chunk_observation_body
+            server_body = self._last_chunk_server_body
         logger.info(
-            "Pi0.5 chunk %d first command: max_arm_target_feedback_delta=%.6f rad",
+            "Pi0.5 chunk %d first command: "
+            "max_arm_target_feedback_delta=%.6f rad, "
+            "body_order=[waist.pitch, waist.yaw, head.yaw, head.pitch], "
+            "observation=%s, server_return=%s, requested=%s, "
+            "effective_command=%s, measured_feedback=%s, session_hold=%s",
             sequence,
             delta,
+            observation_body,
+            server_body,
+            requested[17:21].tolist(),
+            effective[17:21].tolist(),
+            latest[17:21].tolist(),
+            hold_target.tolist(),
         )
 
     def _infer(self, observation: _Observation, prompt: str) -> tuple[np.ndarray, dict[str, Any]]:
@@ -1260,6 +1859,8 @@ class Pi05Executor:
         with self._lock:
             self._fault = detail
             self._phase = PHASE_FAULT
+            self._task_stage = "fault"
+            self._completion_reason = "executor_fault"
             self._clear_connection_readiness_locked()
             self._stop_event.set()
         self._close_policy(invalidate=True)
@@ -1270,6 +1871,7 @@ class Pi05Executor:
         self._dry_run_ok = False
         self._dry_run_monotonic = None
         self._dry_run_prompt = None
+        self._dry_run_plan = None
 
     def _finish_idle_locked(self) -> None:
         self._phase = PHASE_IDLE

@@ -1,0 +1,20 @@
+{
+  "baseline_ms": [
+    368.00837500049965,
+    344.68818999994255,
+    360.69874100030574,
+    374.91472300098394
+  ],
+  "parallel_ms": [
+    229.92786599934334,
+    205.14921199901437,
+    224.6784849994583,
+    225.4979760000424
+  ],
+  "frames": 40,
+  "dataset_and_encoded_images_identical": true,
+  "decoded_videos_identical": true,
+  "fallback_equivalence": true,
+  "paced_30hz_frames": 200,
+  "paced_batch_p95_ms": 223.68289624982935
+}

@@ -110,7 +110,8 @@ class Collector:
                 taskfile=Path(session.get('source_dataset') or session['dataset'])/'task_meta.json'
                 if taskfile.exists() and taskfile.stat().st_mtime>=session['started']-1:
                     actual=json.loads(taskfile.read_text())
-                    if all(actual.get(k)==session['config'].get(k) for k in ['task_id','task_name','subtask_num','frequency']):
+                    if (all(actual.get(k)==session['config'].get(k) for k in ['task_id','task_name','subtask_num','frequency'])
+                            and actual.get('record_depth',False)==session['config'].get('record_depth',False)):
                         with self.lock:
                             self.accepted=True
                             if self.phase=='connecting':

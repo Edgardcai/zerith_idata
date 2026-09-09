@@ -80,7 +80,8 @@ class DeviceMonitor:
             {'key':'init','label':'机器人就绪','ok':fresh('system_init') and data('system_init').get('system_init')==2,'detail':data('system_init').get('text','状态未知')},
         ]
         battery=data('battery').get('percent') if fresh('battery') else None
-        if battery is not None:checks.append({'key':'battery','label':'电量','ok':battery>=20,'detail':f'{battery}%'})
+        # Display the reported charge without imposing a collection percentage threshold.
+        if battery is not None:checks.append({'key':'battery','label':'电量','ok':True,'detail':f'{battery}%'})
         else:checks.append({'key':'battery','label':'电量','ok':False,'detail':'电量状态未知'})
         joints=[]
         try:

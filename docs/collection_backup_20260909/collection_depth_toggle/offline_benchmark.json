@@ -1,0 +1,26 @@
+{
+  "baseline_rgbd_ms": [
+    299.59834000146657,
+    283.62431800087506,
+    297.1862960002909,
+    293.8747099997272
+  ],
+  "rgb_only_ms": [
+    88.01755300009972,
+    83.31944899873633,
+    87.61873200091941,
+    96.55470800134935
+  ],
+  "parallel_rgbd_ms": [
+    202.65610399837897,
+    178.8227030010603,
+    182.33172100008233,
+    185.0471039997501
+  ],
+  "frames": 40,
+  "both_modes_dataset_and_video_equivalence": true,
+  "camera_mode_transitions_and_session_lifecycle": true,
+  "paced_30hz_frames_per_mode": 200,
+  "paced_rgb_p95_ms": 91.12261615027819,
+  "paced_depth_p95_ms": 196.0717441507768
+}

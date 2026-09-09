@@ -28,11 +28,11 @@ STATE_DIM = 23
 ACTION_DIM = 23
 ACTION_HORIZON = 50
 MODEL_POLICY_DIM = 17
+STATUS_MODES = ("none", "left", "right", "prompt")
 
 GRIPPER_INDICES = (7, 15)
 GRIPPER_OPEN_VALUE = 0.0
 GRIPPER_CLOSED_VALUE = 1.5
-GRIPPER_VALUE_TOLERANCE = 1e-6
 
 STATE_ORDER = (
     *(f"left.{key}" for key in ARM_AND_GRIPPER_KEYS),
@@ -221,19 +221,8 @@ def _finite_number(source: Mapping[str, Any], key: str, path: str) -> float:
     return result
 
 
-def _canonical_gripper(value: float, path: str) -> float:
-    if math.isclose(value, GRIPPER_OPEN_VALUE, rel_tol=0.0, abs_tol=GRIPPER_VALUE_TOLERANCE):
-        return GRIPPER_OPEN_VALUE
-    if math.isclose(value, GRIPPER_CLOSED_VALUE, rel_tol=0.0, abs_tol=GRIPPER_VALUE_TOLERANCE):
-        return GRIPPER_CLOSED_VALUE
-    raise ProtocolValidationError(
-        f"{path} must be {GRIPPER_OPEN_VALUE} or {GRIPPER_CLOSED_VALUE} "
-        f"within {GRIPPER_VALUE_TOLERANCE}, got {value}"
-    )
-
-
 def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
-    """Validate and flatten one binary-gripper structured 23-D action."""
+    """Validate and flatten one structured 23-D action without value remapping."""
     action = _require_object(action, "action")
     _require_exact_keys(action, _ACTION_TOP_LEVEL_KEYS, "action")
 
@@ -263,8 +252,6 @@ def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
         _finite_number(speed, "linear", "action.speed"),
         _finite_number(speed, "angular", "action.speed"),
     ]
-    values[7] = _canonical_gripper(values[7], "action.left.gripper")
-    values[15] = _canonical_gripper(values[15], "action.right.gripper")
     result = np.asarray(values, dtype=np.float32)
     if result.shape != (ACTION_DIM,) or not np.isfinite(result).all():
         raise ProtocolValidationError(f"Invalid Zerith action: shape={result.shape}")
@@ -272,14 +259,16 @@ def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
 
 
 def parse_action_chunk(response: Mapping[str, Any]) -> np.ndarray:
-    """Validate an exact 50x23 no-status action response."""
+    """Validate an exact 50x23 action response with optional success status."""
     response = _require_object(response, "response")
     if response.get("type") == "error":
         raise PolicyServerError(f"Policy server error: {response.get('error', response)!s}")
     if response.get("type") != "action_chunk":
         raise ProtocolValidationError(f"Expected action_chunk response, got {response.get('type')!r}")
-    if "is_success" in response:
-        raise ProtocolValidationError("The configured no-status policy unexpectedly returned is_success")
+    if "is_success" in response and type(response["is_success"]) is not bool:
+        raise ProtocolValidationError(
+            "Policy response is_success must be a JSON boolean when present"
+        )
     actions = response.get("actions")
     if not isinstance(actions, list):
         raise ProtocolValidationError("Policy response actions must be a JSON array")
@@ -296,16 +285,13 @@ def parse_action_chunk(response: Mapping[str, Any]) -> np.ndarray:
 
 
 def validate_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the fixed robot layout while allowing unrelated policy metadata."""
+    """Validate the fixed layout while accepting server-owned gripper modes."""
     metadata = _require_object(metadata, "metadata")
     scalar_expected: dict[str, Any] = {
         "robot": "zerith_h1_pro",
         "wire_state_dim": STATE_DIM,
         "wire_action_dim": ACTION_DIM,
         "model_policy_dim": MODEL_POLICY_DIM,
-        "input_gripper_binary": False,
-        "output_gripper_binary": True,
-        "status_mode": "none",
     }
     for key, expected in scalar_expected.items():
         if key not in metadata:
@@ -319,6 +305,27 @@ def validate_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
             matches = type(actual) is type(expected) and actual == expected
         if not matches:
             raise ProtocolValidationError(f"Metadata mismatch for {key!r}: got {actual!r}, expected {expected!r}")
+
+    if "status_mode" not in metadata:
+        raise ProtocolValidationError("Metadata is missing 'status_mode'")
+    status_mode = metadata["status_mode"]
+    if type(status_mode) is not str or status_mode not in STATUS_MODES:
+        raise ProtocolValidationError(
+            f"Metadata mismatch for 'status_mode': got {status_mode!r}, "
+            f"expected one of {list(STATUS_MODES)!r}"
+        )
+
+    # These fields describe preprocessing/postprocessing owned by the policy
+    # server.  The executor always transmits observed gripper feedback and
+    # consumes returned gripper actions unchanged, regardless of either mode.
+    for mode_key in ("input_gripper_binary", "output_gripper_binary"):
+        if mode_key not in metadata:
+            raise ProtocolValidationError(f"Metadata is missing {mode_key!r}")
+        mode = metadata[mode_key]
+        if type(mode) is not bool:
+            raise ProtocolValidationError(
+                f"Metadata mismatch for {mode_key!r}: got {mode!r}, expected a boolean"
+            )
 
     for key, expected in (("state_order", STATE_ORDER), ("action_order", ACTION_ORDER)):
         actual = metadata.get(key)
@@ -486,7 +493,6 @@ __all__ = [
     "GRIPPER_CLOSED_VALUE",
     "GRIPPER_INDICES",
     "GRIPPER_OPEN_VALUE",
-    "GRIPPER_VALUE_TOLERANCE",
     "JOINT_KEYS",
     "MODEL_POLICY_DIM",
     "Pi05ProtocolError",
@@ -496,6 +502,7 @@ __all__ = [
     "ProtocolValidationError",
     "STATE_DIM",
     "STATE_ORDER",
+    "STATUS_MODES",
     "ZerithJsonPolicyClient",
     "build_observation_request",
     "encode_bgr_jpeg_base64",

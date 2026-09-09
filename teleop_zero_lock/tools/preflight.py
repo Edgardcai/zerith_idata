@@ -10,7 +10,7 @@ def snapshot():
     with opener.open('http://127.0.0.1:8090/api/status', timeout=3) as response:
         return json.load(response)
 
-def check(state, starting=True):
+def check(state, starting=True, allow_pending_save=False):
     device = state['device']
     checks = {item['key']: item for item in device['checks']}
     errors = []
@@ -19,7 +19,15 @@ def check(state, starting=True):
             errors.append('检查未通过：' + key)
     if checks.get('init', {}).get('detail') != '反初始化完成':
         errors.append('请先完成反初始化')
-    if state['collection']['phase'] != 'idle' or state['collection'].get('current'):
+    collection = state['collection']
+    current = collection.get('current')
+    collection_idle = collection['phase'] in ('idle', 'closed') and not current
+    pending_save_allowed = (
+        allow_pending_save
+        and collection['phase'] in ('idle', 'closed', 'waiting')
+        and (not current or current.get('state') in ('saving', 'finalizing'))
+    )
+    if not collection_idle and not pending_save_allowed:
         errors.append('请先结束采集会话')
     if starting:
         if not device.get('vr_connected'):

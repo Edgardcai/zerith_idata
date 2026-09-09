@@ -6,18 +6,21 @@ import json
 import os
 import socket
 import struct
+import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
 
 import cv2
+import h5py
 import numpy as np
 
 from control.web_control.camera_service import CameraService
 from control.web_control.fake_camera import fake_camera_factory
 from control.web_control.fake_sdk import FakeH1Robot, FakeSdk
 from control.web_control.robot_service import RobotService
+from control.web_control.replay_controller import REPLAY_CONFIRMATION, ReplayController
 from control.web_control.server import (
     H1WebServer,
     H1RequestHandler,
@@ -35,6 +38,7 @@ class FakeVoiceGateway:
         self.language = None
         self.audio_payload = b"RIFF-test-audio"
         self.cancelled = 0
+        self.local_speech_requests = []
 
     def status(self):
         return {
@@ -68,11 +72,15 @@ class FakeVoiceGateway:
             raise AssertionError(audio_id)
         return self.audio_payload
 
+    def set_local_speech(self, enabled):
+        self.local_speech_requests.append(enabled)
+        return {"accepted": True, "message": "正在切换"}
+
 
 class ServerTests(unittest.TestCase):
     def test_deployed_bind_defaults(self) -> None:
         args = build_parser().parse_args([])
-        self.assertEqual(args.host, "172.16.18.43")
+        self.assertEqual(args.host, "0.0.0.0")
         self.assertEqual(args.port, 8080)
         self.assertTrue(args.allow_unauthenticated_lan)
 
@@ -93,7 +101,12 @@ class ServerTests(unittest.TestCase):
             poll_interval_s=0.005,
         )
         self.voice = FakeVoiceGateway()
-        self.app = WebControlApp(robot=robot, camera=camera, voice=self.voice)
+        self.app = WebControlApp(
+            robot=robot,
+            camera=camera,
+            voice=self.voice,
+            replay=ReplayController(robot, alignment_duration_s=0),
+        )
         self.server = H1WebServer(("127.0.0.1", 0), self.app)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -151,7 +164,28 @@ class ServerTests(unittest.TestCase):
         )
         self.post("/api/motion/chassis", {"left_speed": 1, "right_speed": 1}, lease)
         self.post("/api/stop", {}, lease)
-        self.post("/api/actions/home", {}, lease)
+        home = self.post("/api/actions/home", {}, lease)
+        self.assertEqual(home["targets"]["2"], 0.4)
+        self.assertTrue(
+            all(home["targets"][str(motor_id)] == 0.0 for motor_id in range(3, 23))
+        )
+
+        self.fake_robot.states[2].Position_Actual = 0.57
+        self.fake_robot.states[7].Position_Actual = 0.25
+        self.fake_robot.states[14].Position_Actual = 1.5
+        arm_home = self.post(
+            "/api/actions/arm-home",
+            {"speed_scale": 2.0},
+            lease,
+        )
+        self.assertEqual(arm_home["lift_held"], 0.57)
+        self.assertEqual(arm_home["targets"]["2"], 0.57)
+        self.assertTrue(
+            all(
+                arm_home["targets"][str(motor_id)] == 0.0
+                for motor_id in range(3, 23)
+            )
+        )
         self.post("/api/actions/deinit", {}, lease)
         self.post("/api/takeover", {"enabled": False}, lease)
 
@@ -161,14 +195,127 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"repeat(3, minmax(0, 1fr))", css)
         self.assertNotIn(b"repeat(3, 640px)", css)
         self.assertIn(b"aspect-ratio: 4 / 3", css)
+        self.assertIn(b"color-scheme: light", css)
+        self.assertIn(b"--accent: #324376", css)
+        self.assertIn(b".pi05-primary-safety-actions", css)
 
         status, _, html = self.request("GET", "/")
         self.assertEqual(status, 200)
         self.assertIn("机器人独立麦克风".encode(), html)
+        self.assertIn(b'id="pi05ArmHomeButton"', html)
+        self.assertIn("机械臂归位".encode(), html)
+        for element_id in (
+            b"pi05TaskSingle",
+            b"pi05TaskDual",
+            b"pi05SingleItem",
+            b"pi05SingleHand",
+            b"pi05DualLeftItem",
+            b"pi05DualRightItem",
+            b"pi05DualContinuous",
+            b"pi05DualSeparate",
+            b"pi05PromptPreview",
+            b"pi05TaskStage",
+            b"pi05LeftGripperProgress",
+        ):
+            self.assertIn(b'id="' + element_id + b'"', html)
+        self.assertIn(b'id="replayPage"', html)
+        self.assertIn("真机回放".encode(), html)
+        self.assertIn(b'id="replayDirectoryOptions"', html)
+        self.assertIn(b'id="replayDirectoryRefreshButton"', html)
+        self.assertIn(b'id="replaySpeed" type="range" min="0.5" max="2"', html)
+        self.assertIn(b'<meta name="theme-color" content="#ffffff">', html)
 
         status, _, javascript = self.request("GET", "/static/app.js")
         self.assertEqual(status, 200)
         self.assertIn(b"await startRobotMicrophoneSession(language);", javascript)
+        self.assertIn(b'"arm-home"', javascript)
+        self.assertIn(b'"/api/replay/start"', javascript)
+        self.assertIn(b'inference_mode: "dual_separate"', javascript)
+        self.assertIn(b'right_prompt:', javascript)
+        for product in (
+            "Taro Milk",
+            "Coca-Cola",
+            "NEVER Coconut Latte",
+            "If coconut",
+            "Pocky Chocolate",
+        ):
+            self.assertIn(product.encode(), javascript)
+
+    def test_hdf5_replay_scan_start_and_status_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            episode_dir = os.path.join(directory, "episode-001")
+            os.makedirs(episode_dir)
+            episode_path = os.path.join(episode_dir, "episode.hdf5")
+            count = 4
+            with h5py.File(episode_path, "w") as file:
+                file.attrs["episode_id"] = "episode-001"
+                file.attrs["task_name"] = "server replay"
+                file.attrs["control_frequency"] = 30
+                file.attrs["action_mode"] = "absolute"
+                file.create_dataset("action/arm/position", data=np.zeros((count, 14)))
+                file.create_dataset("action/effector/position", data=np.zeros((count, 2)))
+                file.create_dataset(
+                    "action/waist/position",
+                    data=np.tile(np.asarray((0.4, 0.0, 0.0)), (count, 1)),
+                )
+                file.create_dataset("action/head/position", data=np.zeros((count, 2)))
+                file.create_dataset("action/base/velocity", data=np.zeros((count, 2)))
+
+            scan = self.post("/api/replay/scan", {"dataset_dir": directory})
+            self.assertEqual(scan["count"], 1)
+            self.assertEqual(scan["episodes"][0]["path"], "episode-001/episode.hdf5")
+
+            takeover = self.post(
+                "/api/takeover",
+                {"enabled": True, "client_id": "replay-page"},
+            )
+            lease = takeover["lease_id"]
+            self.post("/api/actions/init", {}, lease)
+            status, _, raw = self.request(
+                "POST",
+                "/api/replay/start",
+                {
+                    "dataset_dir": directory,
+                    "episode": "episode-001/episode.hdf5",
+                    "source": "action",
+                    "mode": "full",
+                    "speed": 1.0,
+                    "confirmation": REPLAY_CONFIRMATION,
+                },
+                lease,
+            )
+            self.assertEqual(status, 202, raw)
+            deadline = time.monotonic() + 2.0
+            replay_status = {}
+            while time.monotonic() < deadline:
+                code, _, payload = self.request("GET", "/api/replay/status")
+                self.assertEqual(code, 200)
+                replay_status = json.loads(payload)
+                if replay_status["phase"] == "completed":
+                    break
+                time.sleep(0.02)
+            self.assertEqual(replay_status["phase"], "completed")
+            self.assertEqual(replay_status["progress"], count)
+
+            state_code, _, state_raw = self.request("GET", "/api/state")
+            self.assertEqual(state_code, 200)
+            self.assertEqual(json.loads(state_raw)["replay"]["phase"], "completed")
+            self.post("/api/actions/deinit", {}, lease)
+            self.post("/api/takeover", {"enabled": False}, lease)
+
+    def test_hdf5_replay_directory_discovery_route(self) -> None:
+        expected = {
+            "root": "/data",
+            "directories": ["/data/example"],
+            "count": 1,
+            "inspected_episode_files": 1,
+            "invalid_count": 0,
+            "truncated": False,
+        }
+        with patch.object(self.app.replay, "directories", return_value=expected):
+            status, _, raw = self.request("GET", "/api/replay/directories")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw), expected)
 
     def test_voice_status_start_and_audio_are_proxied(self) -> None:
         status, _, raw = self.request("GET", "/api/voice/status")
@@ -205,6 +352,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(dict(headers)["Content-Type"], "audio/wav")
         self.assertEqual(raw, self.voice.audio_payload)
+
+    def test_local_speech_requires_boolean_and_proxies_explicit_requests(self) -> None:
+        for enabled in (True, False):
+            status, _, raw = self.request("POST", "/api/voice/local-speech", {"enabled": enabled})
+            self.assertEqual(status, 202)
+            self.assertTrue(json.loads(raw)["accepted"])
+        self.assertEqual(self.voice.local_speech_requests, [True, False])
+        for body in ({}, {"enabled": "true"}, {"enabled": 1}, {"enabled": None}):
+            status, _, _ = self.request("POST", "/api/voice/local-speech", body)
+            self.assertEqual(status, 400)
+        self.assertEqual(self.voice.local_speech_requests, [True, False])
 
     def test_voice_text_rejects_invalid_input(self) -> None:
         for body in (

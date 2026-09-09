@@ -3,6 +3,9 @@ import os, sys, types, marshal, json, hashlib, logging.handlers
 from pathlib import Path
 ROOT = Path('/home/robot/teleop_zero_lock')
 mode = sys.argv[1:]
+allow_pending_save = mode == ['--live', '--allow-pending-save']
+if allow_pending_save:
+    mode = ['--live']
 if mode not in (['--offline-self-test'], ['--live']):
     raise SystemExit('Use --offline-self-test, or the documented operator trial switch procedure.')
 offline = mode == ['--offline-self-test']
@@ -19,7 +22,7 @@ else:
         raise SystemExit('Trial requires the original teleop process ownership (root).')
     preflight = types.ModuleType('trial_preflight')
     exec(__PREFLIGHT_SOURCE__, preflight.__dict__)
-    errors = preflight.check(preflight.snapshot())
+    errors = preflight.check(preflight.snapshot(), allow_pending_save=allow_pending_save)
     if preflight.teleop_pids():
         errors.append('Original teleop still running; refusing a second command publisher')
     marker = json.loads((ROOT/'runtime/validated.json').read_text())
