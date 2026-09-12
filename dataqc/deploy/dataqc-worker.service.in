@@ -1,0 +1,18 @@
+[Unit]
+Description=Unified data QC automatic worker
+After=network.target
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=DATAQC_HOME=@RUNTIME@
+Environment=PYTHONPATH=@PROJECT_ROOT@:@PROJECT_ROOT@/vendor
+Environment=YOLO_CONFIG_DIR=@RUNTIME@/var/yolo-config
+Environment=OMP_NUM_THREADS=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ -m dataqc.worker
+Restart=on-failure
+RestartSec=3
+Nice=10
+[Install]
+WantedBy=default.target

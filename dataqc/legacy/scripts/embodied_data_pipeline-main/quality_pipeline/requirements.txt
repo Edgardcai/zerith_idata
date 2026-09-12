@@ -1,0 +1,9 @@
+h5py
+lerobot>=0.3.4
+numpy
+opencv-python
+pandas
+pyarrow
+PyYAML
+scipy
+tqdm

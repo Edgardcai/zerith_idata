@@ -1,0 +1,36 @@
+/**:
+  ros__parameters:
+    dataInfo:
+
+      camera:
+        color:
+          checkFrameRate: 25
+          names: ['left', 'front', 'right', 'head']
+          parentFrames: ['camera_l_link', 'camera_f_link', 'camera_r_link', 'camera_h_link']
+          topics: ['/camera_l/color/image_raw', '/camera_f/color/image_raw', '/camera_r/color/image_raw', '/camera_h/color/image_raw']
+          # camera_h publishes placeholder camera_info, so only the three trusted
+          # calibration topics are converted.
+          configTopics: ['/camera_l/color/camera_info', '/camera_f/color/camera_info', '/camera_r/color/camera_info']
+
+      arm:
+        jointState:
+          checkFrameRate: 180
+          names: ['masterLeft', 'masterRight', 'puppetLeft', 'puppetRight']
+          topics: ['/master/joint_left', '/master/joint_right', '/puppet/joint_left', '/puppet/joint_right']
+
+      localization:
+        pose:
+          checkFrameRate: 180
+          names: ['puppetLeft', 'puppetRight', 'base', 'base_pos']
+          topics: ['/puppet/end_pose_left', '/puppet/end_pose_right', '/localization/pose', '/localization/pos']
+
+      robotBase:
+        vel:
+          names: ['chassis', 'odom']
+          topics: ['/action/chassis', '/odom']
+
+      lift:
+        motor:
+          names: ['body']
+          topics: ['/LiftMotorStatePub']
+          pubTopics: ['/LiftMotorStatePub']

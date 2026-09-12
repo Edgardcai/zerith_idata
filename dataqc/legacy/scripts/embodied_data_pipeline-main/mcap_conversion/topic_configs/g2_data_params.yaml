@@ -1,0 +1,22 @@
+/**:
+  ros__parameters:
+    dataInfo:
+
+      camera:
+        color:
+          checkFrameRate: 30
+          names: ['left', 'front', 'right']
+          parentFrames: ['camera_l', 'camera_f', 'camera_r']
+          topics: ['/camera_l/color/image_raw', '/camera_f/color/image_raw', '/camera_r/color/image_raw']
+
+      arm:
+        jointState:
+          checkFrameRate: 30
+          names: ['state', 'action']
+          topics: ['/hal/joint_state', '/pico_g2/action_joints']
+
+      localization:
+        pose:
+          checkFrameRate: 30
+          names: ['base']
+          topics: ['/odom']

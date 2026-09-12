@@ -1,0 +1,193 @@
+# Zerith dual-arm mobile robot — columnar episode.hdf5 schema.
+schema_version: 1
+profile_id: zerith
+display_name: 零次方双臂移动机器人（23 自由度）
+
+adapter: zerith_columnar
+lerobot_robot_type: zerith
+control_backend: zerith_collector
+
+tasks:
+  default: ""
+
+fps:
+  record: 30
+  action: 30
+
+raw:
+  episode_glob: "*"
+  state_file: episode.hdf5
+  meta_file: episode_meta.json
+  videos_dir: videos/rs
+  action_fallback: hdf5_action_columns
+  timestamp_unit: ms
+
+cameras:
+  - raw_key: cam_high
+    lerobot_key: observation.images.cam_high
+    role: head
+    required: true
+  - raw_key: cam_left_wrist
+    lerobot_key: observation.images.cam_left_wrist
+    role: left_wrist
+    required: true
+  - raw_key: cam_right_wrist
+    lerobot_key: observation.images.cam_right_wrist
+    role: right_wrist
+    required: true
+
+state:
+  feature: observation.state
+  dim: 23
+  layout:
+    - name: left_arm
+      slice: [0, 7]
+      unit: rad
+      source: observation/state/arm/position[0:7]
+    - name: left_gripper
+      index: 7
+      unit: native_position
+      source: observation/state/effector/position[0]
+      open: 0.0
+      closed: 0.56
+    - name: right_arm
+      slice: [8, 15]
+      unit: rad
+      source: observation/state/arm/position[7:14]
+    - name: right_gripper
+      index: 15
+      unit: native_position
+      source: observation/state/effector/position[1]
+      open: 0.0
+      closed: 0.56
+    - name: lift
+      index: 16
+      unit: m
+      source: observation/state/waist/position[0]
+    - name: waist_pitch
+      index: 17
+      unit: rad
+      source: observation/state/waist/position[1]
+    - name: waist_yaw
+      index: 18
+      unit: rad
+      source: observation/state/waist/position[2]
+    - name: head_yaw
+      index: 19
+      unit: rad
+      source: observation/state/head/position[0]
+    - name: head_pitch
+      index: 20
+      unit: rad
+      source: observation/state/head/position[1]
+    - name: base_velocity
+      slice: [21, 23]
+      unit: [m/s, rad/s]
+      fields: [linear, angular]
+      source: observation/state/base/velocity
+
+action:
+  feature: action
+  dim: 23
+  representation: absolute_joint_targets_plus_base_velocity
+  layout:
+    - name: left_arm
+      slice: [0, 7]
+      unit: rad
+      source: action/arm/position[0:7]
+    - name: left_gripper
+      index: 7
+      unit: native_command
+      source: action/effector/position[0]
+      open: 0.0
+      closed: 1.5
+    - name: right_arm
+      slice: [8, 15]
+      unit: rad
+      source: action/arm/position[7:14]
+    - name: right_gripper
+      index: 15
+      unit: native_command
+      source: action/effector/position[1]
+      open: 0.0
+      closed: 1.5
+    - name: lift
+      index: 16
+      unit: m
+      source: action/waist/position[0]
+    - name: waist_pitch
+      index: 17
+      unit: rad
+      source: action/waist/position[1]
+    - name: waist_yaw
+      index: 18
+      unit: rad
+      source: action/waist/position[2]
+    - name: head_yaw
+      index: 19
+      unit: rad
+      source: action/head/position[0]
+    - name: head_pitch
+      index: 20
+      unit: rad
+      source: action/head/position[1]
+    - name: base_velocity
+      slice: [21, 23]
+      unit: [m/s, rad/s]
+      fields: [linear, angular]
+      source: action/base/velocity
+
+quality_checks:
+  state_dim: 23
+  action_dim: 23
+  required_cameras: [cam_high, cam_left_wrist, cam_right_wrist]
+  timestamp_monotonic: true
+  finite_state_action: true
+
+validation:
+  frame_consistency:
+    max_missing_camera_ratio: 0.0
+  action_jump:
+    arm_state_slices: [[0, 7], [8, 15]]
+    arm_action_slices: [[0, 7], [8, 15]]
+    max_arm_delta: 1.05
+
+processing:
+  rtml:
+    quality:
+      accept_score: 70.0
+    global_constraints:
+      # A normal 30 Hz interval is ~0.033 s. The collector occasionally has a
+      # single ~0.067 s scheduling gap; fail only on gaps above three ticks.
+      # Duplicate/non-monotonic timestamps are checked independently.
+      max_timestamp_gap_sec: 0.1
+      min_fps: 29.0
+      min_duration_sec: 2.0
+      max_duration_sec: 40.0
+      max_missing_camera_ratio: 0.0
+      max_state_step: 0.8
+      max_joint_step: 0.8
+      min_joint_motion_mean: 0.0001
+      gripper_delta_threshold: 0.05
+      action_stationary_epsilon: 0.01
+      stationary_state_epsilon: 0.01
+      stationary_base_velocity_epsilon: 0.0001
+      stationary_requires_action_and_state: true
+      # Raw Zerith episodes have not gone through the legacy 15-frame trimming
+      # pass. Allow up to two seconds of true state+action stationary time.
+      max_stationary_action_frames: 40
+  segmentation:
+    gripper_delta_threshold: 0.05
+    min_segment_frames: 10
+    stationary_min_frames: 12
+  frame_annotations:
+    window: 5
+    vel_slow_thresh: 0.02
+    vel_fast_thresh: 0.15
+    acc_thresh: 0.02
+  annotations:
+    vision_pipeline:
+      enabled: false
+
+lerobot_conversion:
+  fail_closed: true

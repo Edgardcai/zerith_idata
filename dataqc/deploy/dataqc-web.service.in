@@ -1,0 +1,17 @@
+[Unit]
+Description=Unified data QC workbench
+After=network.target
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_ROOT@
+Environment=PYTHONUNBUFFERED=1
+Environment=DATAQC_HOME=@RUNTIME@
+Environment=PYTHONPATH=@PROJECT_ROOT@:@PROJECT_ROOT@/vendor
+Environment=YOLO_CONFIG_DIR=@RUNTIME@/var/yolo-config
+Environment=OMP_NUM_THREADS=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=@PYTHON@ @PROJECT_ROOT@/workbench.py --host 0.0.0.0 --port 8091
+Restart=on-failure
+RestartSec=3
+[Install]
+WantedBy=default.target

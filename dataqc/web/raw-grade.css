@@ -1,0 +1,15 @@
+.noda-grade{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 14px;border:1px solid #dce5f0;border-radius:10px;background:#f7faff;font-size:13px;color:#57677d;margin:10px 0}
+.noda-grade[hidden]{display:none}.noda-grade strong{font-size:14px;color:#2256a1;background:#e5edfb;padding:4px 10px;border-radius:6px}.noda-grade strong[data-grade="A"]{color:#187752;background:#e6f4ed}.noda-grade strong[data-grade="B"]{color:#9d681d;background:#fff2dc}.noda-grade strong[data-grade="F"]{color:#b33535;background:#fdeaea}
+.noda-grade label{display:flex;align-items:center;gap:8px;margin:0;font-size:13px;white-space:nowrap}.noda-grade select{width:85px;min-height:32px;margin:0;padding:5px 8px;border:1px solid #cdd8e6;border-radius:6px;background:#fff}.noda-grade button{min-height:32px;padding:6px 18px;border:0;border-radius:6px;background:#2868c7;color:#fff;font-size:13px;cursor:pointer}.noda-grade button:disabled{opacity:.45;cursor:default}.noda-grade small{font-size:12px;color:#6d7f96;line-height:1.6}
+
+.raw-replay .edit-panel{display:none}.raw-replay .review-grid{grid-template-columns:1fr}.noda-grade[hidden]{display:none}.noda-grade{flex-wrap:wrap}.noda-grade>span,.noda-grade>label{white-space:nowrap}.noda-grade strong{margin-left:4px}
+.noda-grade select,.noda-grade option{color:#172b47;background:#fff}
+
+.noda-review-filter{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;font-size:12px;border-bottom:1px solid #dce5f0}.noda-review-filter button{padding:5px 10px;min-height:28px;border-radius:6px;font-size:12px;cursor:pointer}.noda-review-filter button[aria-pressed="true"]{color:#235aab;border-color:#80a8e0;background:#e8f0ff}.noda-review-filter small{margin-left:auto;font-size:11px;color:#738298}.noda-review-filter button:disabled{cursor:default;opacity:.45}
+.noda-dark .noda-grade{background:#1b2025;border-color:#343d45;color:#aebcca;padding:9px 11px;gap:10px;border-radius:8px}
+.noda-dark .noda-grade strong{background:#263849;color:#afd4ff}.noda-dark .noda-grade strong[data-grade="A"]{background:#1f3b30;color:#8cdfb3}.noda-dark .noda-grade strong[data-grade="B"]{background:#433620;color:#efd090}.noda-dark .noda-grade strong[data-grade="F"]{background:#45292b;color:#efa8aa}
+.noda-dark .noda-grade select,.noda-dark .noda-grade option{background:#121619;color:#dce6ef;border-color:#3a4652}.noda-dark .noda-grade small{color:#91a5b8}.noda-dark .noda-grade button{background:#315f99}
+.noda-dark .noda-review-filter{background:#1b2025;border-color:#343d45;color:#aebcca}.noda-dark .noda-review-filter button{background:#222a31;color:#bccbd8;border:1px solid #3c4751}.noda-dark .noda-review-filter button[aria-pressed="true"]{background:#263e56;border-color:#557b9f;color:#c1e2ff}
+.raw-nav-controls{display:flex;align-items:center;gap:6px;padding:8px 10px}.raw-nav-controls select{flex:1;min-width:0;margin:0}.raw-nav-controls button{white-space:nowrap}#raw-replay-nav[hidden]{display:none}
+
+.noda-manual-controls{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;min-width:0}.noda-manual-controls label,.noda-manual-controls button{flex-shrink:0}.noda-manual-controls small:empty{display:none}

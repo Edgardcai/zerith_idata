@@ -1,0 +1,69 @@
+    body{background:#f4f6fa;color:#182337}
+    header{background:#fff;border-bottom:1px solid #e1e6ee;box-shadow:0 2px 12px #18233706;padding:16px 22px}
+    .brand-kicker,.step-badge,#taskTextHint{display:none}
+    .workspace-switch{background:#f1f4f8;border:0;padding:5px;border-radius:12px;gap:3px}
+    .workspace-btn{border:0;border-radius:8px;white-space:nowrap;padding:10px 13px}
+    .workspace-btn.active{background:#fff;color:#245fba;box-shadow:0 2px 6px #18233714}
+    #collectionWorkspace{grid-template-columns:380px minmax(0,1fr);gap:18px;padding:20px}
+    #collectionWorkspace>section,.grid>section{border:1px solid #e4e8ef;box-shadow:0 3px 14px #18233704;border-radius:14px}
+    .control-panel{padding:18px}.section-title{margin-bottom:14px}.section-title h2{font-size:17px}
+    .control-panel label{font-size:12px}.control-panel select,.control-panel input{border-color:#dce2eb;border-radius:8px}
+    #sourceDatasetScanInfo{font-size:11px;color:#718096;line-height:1.5}
+    .dataset-paths{background:#f8fafc;border-color:#e7ebf1}.dataset-path-row{grid-template-columns:82px minmax(0,1fr);gap:7px;padding:7px 9px}
+    .task-field{background:#fff;border-color:#e4e8ef;margin-top:12px;padding:10px}.task-field input{font-size:12px}
+    .action-card{background:#fff;border-color:#e1e7f0;padding:14px;margin-top:14px;border-radius:11px}
+    .action-card h3{font-size:13px;color:#344765;margin:0 0 12px;font-weight:700}
+    .action-card .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0}
+    .action-card button{font-size:12px;min-height:38px;border-radius:8px;padding:8px 6px;white-space:normal;line-height:1.5}
+    button.primary{background:#2868c7;border-color:#2868c7;box-shadow:none}button.primary:hover{background:#205bad}
+    .action-card button.danger{background:#fff;color:#b84646;border-color:#edd8d8}
+    .stationary-threshold-control{display:flex;justify-content:space-between;align-items:center;padding:10px 0 0;margin:12px 0 0;border:0;border-top:1px solid #edf0f5;border-radius:0}
+    .stationary-threshold-control label{margin:0;font-weight:500;color:#64748b}.stationary-threshold-control select{width:105px;min-height:32px}
+    .lerobot-stage-split-control{margin:0;padding:0;border:0;display:block;background:none}
+    .job-controls{display:flex;justify-content:flex-end;margin-top:10px}.job-controls button{background:transparent;border:0;font-size:11px;padding:5px 0;color:#9a6470}
+    .advanced-settings{margin-top:12px;border-color:#e7ebf1}.advanced-settings summary{font-size:12px;color:#64748b}
+    .tabs{background:#f3f6fa;border:0;border-radius:9px;padding:4px;gap:3px}.tab-btn{border:0;border-radius:6px}.tab-btn.active{background:#fff;color:#245fba;box-shadow:0 1px 4px #18233712}
+    .overview-chart{border-color:#e8edf3;border-radius:10px}.pie-layout{grid-template-columns:minmax(70px,100px) minmax(100px,1fr);gap:8px}.pie-visual{max-width:100px}.pie-label{white-space:normal;overflow:visible}.pie-legend-row{grid-template-columns:9px minmax(34px,1fr) auto;gap:4px}
+    .grid .log{max-height:200px;min-height:100px;font-size:11px}.grid>section:last-child h2{font-size:13px;color:#64748b}
+    @media(max-width:1280px){header{flex-wrap:wrap}.workspace-switch{order:3;width:100%}.workspace-btn{flex:1}#collectionWorkspace{grid-template-columns:340px minmax(0,1fr);padding:14px;gap:12px}.pie-layout{grid-template-columns:1fr}.pie-legend{padding:0 8px}}
+    @media(max-width:900px){#collectionWorkspace{grid-template-columns:1fr}.workspace-switch{flex-wrap:wrap}.workspace-btn{flex:1 1 42%}}
+
+.grade-comparison{background:#f8fafc;border:1px solid #dce5f0;border-radius:12px;padding:12px;margin:10px 0}.grade-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.grade-toolbar b{margin-right:auto}#gradeChanges{margin-top:8px;max-height:100px;overflow:auto;line-height:1.8;color:#475569}.grade-changed{color:#b45309;font-weight:700;white-space:nowrap}.grade-editor{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:135px}.grade-editor select{width:64px!important;min-width:64px!important}.grade-editor small{flex-basis:100%;max-width:220px;overflow-wrap:anywhere}.grade-source{display:block;color:#64748b;font-size:11px}#episodeRows td{vertical-align:top}.grade-save{padding:7px 10px}
+
+.table-wrap:has(#episodeRows) table{table-layout:fixed;width:100%;min-width:950px}.table-wrap:has(#episodeRows) th,.table-wrap:has(#episodeRows) td{padding:10px 6px;overflow-wrap:break-word}.table-wrap:has(#episodeRows) th{word-break:keep-all}.grade-metrics{font-size:11px;line-height:1.8;white-space:nowrap}.grade-notes{font-size:12px;line-height:1.65;overflow-wrap:anywhere}.grade-notes small{display:block;color:#64748b;margin-top:5px}.grade-source{word-break:keep-all}.grade-comparison #gradeChanges{font-size:12px;max-height:75px}.grade-editor{min-width:0}
+
+#syncHdf5GradesBtn{display:none}
+
+/* Unavailable actions are not running tasks. Only an active split shows progress. */
+#collectionWorkspace button:disabled{cursor:not-allowed}
+#collectionWorkspace #splitLerobotStagesBtn[aria-busy="true"]{cursor:progress}
+
+/* Compact report: keep measurements together and reserve width for explanations. */
+.table-wrap:has(#episodeRows) table{table-layout:auto;min-width:100%;width:100%}
+.table-wrap:has(#episodeRows) th,.table-wrap:has(#episodeRows) td{padding:7px 8px;white-space:nowrap;vertical-align:middle;line-height:1.4}
+.table-wrap:has(#episodeRows) th{font-size:12px}.grade-editor{flex-wrap:nowrap;gap:5px}.grade-editor select{min-height:30px;padding:4px 7px;margin:0}.grade-save{padding:5px 9px;min-height:30px}
+.grade-editor small:empty,.grade-notes small:empty{display:none}.grade-editor small{flex-basis:auto;max-width:none}.grade-source{display:inline;margin-left:5px;font-size:10px}
+.grade-metrics{font-size:11px}.grade-notes{width:100%;font-size:12px}.grade-notes small{display:inline;margin:0 0 0 8px;font-size:11px}
+#episodeRows tr[hidden]{display:none}.grade-comparison{padding:10px 12px;margin:8px 0;border-radius:9px}.grade-toolbar{gap:8px;font-size:12px}.grade-toolbar button{padding:6px 10px;font-size:12px}
+.report-filters{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;border-top:1px solid #e4eaf2;padding-top:9px;font-size:12px}.report-filters>span{color:#64748b;margin-right:6px}.report-filters button{font-size:12px;padding:5px 11px;border-radius:6px}.report-filters button[aria-pressed="true"]{background:#e8f0ff;border-color:#8cafe8;color:#205bb7}.report-filters small{margin-left:auto;color:#64748b}
+
+.table-wrap:has(#episodeRows) .grade-notes{white-space:normal;min-width:300px;overflow-wrap:anywhere}.table-wrap:has(#episodeRows) td:nth-child(2) .grade-source{display:block;margin-left:0}
+
+/* Fit the embedded player to the space below the actual workbench header. */
+@media(min-width:1000px){
+ body.replay-mode{height:100dvh;overflow:hidden}
+ body.replay-mode>header{padding:10px 18px}
+ body.replay-mode #collectionWorkspace{height:calc(100dvh - var(--workbench-header-height,80px));min-height:0;grid-template-columns:280px minmax(0,1fr);padding:10px;gap:10px;overflow:hidden}
+ body.replay-mode #collectionWorkspace>.control-panel{min-height:0;overflow-y:auto;padding:12px}
+ body.replay-mode #collectionWorkspace>.grid{height:100%;min-height:0;grid-template-rows:minmax(0,1fr);gap:0}
+ body.replay-mode #collectionWorkspace>.grid>section:first-child{display:flex;flex-direction:column;min-height:0;min-width:0;padding:8px}
+ body.replay-mode #collectionWorkspace .tabs{flex-shrink:0;margin:0;padding:3px}
+ body.replay-mode #collectionWorkspace .tabs button{padding:7px 12px}
+ body.replay-mode #replayPanel{flex:1;min-height:0;min-width:0;margin-top:6px}
+ body.replay-mode #replayFrame{display:block;width:100%;height:100%;min-height:0;border:0}
+ body.replay-mode .control-panel .section-title{margin-bottom:9px}
+ body.replay-mode .control-panel .action-card{margin-top:10px;padding:10px}
+ body.replay-mode .control-panel .action-card h3{margin-bottom:8px}
+ body.replay-mode .control-panel .action-card button{min-height:32px;padding:5px}
+}
+@media(min-width:1000px) and (max-width:1450px){body.replay-mode #collectionWorkspace{grid-template-columns:250px minmax(0,1fr)}}

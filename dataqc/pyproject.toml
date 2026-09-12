@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unified-dataqc-workbench"
+version = "1.0.0"
+description = "Zerith HDF5 quality control, visual annotations and LeRobot conversion"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "fastapi==0.141.1", "starlette==1.6.0", "uvicorn==0.52.4",
+  "h5py==3.16.0", "numpy==1.26.4", "pyarrow==24.0.0", "pandas==3.0.3",
+  "opencv-python-headless==4.11.0.86", "httpx==0.28.1", "pydantic==2.13.4",
+  "torch==2.7.1", "torchvision==0.22.1", "ultralytics==8.4.146",
+  "PyYAML==6.0.3", "scipy==1.17.1", "matplotlib==3.10.9",
+  "datasets==3.6.0", "huggingface-hub==0.36.2", "av==14.4.0",
+  "jsonlines==4.0.0", "packaging==26.2", "Pillow==12.2.0"
+]
+[project.optional-dependencies]
+test = ["pytest", "playwright"]
+[tool.setuptools.packages.find]
+include = ["dataqc*", "integrations*"]
+[tool.pytest.ini_options]
+testpaths = ["tests"]

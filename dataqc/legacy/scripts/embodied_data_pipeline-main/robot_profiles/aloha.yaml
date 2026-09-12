@@ -1,0 +1,239 @@
+# ALOHA dual-arm profile for MCAP-converted ICRA-WBC-like episodes.
+schema_version: 1
+profile_id: aloha
+display_name: ALOHA Dual Arm
+
+adapter: aloha
+lerobot_robot_type: aloha
+control_backend: ros2_mcap
+
+fps:
+  record: 30
+  action: 30
+
+raw:
+  episode_glob: "episode_*"
+  state_file: state.csv
+  meta_file: meta.json
+  images_dir: images
+  actions_file: actions.jsonl
+  action_fallback: hdf5_action_joint_position
+  fps:
+    record: 30
+
+cameras:
+  - raw_key: head_color
+    lerobot_key: observation.images.head_color
+    role: head
+    required: true
+  - raw_key: hand_left_color
+    lerobot_key: observation.images.hand_left_color
+    role: left_wrist
+    required: true
+  - raw_key: hand_right_color
+    lerobot_key: observation.images.hand_right_color
+    role: right_wrist
+    required: true
+
+state:
+  feature: observation.state
+  dim: 21
+  layout:
+    - name: left_arm
+      slice: [0, 6]
+      unit: rad
+      source: state/joint/position
+      joint_names:
+        - left_joint_1
+        - left_joint_2
+        - left_joint_3
+        - left_joint_4
+        - left_joint_5
+        - left_joint_6
+    - name: left_gripper
+      index: 6
+      unit: m
+      source: state/joint/position
+      open: 0.085
+      closed: 0.0
+    - name: right_arm
+      slice: [7, 13]
+      unit: rad
+      source: state/joint/position
+      joint_names:
+        - right_joint_1
+        - right_joint_2
+        - right_joint_3
+        - right_joint_4
+        - right_joint_5
+        - right_joint_6
+    - name: right_gripper
+      index: 13
+      unit: m
+      source: state/joint/position
+      open: 0.085
+      closed: 0.0
+    - name: waist_height
+      index: 14
+      unit: m
+      source: state/waist/position
+    - name: base_pose2d
+      slice: [15, 18]
+      unit: m_rad
+      source: state/robot/pose2d
+      fields: [x, y, yaw]
+    - name: base_velocity
+      slice: [18, 21]
+      unit: mps_radps
+      source: state/robot/velocity
+      fields: [vx, vy, wz]
+
+action:
+  feature: action
+  dim: 18
+  representation: absolute_joint_targets
+  layout:
+    - name: left_arm
+      slice: [0, 6]
+      unit: rad
+      command: joint_position
+      source: action/joint/position
+    - name: left_gripper
+      index: 6
+      unit: m
+      command: gripper_position
+      source: action/joint/position
+      open: 0.085
+      closed: 0.0
+    - name: right_arm
+      slice: [7, 13]
+      unit: rad
+      command: joint_position
+      source: action/joint/position
+    - name: right_gripper
+      index: 13
+      unit: m
+      command: gripper_position
+      source: action/joint/position
+      open: 0.085
+      closed: 0.0
+    - name: waist_height
+      index: 14
+      unit: m
+      command: lift_position
+      source: action/waist/position
+    - name: base_velocity
+      slice: [15, 18]
+      unit: mps_radps
+      command: base_velocity
+      source: action/robot/velocity
+      fields: [vx, vy, wz]
+
+quality_checks:
+  state_dim: 21
+  action_dim: 18
+  required_cameras: [head_color, hand_left_color, hand_right_color]
+  timestamp_monotonic: true
+  finite_state_action: true
+
+validation:
+  frame_consistency:
+    max_missing_camera_ratio: 0.02
+  action_jump:
+    arm_state_slices: [[0, 6], [7, 13]]
+    arm_action_slices: [[0, 6], [7, 13]]
+    max_arm_delta: 1.05
+  gripper:
+    model_min: 0.0
+    model_max: 0.085
+
+processing:
+  rtml:
+    quality:
+      accept_score: 70.0
+    global_constraints:
+      max_timestamp_gap_sec: 0.3
+      min_fps: 29.0
+      min_duration_sec: 4.0
+      max_duration_sec: 10.0
+      max_missing_camera_ratio: 0.02
+      max_state_step: 0.8
+      max_joint_step: 0.8
+      min_joint_motion_mean: 0.0001
+      gripper_delta_threshold: 0.01
+      action_stationary_epsilon: 0.01
+      stationary_state_epsilon: 0.01
+      stationary_base_velocity_epsilon: 0.0001
+      max_stationary_action_frames: 15
+  segmentation:
+    gripper_delta_threshold: 0.01
+    min_segment_frames: 10
+    stationary_min_frames: 12
+  frame_annotations:
+    window: 5
+    vel_slow_thresh: 0.02
+    vel_fast_thresh: 0.15
+    acc_thresh: 0.02
+  annotations:
+    vision_pipeline:
+      enabled: false
+      detector: local_yolo
+      weights: models/wbc_yolo26l_seg_640x400_20260522_1516_boxmap5095_0.862_maskmap5095_0.751.pt
+      imgsz: [640, 416]
+      conf_threshold: 0.45
+      key_frames: [first, last]
+      camera: head_color
+      timeout_sec: 10
+    object_flexibility_default: rigid
+    hand_target_assignment:
+      cameras: [head_color]
+      wrist_cameras:
+        left: hand_left_color
+        right: hand_right_color
+      sample_frame: post_grasp
+      post_grasp_frame_offset: 10
+      max_events_per_hand: 1
+    vlm:
+      enabled: false
+      base_url: https://aihubmix.com/v1
+      model: qwen3-vl-flash
+      api_key_env: AIHUBMIX_API_KEY
+      max_tokens: 256
+      language: zh
+      timeout_sec: 30
+      scene_layout:
+        auto_infer: true
+        shelf:
+          physical_levels: 5
+          drink_rows: 3
+
+yolo_class_alias:
+  0: "ENONE Sparkling Water"
+  1: "7UP"
+  2: "Coca-Cola"
+  3: "Weichuan Daily C Orange"
+  4: "Minute Maid Juice"
+  5: "Schweppes Vitamin C"
+  6: "Mirinda Grape"
+  7: "Itoen Oolong Tea"
+  8: "Pepsi"
+  9: "Huayang Soda"
+  10: "Coconut Water"
+  11: "JDB Herbal Tea"
+  12: "Mirinda Peach"
+  13: "Weichuan Daily C Grape"
+  14: "Mirinda Orange"
+  15: "Aojiru"
+  16: "Tropicana"
+  17: "Mirinda Green Apple"
+  18: "ENONE Juice"
+  19: "Frozen Pear Drink"
+
+yolo_class_normalize:
+  "Itoen Oolong Tea": "Itoen Barley Tea"
+  "Mirinda Grape": "Mirinda"
+  "Mirinda Orange": "Mirinda"
+  "Mirinda Peach": "Mirinda"
+  "Mirinda Green Apple": "Mirinda"
+  "Weichuan Daily C Orange": "Weichuan Daily C"
+  "Weichuan Daily C Grape": "Weichuan Daily C"

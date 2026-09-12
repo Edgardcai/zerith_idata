@@ -1,0 +1,127 @@
+Metadata-Version: 2.4
+Name: lerobot
+Version: 0.3.3
+Summary: 🤗 LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch
+Author-email: Rémi Cadène <re.cadene@gmail.com>, Simon Alibert <alibert.sim@gmail.com>, Alexander Soare <alexander.soare159@gmail.com>, Quentin Gallouédec <quentin.gallouedec@ec-lyon.fr>, Steven Palma <imstevenpmwork@ieee.org>, Pepijn Kooijmans <pepijnkooijmans@outlook.com>, Michel Aractingi <michel.aractingi@gmail.com>, Adil Zouitine <adilzouitinegm@gmail.com>, Dana Aubakirova <danaaubakirova17@gmail.com>, Caroline Pascal <caroline8.pascal@gmail.com>, Martino Russi <nopyeps@gmail.com>, Thomas Wolf <thomaswolfcontact@gmail.com>
+License: Apache-2.0
+Project-URL: homepage, https://huggingface.co/lerobot
+Project-URL: documentation, https://huggingface.co/docs/lerobot/index
+Project-URL: source, https://github.com/huggingface/lerobot
+Project-URL: issues, https://github.com/huggingface/lerobot/issues
+Project-URL: discord, https://discord.gg/s3KuuzsPFb
+Keywords: lerobot,huggingface,robotics,machine learning,artificial intelligence
+Classifier: Development Status :: 3 - Alpha
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Education
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: Apache Software License
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Topic :: Software Development :: Build Tools
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: datasets<=3.6.0,>=2.19.0
+Requires-Dist: diffusers>=0.27.2
+Requires-Dist: huggingface-hub[cli,hf-transfer]>=0.34.2
+Requires-Dist: cmake>=3.29.0.1
+Requires-Dist: einops>=0.8.0
+Requires-Dist: opencv-python-headless>=4.9.0
+Requires-Dist: av>=14.2.0
+Requires-Dist: jsonlines>=4.0.0
+Requires-Dist: packaging>=24.2
+Requires-Dist: pynput>=1.7.7
+Requires-Dist: pyserial>=3.5
+Requires-Dist: wandb>=0.20.0
+Requires-Dist: torch<2.8.0,>=2.2.1
+Requires-Dist: torchcodec<0.6.0,>=0.2.1; sys_platform != "win32" and (sys_platform != "linux" or (platform_machine != "aarch64" and platform_machine != "arm64" and platform_machine != "armv7l")) and (sys_platform != "darwin" or platform_machine != "x86_64")
+Requires-Dist: torchvision<0.23.0,>=0.21.0
+Requires-Dist: draccus==0.10.0
+Requires-Dist: gymnasium<1.0.0,>=0.29.1
+Requires-Dist: rerun-sdk<0.23.0,>=0.21.0
+Requires-Dist: deepdiff<9.0.0,>=7.0.1
+Requires-Dist: flask<4.0.0,>=3.0.3
+Requires-Dist: imageio[ffmpeg]<3.0.0,>=2.34.0
+Requires-Dist: termcolor<4.0.0,>=2.4.0
+Provides-Extra: pygame-dep
+Requires-Dist: pygame>=2.5.1; extra == "pygame-dep"
+Provides-Extra: placo-dep
+Requires-Dist: placo>=0.9.6; extra == "placo-dep"
+Provides-Extra: transformers-dep
+Requires-Dist: transformers<4.52.0,>=4.50.3; extra == "transformers-dep"
+Provides-Extra: grpcio-dep
+Requires-Dist: grpcio==1.73.1; extra == "grpcio-dep"
+Requires-Dist: protobuf==6.31.0; extra == "grpcio-dep"
+Provides-Extra: feetech
+Requires-Dist: feetech-servo-sdk>=1.0.0; extra == "feetech"
+Provides-Extra: dynamixel
+Requires-Dist: dynamixel-sdk>=3.7.31; extra == "dynamixel"
+Provides-Extra: gamepad
+Requires-Dist: lerobot[pygame-dep]; extra == "gamepad"
+Requires-Dist: hidapi>=0.14.0; extra == "gamepad"
+Provides-Extra: hopejr
+Requires-Dist: lerobot[feetech]; extra == "hopejr"
+Requires-Dist: lerobot[pygame-dep]; extra == "hopejr"
+Provides-Extra: lekiwi
+Requires-Dist: lerobot[feetech]; extra == "lekiwi"
+Requires-Dist: pyzmq>=26.2.1; extra == "lekiwi"
+Provides-Extra: kinematics
+Requires-Dist: lerobot[placo-dep]; extra == "kinematics"
+Provides-Extra: intelrealsense
+Requires-Dist: pyrealsense2>=2.55.1.6486; sys_platform != "darwin" and extra == "intelrealsense"
+Requires-Dist: pyrealsense2-macosx>=2.54; sys_platform == "darwin" and extra == "intelrealsense"
+Provides-Extra: pi0
+Requires-Dist: lerobot[transformers-dep]; extra == "pi0"
+Provides-Extra: smolvla
+Requires-Dist: lerobot[transformers-dep]; extra == "smolvla"
+Requires-Dist: num2words>=0.5.14; extra == "smolvla"
+Requires-Dist: accelerate>=1.7.0; extra == "smolvla"
+Requires-Dist: safetensors>=0.4.3; extra == "smolvla"
+Provides-Extra: hilserl
+Requires-Dist: lerobot[transformers-dep]; extra == "hilserl"
+Requires-Dist: gym-hil>=0.1.9; extra == "hilserl"
+Requires-Dist: lerobot[grpcio-dep]; extra == "hilserl"
+Requires-Dist: lerobot[placo-dep]; extra == "hilserl"
+Provides-Extra: async
+Requires-Dist: lerobot[grpcio-dep]; extra == "async"
+Requires-Dist: matplotlib>=3.10.3; extra == "async"
+Provides-Extra: dev
+Requires-Dist: pre-commit>=3.7.0; extra == "dev"
+Requires-Dist: debugpy>=1.8.1; extra == "dev"
+Requires-Dist: lerobot[grpcio-dep]; extra == "dev"
+Requires-Dist: grpcio-tools==1.73.1; extra == "dev"
+Provides-Extra: test
+Requires-Dist: pytest>=8.1.0; extra == "test"
+Requires-Dist: pytest-timeout>=2.4.0; extra == "test"
+Requires-Dist: pytest-cov>=5.0.0; extra == "test"
+Requires-Dist: mock-serial>=0.0.1; sys_platform != "win32" and extra == "test"
+Provides-Extra: video-benchmark
+Requires-Dist: scikit-image>=0.23.2; extra == "video-benchmark"
+Requires-Dist: pandas>=2.2.2; extra == "video-benchmark"
+Provides-Extra: aloha
+Requires-Dist: gym-aloha>=0.1.1; extra == "aloha"
+Provides-Extra: pusht
+Requires-Dist: gym-pusht>=0.1.5; extra == "pusht"
+Requires-Dist: pymunk<7.0.0,>=6.6.0; extra == "pusht"
+Provides-Extra: xarm
+Requires-Dist: gym-xarm>=0.1.1; extra == "xarm"
+Provides-Extra: all
+Requires-Dist: lerobot[dynamixel]; extra == "all"
+Requires-Dist: lerobot[gamepad]; extra == "all"
+Requires-Dist: lerobot[hopejr]; extra == "all"
+Requires-Dist: lerobot[lekiwi]; extra == "all"
+Requires-Dist: lerobot[kinematics]; extra == "all"
+Requires-Dist: lerobot[intelrealsense]; extra == "all"
+Requires-Dist: lerobot[pi0]; extra == "all"
+Requires-Dist: lerobot[smolvla]; extra == "all"
+Requires-Dist: lerobot[hilserl]; extra == "all"
+Requires-Dist: lerobot[async]; extra == "all"
+Requires-Dist: lerobot[dev]; extra == "all"
+Requires-Dist: lerobot[test]; extra == "all"
+Requires-Dist: lerobot[video_benchmark]; extra == "all"
+Requires-Dist: lerobot[aloha]; extra == "all"
+Requires-Dist: lerobot[pusht]; extra == "all"
+Requires-Dist: lerobot[xarm]; extra == "all"
+Dynamic: license-file
+
+Vendored LeRobot 0.3.3 compatibility source. See THIRD_PARTY.md and the retained LICENSE.

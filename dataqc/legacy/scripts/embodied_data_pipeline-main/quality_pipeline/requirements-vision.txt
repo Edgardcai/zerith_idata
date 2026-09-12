@@ -1,0 +1,6 @@
+# Optional dependencies for:
+#   python tools/run_quality_pipeline.py ... --vision --vlm
+#
+# Use a venv or conda environment instead of installing into the system Python.
+ultralytics
+openai
