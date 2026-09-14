@@ -76,3 +76,40 @@ assert api.get_settings()['source_roots']['real']==str(api.SOURCE_ROOT)
              DATAQC_SIM_ROOT='/srv/data/datasets/public/zerith_sim_data')
     result=subprocess.run([sys.executable,'-c',code],cwd=project,env=env,capture_output=True,text=True)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_supervisor_keeps_scheduler_environment(tmp_path, monkeypatch):
+    from deploy.run_services import environment
+    from types import SimpleNamespace
+    monkeypatch.setenv('CUDA_VISIBLE_DEVICES','0')
+    monkeypatch.setenv('GPU_SCHEDULER_SESSION_ID','approved-session')
+    monkeypatch.setenv('DBUS_SESSION_BUS_ADDRESS','unix:path=/run/gpu-scheduler/blocked-user-bus')
+    args=SimpleNamespace(runtime=tmp_path,port=9990,real_root=tmp_path/'real',sim_root=tmp_path/'sim',binary_path=tmp_path)
+    env=environment(args)
+    assert env['CUDA_VISIBLE_DEVICES']=='0'
+    assert env['GPU_SCHEDULER_SESSION_ID']=='approved-session'
+    assert env['DBUS_SESSION_BUS_ADDRESS']=='unix:path=/run/gpu-scheduler/blocked-user-bus'
+    assert env['DATAQC_PORT']=='9990'
+
+
+def test_supervisor_restarts_crashed_child_and_stops_children(tmp_path, monkeypatch):
+    from deploy import run_services as service
+    from types import SimpleNamespace
+    signals={};spawned=[];killed=[];ticks=[]
+    monkeypatch.setattr(service.signal,'signal',lambda sig,fn:signals.update({sig:fn}))
+    def spawn(command,**kwargs):
+        number=len(spawned)
+        proc=SimpleNamespace(pid=1000+number,returncode=1 if number==0 else None,
+            poll=lambda:1 if number==0 else None,wait=lambda timeout:None)
+        spawned.append((command,proc,kwargs));return proc
+    def tick(_):
+        ticks.append(1)
+        if len(ticks)==2:signals[service.signal.SIGTERM]()
+    monkeypatch.setattr(service.subprocess,'Popen',spawn)
+    monkeypatch.setattr(service.time,'sleep',tick)
+    monkeypatch.setattr(service.os,'killpg',lambda pid,sig:killed.append(pid))
+    args=SimpleNamespace(runtime=tmp_path,port=9990,real_root=tmp_path/'real',sim_root=tmp_path/'sim',binary_path=tmp_path)
+    service.supervise(args)
+    assert len(spawned)==3 and spawned[0][0]==spawned[2][0]
+    assert killed==[1002,1001]
+    assert not (tmp_path/'var/services/supervisor.pid').exists()

@@ -51,18 +51,30 @@ curl http://127.0.0.1:8091/auto/api/health
 
 ## H200 部署
 
-项目目录 `/srv/projects/caizj/dataqc`，监听 `9990`：
+项目目录 `/srv/projects/caizj/dataqc`，监听 `9990`。该机器通过 `gpu-shell`
+管理预约与设备隔离，禁止绕过调度器屏蔽的用户服务总线。使用监督进程在调度器
+允许的 scope 内运行网页和 worker，退出 SSH 后继续运行，子进程异常退出会自动重启。
 
 ```bash
 cd /srv/projects/caizj/dataqc
-export XDG_RUNTIME_DIR=/run/user/$(id -u)
-export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
-.venv/bin/python deploy/install_services.py --apply --port 9990 \
-  --real-root /srv/data/datasets/public/zerith_data \
-  --sim-root /srv/data/datasets/public/zerith_sim_data \
-  --binary-path /home/caizj/miniconda3/bin
+# 通过服务器批准的入口刷新预约环境，再启动服务。
+gpu-shell --command '/srv/projects/caizj/dataqc/runtime/config/start-service.sh'
 ```
 
-生成的服务设置 `DATAQC_REAL_ROOT`、`DATAQC_SIM_ROOT` 和 `DATAQC_PORT`。
-直接运行时也可设置这三个环境变量；API 凭据与 YOLO 权重放在该部署的 `runtime/` 下，禁止提交 Git。
-更新后用 `DATAQC_SERVICE_URL=http://127.0.0.1:9990 .venv/bin/python deploy/restart_when_idle.py` 重启。
+部署时的预约允许 H200-7 和 H200-0；掩码 `7,0` 在当前隔离环境中无法初始化 CUDA，
+选择已获准的子集 `0` 后正常。启动脚本检查预约是否仍允许 GPU 0；不允许时保留
+调度器的掩码，不扩大设备访问范围。预约变更、到期或服务器重启后，遵循调度器策略重新启动。
+
+日志与 PID 位于 `runtime/var/services/`。检查：
+
+```bash
+curl http://127.0.0.1:9990/healthz
+curl http://127.0.0.1:9990/auto/api/health
+cat runtime/var/services/supervisor.pid
+tail -n 60 runtime/var/services/web.log runtime/var/services/worker.log
+```
+
+`DATAQC_REAL_ROOT`、`DATAQC_SIM_ROOT` 分别设为
+`/srv/data/datasets/public/zerith_data`、`/srv/data/datasets/public/zerith_sim_data`。
+API 凭据与 YOLO 权重只放在该部署的 `runtime/` 下，不提交 Git。
+更新时先确认没有活动任务，向监督进程发送 SIGTERM，更新源码后重新运行上述启动命令。
