@@ -58,7 +58,7 @@ curl http://127.0.0.1:8091/auto/api/health
 ```bash
 cd /srv/projects/caizj/dataqc
 # 通过服务器批准的入口刷新预约环境，再启动服务。
-gpu-shell --command '/srv/projects/caizj/dataqc/runtime/config/start-service.sh'
+gpu-shell r-d8b61c44 --command '/srv/projects/caizj/dataqc/runtime/config/start-service.sh'
 ```
 
 部署时的预约允许 H200-7 和 H200-0；掩码 `7,0` 在当前隔离环境中无法初始化 CUDA，

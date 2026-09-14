@@ -92,6 +92,15 @@ def test_supervisor_keeps_scheduler_environment(tmp_path, monkeypatch):
     assert env['DATAQC_PORT']=='9990'
 
 
+def test_installer_rejects_user_bus_in_scheduler_session():
+    import os, subprocess, sys
+    from pathlib import Path
+    project=Path(__file__).resolve().parents[1]
+    result=subprocess.run([sys.executable, str(project/'deploy/install_services.py'), '--apply'],
+        env=dict(os.environ, GPU_SCHEDULER_LOGIN_CONTROL='h200'), capture_output=True, text=True)
+    assert result.returncode == 2 and 'gpu-shell' in result.stderr
+
+
 def test_supervisor_restarts_crashed_child_and_stops_children(tmp_path, monkeypatch):
     from deploy import run_services as service
     from types import SimpleNamespace

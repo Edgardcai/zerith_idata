@@ -1,5 +1,6 @@
 """Render systemd user units for this checkout; --apply installs and starts them."""
 import argparse
+import os
 from pathlib import Path
 import subprocess
 
@@ -43,6 +44,8 @@ if __name__ == '__main__':
     parser.add_argument('--sim-root', type=Path, default=Path('/data/sim_data'))
     parser.add_argument('--binary-path', type=Path, help='ffmpeg/ffprobe 所在目录')
     args = parser.parse_args()
+    if args.apply and os.environ.get('GPU_SCHEDULER_LOGIN_CONTROL') == 'h200':
+        parser.error('H200 调度器管理此会话；请通过 gpu-shell 启动 deploy/run_services.py，不能改用用户服务总线')
     if not args.python.is_file():
         parser.error('请先创建 Python 3.11 环境并安装项目依赖')
     target = Path.home() / '.config/systemd/user' if args.apply else args.output
