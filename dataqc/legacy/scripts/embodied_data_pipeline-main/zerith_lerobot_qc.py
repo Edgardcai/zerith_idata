@@ -36,9 +36,8 @@ PROMPT_PATTERNS = {mode: re.compile(re.escape(template).replace(re.escape("{item
 
 
 def prompt_mode(path: Path) -> str | None:
-    aliases = {"twohands": "twohand", "twohand": "twohand", "left_hand": "left_hand", "lefthand": "left_hand",
-               "righthand": "righthand", "right_hand": "righthand"}
-    return next((aliases[part] for part in reversed(path.parts) if part in aliases), None)
+    # Renamed/merged directories do not declare the task's operating hand.
+    return None
 
 
 def prompt_format(text: str, _item_names=None) -> str:

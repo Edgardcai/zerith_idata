@@ -145,9 +145,11 @@ def read(root):
     targets=parse_task(task) or {}
     stages,stage_issues=stage_mapping(meta,steps,n,targets)
     mismatches=[]
+    if meta.get('task') and meta.get('prompt') and task_text(meta['task'])!=task_text(meta['prompt']):
+        mismatches.append(f"任务冲突：task={meta['task']}；prompt={meta['prompt']}")
     for hand in ('left','right'):
         if meta.get(hand+'_target') and targets.get(hand)!=meta[hand+'_target']:
-            mismatches.append(f'{hand} 目标与任务文本不一致')
+            mismatches.append(f"{'左手' if hand=='left' else '右手'}目标冲突：提示词={targets.get(hand)}；元数据={meta[hand+'_target']}")
     measured=state.copy()
     if locked:measured[:,17:21]=np.asarray(posture)
     return dict(root=root,state=state,action=action,t=t,attrs=attrs,n=n,transitions=[s['end'] for s in stages],

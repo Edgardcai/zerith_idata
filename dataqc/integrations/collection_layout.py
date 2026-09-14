@@ -56,10 +56,11 @@ def integrate_layout(app):
     html=re.sub(r'          <td>\$\{escapeHtml\(formatChartValue\(item.fps.*?<td>\$\{badge\(item.collection_status\)\}</td>','',html,count=1,flags=re.S)
     html=re.sub(r'          <td>\$\{escapeHtml\(String\(item.quality_description.*?<td>\$\{escapeHtml\(item.longest_stationary_display \?\? ""\)\}</td>',
         lambda m:'''          <td class="grade-metrics">FPS ${escapeHtml(formatChartValue(item.fps,"",2,true))} · 帧数 ${escapeHtml(item.frame_count ?? '—')} · 缺帧 ${escapeHtml(cameraMissing ?? '—')} · 最长静止 ${escapeHtml(item.longest_stationary_display || '—')} · 预警 ${escapeHtml(item.warning_count ?? '—')}</td>
-          <td class="grade-notes">${escapeHtml(item.quality_description || '')}<small>${escapeHtml(qualityWarningText(item))}</small></td>''',html,count=1,flags=re.S)
+          <td class="grade-notes">${qualityReportSummary(item)}</td>''',html,count=1,flags=re.S)
     html=html.replace('colspan="15"','colspan="9"')
     html=html.replace('Array.from(document.querySelectorAll(".episode-check"))', 'Array.from(document.querySelectorAll(".episode-check")).filter(input=>!input.closest("tr").hidden)')
     html=html.replace('          input.checked = selectAll.checked;', '          if(input.closest("tr").hidden)return;\n          input.checked = selectAll.checked;')
     html=html.replace('      latestEpisodes = [];', '      latestEpisodes = [];\n      renderGradeComparison({episodes:[]});')
     html=html.replace('    setWorkspace("collection");', '    const workbenchHeader=document.querySelector(\'body>header\');\n    const fitReplayWorkspace=()=>document.documentElement.style.setProperty(\'--workbench-header-height\',`${workbenchHeader?.getBoundingClientRect().height||80}px`);\n    if(workbenchHeader)new ResizeObserver(fitReplayWorkspace).observe(workbenchHeader);\n    window.addEventListener(\'resize\',fitReplayWorkspace);fitReplayWorkspace();\n    setWorkspace("collection");')
+    html=html.replace('<script>', '<link rel="stylesheet" href="/auto/assets/qc-report.css?v=1"><script src="/auto/assets/qc-report.js?v=1"></script><script>',1)
     app.HTML=html

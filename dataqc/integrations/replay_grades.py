@@ -49,6 +49,11 @@ def integrate_grades(app):
             original=captures[key]
             report_path=Path(row['qc_output'])/'qc_report.json' if row.get('qc_output') else None
             report=read_json(report_path) if report_path else {}
+            from dataqc.reporting import presentation
+            row['qc_presentation']=presentation(report)
+            raw=report.get('raw_report',{})
+            measured_fps=next((c.get('detail',{}).get('actual') for c in raw.get('checks',[]) if c.get('key')=='fps'),None)
+            if measured_fps is not None:row['fps']=measured_fps
             # Reports produced before this workflow may already contain an old manual edit.
             baseline=report.get('qc_original') or (report if not report.get('manual_review') else {})
             qc=baseline.get('quality_grade') or ('F' if row.get('qc_ok') is False else '')
@@ -125,6 +130,7 @@ def integrate_grades(app):
                     manual_grade=row.get('manual_quality_grade',''),grade_source=row.get('grade_source'),
                     grade_changed=row.get('grade_changed',False),review_required=row.get('grade_review_required',False),
                     review_pending=row.get('review_pending',False),
+                    qc_presentation=row.get('qc_presentation',{}),
                     reason=row.get('qc_reason',''),revision=row['grade_revision'],busy=busy(cfg))
     def snapshot(root):
         root,cfg=context(root);app.invalidate_status_cache()
@@ -135,7 +141,7 @@ def integrate_grades(app):
     def grade_list(root):
         _,cfg=context(root)
         result=status(app.stringify_config(cfg))
-        return dict(episodes=[row_snapshot(row,cfg) for row in result.get('episodes',[])])
+        return dict(episodes=[{k:v for k,v in row_snapshot(row,cfg).items() if k!='qc_presentation'} for row in result.get('episodes',[])])
     def apply(cfg,requests,source='manual'):
         if source not in ('manual','collection','qc'):raise ValueError('无效等级来源')
         with lock:

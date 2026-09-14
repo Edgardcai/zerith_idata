@@ -62,6 +62,9 @@ def inspect(root,report,cfg,cache,progress=lambda _:None,*,motion_outcome=None):
     else:grade='A';reasons.append('动作指标分析完成；类别双检通过' if enabled else '动作指标分析完成；类别识别未启用')
     if (not targets or not stages or any(c['key']=='stationary' and c['status']=='fail' for c in report['checks'])) and grade!='F':
         grade='REVIEW';reasons.append('任务/阶段标注或超长静止段需要人工复核')
+    references=[c for c in report['checks'] if isinstance(c.get('detail'),dict) and c['detail'].get('requires_review')]
+    if references and grade!='F':
+        grade='REVIEW';reasons.extend('；'.join(c['detail'].get('issues',[])) for c in references)
     decision=warning_grade(dict(grade=grade,reason='；'.join(reasons),corrected_prompt=normalized_task(d['task']),
         stages=stages,safe_trim_ids=[],findings=[],category_qc=dict(policy=VERSION,enabled=enabled,
         yolo_enabled=enabled,vlm_enabled=enabled,complete=cat['status']=='pass',model=cfg['api_model']),

@@ -178,7 +178,7 @@ def datasets():
             episodes = discover(p)
             count = len(episodes)
             sim = bool(episodes) and all(is_simulation(e) for e in episodes)
-            height = dict(policy='per_episode_first_action',note='每条首帧 Action 高度 ±0.02 m') if sim else source_height(p)
+            height = dict(policy='per_episode',note='逐条读取目标高度；无独立目标时检查首帧指令保持，容差±0.02 m')
             out.append(dict(root=str(p.resolve()), name=p.name, count=count, height=height,
                             source_format='zerith_sim_v1' if sim else 'zerith_columnar',source_label='仿真' if sim else '真机'))
         except (OSError, ValueError):
@@ -314,6 +314,8 @@ def control(rid: str, action: Literal["pause", "resume", "cancel", "retry"]):
 @app.get("/api/episodes/{eid}")
 def episode_detail(eid: int):
     e = need_ep(eid)
+    from .reporting import presentation
+    e['data']['presentation']=presentation(e['data'])
     try:
         d = load(e["root"])
         e["trajectory"] = library.trajectory(d["state"], d["action"], d["t"]-d["t"][0], d["task"], d["transitions"])

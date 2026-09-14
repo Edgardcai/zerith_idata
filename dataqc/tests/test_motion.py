@@ -125,6 +125,7 @@ def test_posture_quantiles_warn_only(col):
 def test_lift_height_all_values_and_float32_boundary(tmp_path, height):
     s, a, _ = trajectory()
     root = tmp_path / f"Milk_Tea_{height:g}" / "episode_009999"
+    write_json(root/'collection_task.json',dict(targets=dict(lift_height=height)))
     s[:, 16] = np.float32(height - 0.02)
     a[:, 16] = np.float32(height + 0.02)
     assert lift_check(s, a, root)["status"] == "pass"
@@ -136,9 +137,10 @@ def test_lift_height_all_values_and_float32_boundary(tmp_path, height):
     assert "42" in c["detail"]["issues"][0]
 
 
-def test_lift_provenance_and_ambiguous_directory(tmp_path):
+def test_lift_provenance_and_directory_is_not_a_reference(tmp_path):
     original = tmp_path / "Milk_Tea_0.4" / "episode_000000"
     repaired = tmp_path / "repaired" / "episode_000001_v0"
+    write_json(original/'collection_task.json',dict(targets=dict(lift_height='0.4')))
     write_json(repaired / "provenance.json", dict(source=str(original)))
     assert source_height(repaired)["expected_m"] == 0.4
     assert "error" in source_height(tmp_path / "Milk_Tea_0.4_0.8" / "episode_000001")

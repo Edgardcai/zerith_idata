@@ -150,7 +150,7 @@ def load(root):
         attrs=attrs,
         n=len(state),
         transitions=trans,
-        task=str(attrs.get("task_name", "")),
+        task=str(attrs.get("task_name") or read_json(root / "collection_task.json").get('config',{}).get('task_name') or read_json(root / "episode_meta.json").get('task') or ''),
         meta=read_json(root / "episode_meta.json"),
         collection=read_json(root / "collection_task.json"),
     )
@@ -189,6 +189,8 @@ SINGLE = re.compile(r"Grasp (" + ITEM + r") with the (left|right) hand")
 
 
 def parse_task(text):
+    # Raw recordings with or without a final period share the same semantics.
+    text=text[:-1] if text.endswith('.') else text
     if "  " in text:
         return None
     m = DOUBLE.fullmatch(text)

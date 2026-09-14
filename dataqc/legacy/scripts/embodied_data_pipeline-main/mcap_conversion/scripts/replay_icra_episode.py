@@ -2954,7 +2954,7 @@ def build_index_html() -> str:
 
   <link rel="stylesheet" href="/auto/assets/raw-grade.css?v=4">
   <link rel="stylesheet" href="/auto/assets/raw-compact.css?v=1">
-  <script src="/auto/assets/raw-grade.js?v=4"></script>
+  <link rel="stylesheet" href="/auto/assets/qc-report.css?v=1"><script src="/auto/assets/qc-report.js?v=1"></script><script src="/auto/assets/raw-grade.js?v=5"></script>
   <script src="/auto/assets/raw-review-filter.js?v=1"></script>
   <script>
     const $ = (id) => document.getElementById(id);
@@ -2968,6 +2968,7 @@ def build_index_html() -> str:
       data.quality_grade=s.current_grade;data.collection_grade=s.collection_grade;data.qc_status=s.collection_grade?'已记录':'未提供';
       data.qc_remark=s.reason||'';updateQcBlock();updateCurrentEpisodeOption();
     });
+    window.addEventListener("qc-seek-frame",event=>{if(data?.episode_dir===event.detail.root){pause();seekToFrame(event.detail.frame)}});
     let videos = [];
     let playing = false;
     let currentFrame = 0;
@@ -3338,7 +3339,9 @@ def build_index_html() -> str:
         return `<option value="${ep.index}">${escapeHtml(ep.name)}${escapeHtml(status)} · ${ep.frame_count}f</option>`;
       }).join("");
       const fallback = Number(recordsPayload.initial_index || 0);
-      const wanted = preferredIndex === null ? fallback : Number(preferredIndex);
+      const requestedRoot=new URLSearchParams(location.search).get("qc_root");
+      const requested=episodes.find(ep=>ep.episode_dir===requestedRoot);
+      const wanted = preferredIndex === null ? Number(requested?.index??fallback) : Number(preferredIndex);
       reviewFilter.setRecords(episodes.map(ep=>({root:ep.episode_dir,value:ep.index,label:`${ep.name} · ${ep.frame_count}f`})),wanted);
       if (episodes.some(ep => Number(ep.index) === wanted)) {
         select.value = String(wanted);
@@ -3659,6 +3662,8 @@ def build_index_html() -> str:
       select.addEventListener("change", (e) => loadEpisode(Number(e.target.value)));
       const initialIndex = await loadEpisodeRecords();
       await loadEpisode(initialIndex);
+      const requestedFrame=Number(new URLSearchParams(location.search).get("qc_frame"));
+      if(Number.isInteger(requestedFrame)&&requestedFrame>=0)seekToFrame(requestedFrame);
 
       $("prevEpisodeBtn").addEventListener("click", () => loadAdjacentEpisode(-1));
       $("nextEpisodeBtn").addEventListener("click", () => loadAdjacentEpisode(1));

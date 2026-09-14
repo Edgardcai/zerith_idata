@@ -88,7 +88,8 @@ def numeric_checks(s, a, t, threshold=40):
         25,
     )
     finite = all(np.isfinite(v).all() for v in [s, a, t])
-    add("finite", "pass" if finite else "fail", {"finite": bool(finite)}, 30)
+    invalid={key:np.argwhere(~np.isfinite(v)).tolist() for key,v in [('state',s),('action',a),('timestamp',t)]}
+    add("finite", "pass" if finite else "fail", {"finite": bool(finite),"invalid":invalid}, 30)
     if n < 2:
         add("timestamps", "fail", {"frames": n, "minimum": 2}, 25)
     if len(t) != n:
@@ -338,11 +339,12 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
     ct = d["collection"]
     ctask = ct.get("config", {}).get("task_name")
     if ctask and ctask != task:
-        mism.append("collection_task 与 HDF5 提示词不一致")
+        if parse_task(normalized_task(ctask)) != parse_task(normalized_task(task)) or not targets:
+            mism.append(f"任务冲突：HDF5={task}；采集配置={ctask}")
     if targets:
         for h, v in ct.get("targets", {}).items():
             if h in ("left", "right") and v and targets.get(h) != v:
-                mism.append(f"{h} 物品标注不一致")
+                mism.append(f"{'左手' if h=='left' else '右手'}目标冲突：提示词={targets.get(h)}；采集配置={v}")
     add("metadata", "warn" if mism else "pass", {"issues": mism}, 3)
     tr = d["transitions"]
     ends = [int(x) for x in tr if 0 < int(x) <= n]

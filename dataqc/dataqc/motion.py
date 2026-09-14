@@ -7,7 +7,7 @@ import numpy as np
 
 from .io import NAMES, clean, normalized_task, parse_task, read_json
 
-RULE_VERSION = "zerith_qc_5"
+RULE_VERSION = "zerith_qc_6"
 EPS = 1e-7  # float32 round-trip tolerance, not a physical tolerance
 
 
@@ -43,7 +43,7 @@ def failure_reason(checks):
 
 
 def source_height(root):
-    """Resolve the original dataset suffix, including after repair/renumbering."""
+    """Read this episode's reference; directory names have no task semantics."""
     root = Path(root)
     seen = set()
     for _ in range(8):
@@ -54,28 +54,8 @@ def source_height(root):
         if not prov.get("source"):
             break
         root = Path(prov["source"])
-    from .io import is_simulation
-    if is_simulation(root):
-        from .simulation import height_reference
-        return height_reference(root)
-    # All episodes in a dataset share the height declared by its first-level directory.
-    from .config import REAL_SOURCE_ROOT
-    base = REAL_SOURCE_ROOT
-    candidates = [root, *root.parents]
-    if root.is_relative_to(base) and root != base:
-        candidates = [base / root.relative_to(base).parts[0]]
-    for p in candidates:
-        if re.match(r"episode(?:_|$)", p.name):
-            continue
-        match = re.search(r"_(-?\d+(?:\.\d+)?)$", p.name)
-        if match:
-            if re.search(r"_-?\d+(?:\.\d+)?$", p.name[: match.start()]):
-                return dict(
-                    directory=str(p),
-                    error="目录末尾含多个高度数值，每组只能指定一个高度",
-                )
-            return dict(directory=str(p), expected_m=float(match.group(1)))
-    return dict(error="目录末尾缺少升降高度，无法核对预期值")
+    from .references import height_reference
+    return height_reference(root)
 
 
 def arm_and_posture_checks(s, a, t):
@@ -129,6 +109,7 @@ def arm_and_posture_checks(s, a, t):
                     mean_rad=mean,
                     q01_rad=q01,
                     q99_rad=q99,
+                    bad_frames=np.flatnonzero(abs(v)>0.02+EPS).tolist(),
                     status="pass" if ok else "warn",
                 )
             )
@@ -157,7 +138,7 @@ def lift_check(s, a, root):
     if "error" in expected:
         # Missing reference is explicitly incomplete; never infer it from observations.
         return result(
-            "lift_height", "升降柱高度", "fail", expected, [expected["error"]]
+            "lift_height", "升降柱参考", "warn", dict(expected, requires_review=True), [expected["error"]]
         )
     height = expected["expected_m"]
     channels, issues = {}, []

@@ -33,7 +33,8 @@ def test_catalog_and_whole_dataset_creation(tmp_path, monkeypatch):
     assert len(catalog) == 1
     assert catalog[0]['root'] == str(group)
     assert catalog[0]['count'] == 2
-    assert catalog[0]['height']['expected_m'] == 0.4
+    assert catalog[0]['height']['policy'] == 'per_episode'
+    assert 'expected_m' not in catalog[0]['height']
     for invalid in [base, group / 'episode_000001', single, base / 'external_0']:
         response = client.post('/api/runs', json={'root': str(invalid)})
         assert response.status_code == 422
@@ -47,9 +48,9 @@ def test_catalog_and_whole_dataset_creation(tmp_path, monkeypatch):
     assert client.post('/api/runs', json={'root': str(group)}).status_code == 409
 
 
-def test_height_belongs_to_first_level_dataset():
+def test_directory_suffix_is_never_a_height_reference():
     path = Path('/data/zerith_data/Milk_Tea_0.4/batch_0.8/episode_000001')
-    assert source_height(path)['expected_m'] == 0.4
+    assert 'error' in source_height(path)
     assert 'error' in source_height(Path('/data/zerith_data/Milk_Tea/batch_0.4/episode_000001'))
 
 

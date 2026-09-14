@@ -82,7 +82,7 @@ def run_manual_checks(episode,profile):
         display_grade=grade
     checks=[]
     for check in raw['checks']:
-        detail=dict(check['detail'])
+        detail=dict(check['detail']) if isinstance(check['detail'],dict) else dict(issues=[str(v) for v in check['detail']])
         key=check['key']
         if key in ('state','action'):
             detail.update(expected=23,frames=episode.n_frames,actions=len(episode.actions),bad_frames=0 if check['status']=='pass' else episode.n_frames)
@@ -106,6 +106,8 @@ def run_manual_checks(episode,profile):
                 quality_grade=display_grade,review_required=grade=='REVIEW',reason=decision['reason'],rules_version=RULE_VERSION,
                 raw_report=raw,visual=visual,decision=decision,source_fingerprint=fingerprint(root),cache=str(cache))
     result['qc_original']={key:result[key] for key in ('quality_grade','accepted','review_required','reason','decision')}
+    from dataqc.reporting import presentation
+    result['presentation']=presentation(result)
     write_json(cache/'manual_report.json',result)
     return result
 

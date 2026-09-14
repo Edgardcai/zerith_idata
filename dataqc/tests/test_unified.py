@@ -166,7 +166,8 @@ def test_old_cli_status_conversion_and_manual_approval(shared,tmp_path,monkeypat
     assert result.returncode==0,result.stdout+'\n'+result.stderr
     status=app.dataset_status(payload)
     row=status['episodes'][0]
-    assert row['quality_grade']=='B' and row['shared_rules_version']=='zerith_qc_5',row
+    from dataqc.motion import RULE_VERSION
+    assert row['quality_grade']=='B' and row['shared_rules_version']==RULE_VERSION,row
     assert not row['shared_review_required'] and row['warning_count']>0
     # Explicit manual grading persists, including approval before conversion.
     app.save_qc_report_quality_grade(cfg,root.name,'B','人工复核完成')

@@ -1,5 +1,16 @@
     const gradeDrafts=new Map(),gradeFeedback=new Map();
     let gradeSaving=false,reportFilter='all',reportDataset='';
+    function qualityReportSummary(item){
+      const p=item.qc_presentation||{},count=p.problem_count||0;
+      return `<span class="qc-row-summary">${escapeHtml(p.summary||item.quality_description||'尚无质检报告')}</span><button type="button" class="qc-report-launch" data-problems="${count>0}" data-qc-episode="${escapeHtml(item.episode_id)}">${count?`查看全部 ${count} 项问题`:'查看全部检查'}</button>`;
+    }
+    async function openQcFrame(item,frame){
+      try{
+        const data=await postJson('/api/replay/start',payload()),url=new URL(data.url||'/replay/',location.origin);
+        url.searchParams.set('qc_root',item.episode_dir);url.searchParams.set('qc_frame',frame);
+        setPanel('replay');document.getElementById('replayFrame').src=url.href;
+      }catch(err){document.getElementById('gradeBulkFeedback').textContent='回放定位失败：'+String(err)}
+    }
     const isReviewPending=item=>Boolean(item.review_pending??item.grade_review_required);
     function qualityWarningText(item){
       const primary=String(item.quality_description||'').trim();
@@ -45,6 +56,10 @@
       finally{gradeSaving=false;select.nextElementSibling.disabled=false;}
     }
     function bindQualityGradeControls() {
+      document.querySelectorAll('[data-qc-episode]').forEach(button=>button.onclick=()=>{
+        const item=latestEpisodes.find(r=>r.episode_id===button.dataset.qcEpisode);if(!item)return;
+        window.QCReport.open(item.qc_presentation,{episode:item.episode_id,onFrame:frame=>openQcFrame(item,frame)});
+      });
       document.querySelectorAll('.quality-grade-select').forEach(select=>{
         select.onchange=()=>{const item=latestEpisodes.find(r=>r.episode_id===select.dataset.episode);gradeDrafts.set(select.dataset.root,{grade:select.value,revision:item.grade_revision});select.parentElement.querySelector('small').textContent='未保存'};
         select.nextElementSibling.onclick=()=>saveQualityGrade(select);

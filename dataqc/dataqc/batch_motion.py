@@ -202,7 +202,7 @@ def review_many(items, cfg, cache, progress=lambda _: None):
             old = read_json(item['cache'] / 'motion_report.json')
             if old.get('signature') == item['signature']:
                 cached += 1
-                results[item['id']] = dict(result=old); continue
+                results[item['id']] = dict(result=dict(old,execution='cached')); continue
             spent = sum((r.get('usage') or {}).get('total_tokens', 0) for r in vision.usage_records(item['cache']))
             if spent >= cfg.get('vlm_token_budget', 250000): raise ValueError('本条 VLM 已达 token 预算，等待人工处理')
             item['compact'] = compact_payload(item['payload'])
