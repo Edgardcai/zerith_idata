@@ -35,8 +35,26 @@ YOLO 三个时刻至少 2/3 匹配，并由 Terra 图像复核通过。
 报告提供全部、等级变化、待复核筛选；回放显示采集等级、自动等级、采用等级及人工保存。
 保存人工结果不覆盖原始采集和自动质检结论。
 
+真机和仿真共用嵌入式 HDF5 回放界面，显示三路视频、23 维曲线、阶段与等级复核栏。
+自动扫描下方的“自定义目录输入”可直接载入服务端数据集目录。
+仿真阶段按原始标注展示，原地删帧和阶段订正仍限真机，仿真截取使用派生副本。
+
+数据概览显示左右夹爪各自“闭合 1 次 / 非 1 次 / 无数据”的占比与每条数据的次数。
+次数直接读取数值质检的 Action 闭合事件：连续两帧确认，初始已闭合不计作新闭合；
+仿真复制的 State 不作为独立反馈。该概览不修改现有分级规则。
+
 ## LeRobot
 
 输出包含 `meta/`、`data/`、`videos/`，保留来源 episode、等级、任务、帧映射与左右手阶段。
 转换发布前执行完整复检；左右手阶段切分分别写入 `lefthand`、`righthand`，双手源保留在 `twohands`。
 LeRobot 0.3.3 的读取兼容实现随源码固定在 `vendor/` 中。
+
+零次方比较模块的 Prompt 格式检测使用以下三种模板，包含句末英文句号：
+
+- 双手：`Grasp XXX with the left hand and then grasp XXX with the right hand.`
+- 左手：`Grasp XXX with the left hand.`
+- 右手：`Grasp XXX with the right hand.`
+
+物体名称按 `legacy/scripts/embodied_data_pipeline-main/lerobot_cross_platform.py` 的
+`KNOWN_ITEMS` 商品列表精确匹配；不会自动把待检查数据中的名称加入列表。
+格式、目录手别或商品名称不符合要求时，报告定位到对应数据集并显示原因。

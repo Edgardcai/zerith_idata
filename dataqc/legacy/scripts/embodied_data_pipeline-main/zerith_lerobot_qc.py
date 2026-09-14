@@ -24,14 +24,14 @@ from quality_pipeline.qc import run_quality_checks
 
 PROFILE_PATH = Path(__file__).parent / "robot_profiles" / "zerith.yaml"
 PROMPT_TEMPLATES = {
-    "twohand": "Grasp {item} with the left hand and then grasp {item} with the right hand",
-    "left_hand": "Grasp {item} with the left hand",
-    "righthand": "Grasp {item} with the right hand",
+    "twohand": "Grasp {item} with the left hand and then grasp {item} with the right hand.",
+    "left_hand": "Grasp {item} with the left hand.",
+    "righthand": "Grasp {item} with the right hand.",
 }
-PROMPT_STANDARD = "只允许物品名称变化；双臂先左后右，左臂/右臂使用对应单臂模板；大小写、动作词、连接词及手别须符合模板"
+PROMPT_STANDARD = "双手：Grasp XXX with the left hand and then grasp XXX with the right hand.；左手：Grasp XXX with the left hand.；右手：Grasp XXX with the right hand.；物品名称须在商品列表内，大小写、手别和句末英文句号须符合模板"
 # Do not let an extra/malformed action clause be swallowed as a product name.
 _PRODUCT = r"(?!\s)(?:(?!\b(?:with|then|grasp)\b)[^\r\n])+?(?<!\s)"
-PROMPT_PATTERNS = {mode: re.compile(re.escape(template).replace(re.escape("{item}"), _PRODUCT))
+PROMPT_PATTERNS = {mode: re.compile(re.escape(template).replace(re.escape("{item}"), '(' + _PRODUCT + ')'))
                    for mode, template in PROMPT_TEMPLATES.items()}
 
 
@@ -47,11 +47,16 @@ def prompt_format(text: str, _item_names=None) -> str:
 
 
 def prompt_error(text: str, mode: str | None) -> str:
-    matched = next((key for key, pattern in PROMPT_PATTERNS.items() if pattern.fullmatch(text)), None)
+    match = next(((key, result) for key, pattern in PROMPT_PATTERNS.items()
+                  if (result := pattern.fullmatch(text))), None)
+    matched = match[0] if match else None
     if matched and (mode is None or matched == mode):
+        unknown = list(dict.fromkeys(name for name in match[1].groups() if name not in cp.KNOWN_ITEMS))
+        if unknown:
+            return "物品名称不在商品列表中：" + "、".join(unknown)
         return ""
     expected = [PROMPT_TEMPLATES[mode]] if mode else list(PROMPT_TEMPLATES.values())
-    reason = "指令手别或单双臂类型与数据集目录不符" if matched else "指令不符合固定模板（检查 Grasp/grasp、with the、and then、左右手顺序及多余文字；物品名称不限）"
+    reason = "指令手别或单双臂类型与数据集目录不符" if matched else "指令不符合固定模板（检查 Grasp/grasp、with the、and then、左右手顺序、句末英文句号及多余文字）"
     return reason + "；要求：" + " / ".join(expected)
 
 
@@ -75,6 +80,7 @@ def prompt_report(descriptors: list[dict]) -> dict:
                             "status": "warn", "reason": "数据集没有有效提示词，请检查 tasks.jsonl 和 episodes.jsonl",
                             "datasets": [dataset]})
     report.update(validation_mode="fixed_templates", standard=PROMPT_STANDARD,
+                  allowed_items=list(cp.KNOWN_ITEMS),
                   status=cp._merge_status(*(d["status"] for d in details)),
                   warnings=list(dict.fromkeys(d["reason"] for d in details)), issue_details=details,
                   only_simulation=[], only_real=[],
@@ -326,7 +332,9 @@ def check_reason(item: dict) -> str:
         if "episode.task" in errors:
             reasons.append("轨迹任务格式与 tasks.jsonl 不一致（仅忽略商品名称）")
         if "固定模板" in errors:
-            reasons.append("提示词不符合三种固定模板：检查大小写、动作词、连接词、手别顺序和多余文字；物品名称不限")
+            reasons.append("提示词不符合三种固定模板：检查大小写、动作词、连接词、手别顺序、句末英文句号和多余文字")
+        reasons.extend(dict.fromkeys(error for error in detail.get('errors', [])
+                                     if '物品名称不在商品列表中' in error))
         if "目录不符" in errors:
             reasons.append("提示词的手别或单双臂类型与数据集目录不符")
         return "；".join(reasons) or "任务列表与 Parquet 引用关系不一致"

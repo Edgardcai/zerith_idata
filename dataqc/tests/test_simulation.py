@@ -184,8 +184,40 @@ def test_collection_simulation_cli_and_replay(sim,tmp_path,monkeypatch):
     status=app.dataset_status(payload)
     assert len(status['episodes'])==1,status
     assert status['episodes'][0]['shared_review_required'],status
+    counts = status['qc_overview']['records'][0]
+    assert counts['left_gripper_close_events'] == counts['right_gripper_close_events'] == 1
     replay=app.start_replay(payload)
-    assert replay['url'].startswith('/auto/hdf5?') and replay['episode_count']==1
+    try:
+        from urllib.request import urlopen, Request
+        assert replay['url'] == '/replay/'
+        base = f"http://127.0.0.1:{replay['port']}"
+        with urlopen(base + '/api/episodes') as response:
+            records = json.load(response)
+        assert len(records['episodes']) == 1
+        with urlopen(base + '/api/episode?index=0') as response:
+            episode = json.load(response)
+        assert episode['state_dim'] == episode['action_dim'] == 23
+        assert episode['frame_count'] == 446
+        assert episode['stage_info']['transitions'] == [217, 446]
+        assert len(episode['videos']) == 3
+        assert episode['frame_trim_supported'] is False
+        from urllib.error import HTTPError
+        with pytest.raises(HTTPError) as blocked:
+            urlopen(Request(base + '/api/frame-delete', data=json.dumps(dict(
+                episode_index=0, start_frame=0, end_frame=1)).encode(),
+                headers={'Content-Type': 'application/json'}))
+        assert blocked.value.code == 400
+        assert '派生副本' in json.loads(blocked.value.read())['error']
+        for video in episode['videos']:
+            with urlopen(Request(base + video['url'], headers={'Range': 'bytes=0-127'})) as response:
+                assert response.status == 206 and len(response.read()) == 128
+        with urlopen(base + '/') as response:
+            html = response.read().decode()
+        assert 'raw-grade.js' in html and 'raw-review-filter.js' in html
+    finally:
+        for proc in app.REPLAY_PROCESSES.values():
+            proc.terminate()
+            proc.wait(timeout=5)
     roots=[]
     monkeypatch.setattr(app,'discover_recursive_hdf5_dataset_choices',lambda p:roots.append(str(p)) or [])
     assert app.discover_machine_datasets('simulation')['machine']=='simulation'

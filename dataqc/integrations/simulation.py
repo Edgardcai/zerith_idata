@@ -1,6 +1,5 @@
 """Simulation support at legacy CLI/UI boundaries, sharing dataqc measurements."""
 from pathlib import Path
-from urllib.parse import urlencode
 
 from dataqc.io import discover, hdf5_path, is_simulation, load, read_json, video_path
 
@@ -55,15 +54,7 @@ def integrate_simulation(app):
       repair.disabled = isSimulation;
       repair.title = isSimulation ? "仿真请在模块③复核静止段并生成派生副本" : "选择 episode 剔除静止帧";''')
     app.HTML=replace(app.HTML,'      optimize.title = isZerith ?', '      optimize.title = isSimulation ? "仿真无需真机 UUID 重编号" : isZerith ?')
-    old_replay=app.start_replay
-    def replay(payload):
-        cfg=app.derive_paths(payload)
-        episodes=discover(cfg['hdf5_root'])
-        if episodes and any(is_simulation(p) for p in episodes):
-            return dict(url='/auto/hdf5?'+urlencode(dict(root=str(cfg['hdf5_root']),replay='1')),
-                        source_format='zerith_sim_v1',episode_count=len(episodes))
-        return old_replay(payload)
-    app.start_replay=replay
+    # Both source formats use the common HDF5 player and grade APIs.
     old_preflight=app.validate_lerobot_stage_split_grade
     def preflight(cfg,grade,source):
         mapping=read_json(Path(source)/'meta/episode_name_mapping.json')

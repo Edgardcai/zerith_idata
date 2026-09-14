@@ -516,6 +516,11 @@ def collector_stage_info(
 ) -> dict[str, Any]:
     """Read collector stage boundaries without hiding malformed or mismatched sources."""
 
+    from integrations.simulation_replay import read_for_replay, stage_info
+    simulation = read_for_replay(h5_path)
+    if simulation is not None:
+        return stage_info(simulation)
+
     episode_dir = episode_dir.expanduser().resolve()
     h5_path = h5_path.expanduser().resolve()
     meta_path = episode_meta_path(episode_dir)
@@ -752,6 +757,9 @@ def update_collector_stage_boundary(
         raise FileNotFoundError(f"Episode directory does not exist: {episode_dir}")
     if not h5_path.is_file():
         raise FileNotFoundError(f"HDF5 file does not exist: {h5_path}")
+    from integrations.simulation_replay import is_simulation
+    if is_simulation(episode_dir):
+        raise ValueError('仿真阶段标注不使用真机原地订正工具')
     selected_h5_path = episode_h5_path(episode_dir).expanduser().resolve()
     if selected_h5_path != h5_path:
         raise ValueError(
@@ -1565,6 +1573,8 @@ def infer_episode_type(h5_path: Path, requested_type: str) -> str:
         return "aloha"
     try:
         with h5py.File(h5_path, "r") as file_obj:
+            if file_obj.attrs.get('format') == 'icra_wbc_aligned_joints' and file_obj.attrs.get('robot_type') == 'zerith':
+                return 'zerith'
             if "timestamp/t" in file_obj and "observation/state/arm/position" in file_obj:
                 return "zerith"
             source_format = str(file_obj.attrs.get("source_format", "")).lower()
@@ -1730,6 +1740,10 @@ def load_zerith_h5(file_obj: Any) -> dict[str, Any]:
 
 
 def load_h5(h5_path: Path, episode_type: str) -> dict[str, Any]:
+    from integrations.simulation_replay import read_for_replay, h5_payload
+    simulation = read_for_replay(h5_path)
+    if simulation is not None:
+        return h5_payload(simulation, display_rows_for_episode)
     if h5py is None:
         raise RuntimeError("Missing dependency h5py. Install it with: pip install h5py")
 
@@ -1790,6 +1804,12 @@ def load_h5(h5_path: Path, episode_type: str) -> dict[str, Any]:
 
 
 def read_h5_summary(h5_path: Path) -> dict[str, Any]:
+    from integrations.simulation_replay import read_for_replay
+    simulation = read_for_replay(h5_path)
+    if simulation is not None:
+        duration = float(simulation['t'][-1] - simulation['t'][0])
+        n = simulation['n']
+        return dict(frame_count=n, duration=duration, inferred_fps=(n - 1) / duration if duration > 0 else 0)
     if h5py is None:
         raise RuntimeError("Missing dependency h5py. Install it with: pip install h5py")
     with h5py.File(h5_path, "r") as file_obj:
@@ -1843,6 +1863,9 @@ def resolve_replay_fps(meta: dict[str, Any], h5_summary: dict[str, Any], fps_ove
 
 
 def available_video_infos(episode_dir: Path) -> list[dict[str, Any]]:
+    from integrations.simulation_replay import is_simulation, videos
+    if is_simulation(episode_dir):
+        return videos(episode_dir)
     available_videos = []
     videos_dir = episode_dir / "videos"
     candidates = [
@@ -1870,6 +1893,8 @@ def available_video_infos(episode_dir: Path) -> list[dict[str, Any]]:
 
 
 def episode_video_path(episode_dir: Path, video_info: dict[str, Any]) -> Path:
+    if video_info.get('episode_relative_path'):
+        return episode_dir / video_info['episode_relative_path']
     relative_path = str(video_info.get("relative_path") or video_info["file"])
     return episode_dir / "videos" / relative_path
 
@@ -2068,6 +2093,7 @@ def episode_payload(data: EpisodeData, index: int) -> dict[str, Any]:
         "tasks": [str(item) for item in tasks if str(item).strip()],
         "subtask_segments": subtask_segments,
         "stage_info": stage_info,
+        "frame_trim_supported": stage_info.get('source') != 'simulation',
         "frame_count": data.frame_count,
         "duration": data.duration,
         "fps": data.fps,
@@ -2265,6 +2291,9 @@ def make_handler(
         if idx < 0 or idx >= len(episodes):
             raise IndexError("Episode Not Found")
         record = episodes[idx]
+        from integrations.simulation_replay import is_simulation
+        if is_simulation(record.episode_dir):
+            raise ValueError('仿真数据请通过派生副本截取，不使用真机原地删帧工具')
         with episode_lock(record.episode_dir):
             recover_frame_trim_transaction(record.episode_dir)
             frame_count = hdf5_frame_count(record.h5_path)
@@ -3229,6 +3258,10 @@ def build_index_html() -> str:
     }
 
     function updateFrameCutControls() {
+      const supported = data?.frame_trim_supported !== false;
+      $("frameCutEnabled").disabled = !supported;
+      $("frameCutEnabled").title = supported ? "是否截取" : "仿真数据请通过派生副本截取";
+      if (!supported) $("frameCutEnabled").value = "no";
       const enabled = $("frameCutEnabled").value === "yes";
       $("frameCutControls").classList.toggle("hidden", !enabled);
       if (enabled) {

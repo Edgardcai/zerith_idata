@@ -7,6 +7,11 @@ from dataqc.config import settings
 def integrate_collection(app):
     from .legacy_ui import replace
     html=app.HTML
+    html=replace(html, '<div id="customDatasetControls" class="custom-dataset hidden">',
+                 '<label for="customDatasetPath">自定义目录输入</label><div id="customDatasetControls" class="custom-dataset">')
+    html=html.replace('customControls.classList.add("hidden");', 'customControls.classList.remove("hidden");')
+    html=html.replace('document.getElementById("customDatasetControls").classList.add("hidden");',
+                      'document.getElementById("customDatasetControls").classList.remove("hidden");')
     html=replace(html,'''      <select id="hostMachine">
         <option value="agilex">AgileX</option>
         <option value="h200" selected>H200</option>

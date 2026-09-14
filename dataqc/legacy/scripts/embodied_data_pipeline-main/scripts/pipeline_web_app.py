@@ -9579,10 +9579,12 @@ HTML = r"""<!doctype html>
         return;
       }
       const button = document.getElementById("applyCustomDatasetBtn");
+      const scanId = datasetScanRequestId;
       button.disabled = true;
       try {
         const res = await fetch(`/api/dataset-choice?path=${encodeURIComponent(path)}`);
         const data = await res.json();
+        if (scanId !== datasetScanRequestId || path !== fieldValue("customDatasetPath")) return;
         if (!res.ok || data.error) throw new Error(data.error || res.statusText);
         const choice = data.dataset || {};
         discoveredSourceDatasets = [
@@ -9590,6 +9592,9 @@ HTML = r"""<!doctype html>
           choice,
         ];
         const select = document.getElementById("sourceDatasetSelect");
+        for (const oldOption of Array.from(select.options)) {
+          if (oldOption.value === String(choice.path || path)) oldOption.remove();
+        }
         const customOption = Array.from(select.options).find(option => option.value === CUSTOM_DATASET_VALUE);
         const option = new Option(`自定义 · ${choice.path || path}`, choice.path || path);
         select.add(option, customOption || null);
@@ -10101,10 +10106,10 @@ HTML = r"""<!doctype html>
       const plotWidth = Math.max(240, items.length * (barWidth + 6) + 12);
       const ticks = integerAxisTicks(max).map(value => `<span>${escapeHtml(value)}</span>`).join("");
       const bars = items.map(item => {
-        const left = item.left ?? 0;
-        const right = item.right ?? 0;
-        const leftPct = Math.max(0, Math.min(100, left / max * 100));
-        const rightPct = Math.max(0, Math.min(100, right / max * 100));
+        const left = item.left ?? "无数据";
+        const right = item.right ?? "无数据";
+        const leftPct = Math.max(0, Math.min(100, (item.left ?? 0) / max * 100));
+        const rightPct = Math.max(0, Math.min(100, (item.right ?? 0) / max * 100));
         return `<div class="grouped-bar-item" title="${escapeHtml(item.name)}: 左手 ${escapeHtml(left)}，右手 ${escapeHtml(right)}">
           <div class="grouped-bar-columns">
             <span class="grouped-bar left" style="--bar-height:${leftPct}%"><span class="grouped-bar-value">${escapeHtml(left)}</span></span>
