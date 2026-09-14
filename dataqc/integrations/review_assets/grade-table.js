@@ -56,9 +56,16 @@
       finally{gradeSaving=false;select.nextElementSibling.disabled=false;}
     }
     function bindQualityGradeControls() {
-      document.querySelectorAll('[data-qc-episode]').forEach(button=>button.onclick=()=>{
+      document.querySelectorAll('[data-qc-episode]').forEach(button=>button.onclick=async()=>{
         const item=latestEpisodes.find(r=>r.episode_id===button.dataset.qcEpisode);if(!item)return;
-        window.QCReport.open(item.qc_presentation,{episode:item.episode_id,onFrame:frame=>openQcFrame(item,frame)});
+        button.disabled=true;
+        try{
+          const res=await fetch('/api/replay-grade?root='+encodeURIComponent(item.episode_dir),{cache:'no-store'}),snapshot=await res.json();
+          if(!res.ok)throw Error(snapshot.error||'报告读取失败');
+          if(!latestEpisodes.some(r=>r.episode_dir===item.episode_dir))return;
+          window.QCReport.open(snapshot.qc_presentation,{episode:item.episode_id,onFrame:frame=>openQcFrame(item,frame)});
+        }catch(err){document.getElementById('gradeBulkFeedback').textContent='报告读取失败：'+String(err)}
+        finally{button.disabled=false}
       });
       document.querySelectorAll('.quality-grade-select').forEach(select=>{
         select.onchange=()=>{const item=latestEpisodes.find(r=>r.episode_id===select.dataset.episode);gradeDrafts.set(select.dataset.root,{grade:select.value,revision:item.grade_revision});select.parentElement.querySelector('small').textContent='未保存'};
