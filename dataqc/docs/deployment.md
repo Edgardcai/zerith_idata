@@ -10,6 +10,8 @@
 ```
 
 可以通过 `--python /path/to/python` 指定已有环境，通过 `--runtime /path/to/state` 指定运行目录。
+`--port` 配置监听端口；`--real-root`、`--sim-root` 配置真机和仿真扫描目录；
+`--binary-path` 可指定 ffmpeg/ffprobe 所在目录。默认值仍适用于本机 8091 服务。
 生成的服务固定使用当前项目路径，不依赖开发机器原目录。
 如需退出登录后继续运行，由机器管理员为部署用户配置 systemd linger。
 
@@ -46,3 +48,21 @@ curl http://127.0.0.1:8091/auto/api/health
 模型名称默认 `gpt-5.6-terra`，以部署方 API 实际支持的名称为准。
 `api_file` 只从指定文件读取 API 地址与密钥，不读取其他应用的登录凭据。
 开启类别识别前配置 `yolo_path`；未启用时不会因此阻断动作指标复核。
+
+## H200 部署
+
+项目目录 `/srv/projects/caizj/dataqc`，监听 `9990`：
+
+```bash
+cd /srv/projects/caizj/dataqc
+export XDG_RUNTIME_DIR=/run/user/$(id -u)
+export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus
+.venv/bin/python deploy/install_services.py --apply --port 9990 \
+  --real-root /srv/data/datasets/public/zerith_data \
+  --sim-root /srv/data/datasets/public/zerith_sim_data \
+  --binary-path /home/caizj/miniconda3/bin
+```
+
+生成的服务设置 `DATAQC_REAL_ROOT`、`DATAQC_SIM_ROOT` 和 `DATAQC_PORT`。
+直接运行时也可设置这三个环境变量；API 凭据与 YOLO 权重放在该部署的 `runtime/` 下，禁止提交 Git。
+更新后用 `DATAQC_SERVICE_URL=http://127.0.0.1:9990 .venv/bin/python deploy/restart_when_idle.py` 重启。

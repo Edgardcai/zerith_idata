@@ -1,7 +1,7 @@
 """Local Zerith machine defaults and bounded batch concurrency."""
 from pathlib import Path
 import json
-from dataqc.config import settings
+from dataqc.config import settings, REAL_SOURCE_ROOT, SIM_SOURCE_ROOT
 
 
 def integrate_collection(app):
@@ -69,12 +69,13 @@ def integrate_collection(app):
                  '<input id="convertJobs" type="number" min="1" max="2" value="2" /><label>LeRobot 转换进程</label><input id="lerobotWorkers" type="number" min="1" value="4" />')
     html=replace(html,'        vlm_enabled: document.getElementById("vlmEnabled").checked,',
                  '        vlm_enabled: document.getElementById("vlmEnabled").checked,\n        lerobot_workers: Number(document.getElementById("lerobotWorkers").value),')
+    html=html.replace('/data/zerith_data', str(REAL_SOURCE_ROOT)).replace('/data/sim_data', str(SIM_SOURCE_ROOT))
     app.HTML=html
     old_discover=app.discover_machine_datasets
     def discover(machine):
         machine=str(machine or 'zerith').lower()
         if machine not in ('zerith','simulation'):return old_discover(machine)
-        root=Path('/data/sim_data' if machine=='simulation' else '/data/zerith_data')
+        root=SIM_SOURCE_ROOT if machine=='simulation' else REAL_SOURCE_ROOT
         datasets=app.discover_recursive_hdf5_dataset_choices(root)
         return dict(machine=machine,scan_root=str(root),scan_depth=app.H200_RECURSIVE_SCAN_MAX_DEPTH,
                     scan_recursive=True,scan_root_exists=root.is_dir(),

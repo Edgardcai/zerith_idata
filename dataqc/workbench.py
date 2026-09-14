@@ -4,8 +4,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parent
 RUNTIME=Path(os.environ.setdefault('DATAQC_HOME',str(ROOT/'runtime')))
 os.environ['PYTHONPATH']=os.pathsep.join([str(ROOT),str(ROOT/'vendor'),os.environ.get('PYTHONPATH','')])
-os.environ.setdefault('PIPELINE_DATA_SCAN_ROOT','/data')
-os.environ.setdefault('PIPELINE_H200_DATA_SCAN_ROOT','/data/zerith_data')
+os.environ.setdefault('PIPELINE_DATA_SCAN_ROOT',os.path.commonpath([os.environ.get('DATAQC_REAL_ROOT','/data/zerith_data'),os.environ.get('DATAQC_SIM_ROOT','/data/sim_data')]))
+os.environ.setdefault('PIPELINE_H200_DATA_SCAN_ROOT',os.environ.get('DATAQC_REAL_ROOT','/data/zerith_data'))
 os.environ.setdefault('PIPELINE_H200_MCAP_SCAN_ROOT','/data')
 os.environ.setdefault('PIPELINE_MANUAL_SCREENING_DATA_ROOT',str(RUNTIME/'exports'))
 os.environ.setdefault('PIPELINE_MANUAL_SCREENING_STORAGE_ROOT',str(RUNTIME/'manual-screening'))
@@ -65,4 +65,5 @@ async def legacy_proxy(request:Request,path:str):
 if __name__=='__main__':
     import argparse,uvicorn
     parser=argparse.ArgumentParser();parser.add_argument('--host',default='0.0.0.0');parser.add_argument('--port',type=int,default=8091)
-    args=parser.parse_args();uvicorn.run('workbench:app',host=args.host,port=args.port)
+    args=parser.parse_args();os.environ['DATAQC_PORT']=str(args.port)
+    uvicorn.run('workbench:app',host=args.host,port=args.port)

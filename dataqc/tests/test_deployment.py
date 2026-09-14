@@ -35,3 +35,44 @@ def test_idle_deployment_restarts_and_verifies_both_services(monkeypatch,tmp_pat
     assert cfg['vlm_enabled'] is False
     assert calls[0]==['systemctl','--user','restart','dataqc-web','dataqc-worker']
     assert json.loads(deploy.STATUS.read_text())['status']=='active'
+
+
+def test_render_custom_port_and_data_roots(tmp_path):
+    from deploy.install_services import render
+    render(tmp_path, '/opt/dataqc/bin/python', '/srv/projects/caizj/dataqc/runtime',
+           port=9990, real_root='/srv/data/datasets/public/zerith_data',
+           sim_root='/srv/data/datasets/public/zerith_sim_data', binary_path='/opt/video/bin')
+    web=(tmp_path/'dataqc-web.service').read_text()
+    worker=(tmp_path/'dataqc-worker.service').read_text()
+    assert '--port 9990' in web
+    for unit in (web, worker):
+        assert 'DATAQC_REAL_ROOT=/srv/data/datasets/public/zerith_data' in unit
+        assert 'DATAQC_SIM_ROOT=/srv/data/datasets/public/zerith_sim_data' in unit
+        assert 'DATAQC_PORT=9990' in unit
+        assert '/opt/video/bin' in unit
+        assert '@' not in unit
+    with pytest.raises(ValueError):render(tmp_path, '/bin/python', '/tmp/qc', port=65536)
+
+
+def test_custom_roots_reach_ui_and_api(tmp_path):
+    import os, subprocess, sys
+    project=__import__('pathlib').Path(__file__).resolve().parents[1]
+    code='''
+import workbench
+from dataqc import api
+app=workbench.load_legacy()
+assert str(api.SOURCE_ROOT)=='/srv/data/datasets/public/zerith_data'
+assert str(api.SIM_SOURCE_ROOT)=='/srv/data/datasets/public/zerith_sim_data'
+for machine, expected in [('zerith',api.SOURCE_ROOT),('simulation',api.SIM_SOURCE_ROOT)]:
+ app.discover_recursive_hdf5_dataset_choices=lambda root: []
+ assert app.discover_machine_datasets(machine)['scan_root']==str(expected)
+ assert str(expected) in app.HTML
+ assert str(expected) in app.CROSS_PLATFORM_HTML
+assert '服务端 9990' in app.HTML
+assert api.get_settings()['source_roots']['real']==str(api.SOURCE_ROOT)
+'''
+    env=dict(os.environ, DATAQC_HOME=str(tmp_path/'runtime'), DATAQC_PORT='9990',
+             DATAQC_REAL_ROOT='/srv/data/datasets/public/zerith_data',
+             DATAQC_SIM_ROOT='/srv/data/datasets/public/zerith_sim_data')
+    result=subprocess.run([sys.executable,'-c',code],cwd=project,env=env,capture_output=True,text=True)
+    assert result.returncode==0,result.stdout+result.stderr

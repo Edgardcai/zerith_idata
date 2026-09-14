@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from . import db
-from .config import CONFIG, VAR, api_config, settings
+from .config import CONFIG, VAR, REAL_SOURCE_ROOT, SIM_SOURCE_ROOT, api_config, settings
 from .io import (
     CAMS,
     clean,
@@ -37,8 +37,7 @@ db.init()
 library.init()
 app.include_router(library.router)
 WEB = Path(__file__).resolve().parents[1] / "web"
-SOURCE_ROOT = Path("/data/zerith_data")
-SIM_SOURCE_ROOT = Path("/data/sim_data")
+SOURCE_ROOT = REAL_SOURCE_ROOT
 
 def source_roots():
     return (SOURCE_ROOT.resolve(), SIM_SOURCE_ROOT.resolve())
@@ -123,7 +122,7 @@ def get_settings():
         c.update(api_model=m, api_configured=True)
     except Exception:
         c.update(api_configured=False)
-    return c | dict(robots=profiles())
+    return c | dict(robots=profiles(), source_roots=dict(real=str(SOURCE_ROOT), simulation=str(SIM_SOURCE_ROOT)))
 
 
 @app.put("/api/settings")
@@ -195,7 +194,7 @@ def create_run(body: NewRun):
         raise HTTPException(422, str(exc))
     root = Path(body.root).expanduser().resolve()
     if not dataset_root(root):
-        raise HTTPException(422, "请选择 /data/zerith_data 或 /data/sim_data 下的一级数据集目录，不能选择总目录或单条 episode")
+        raise HTTPException(422, f"请选择 {SOURCE_ROOT} 或 {SIM_SOURCE_ROOT} 下的一级数据集目录，不能选择总目录或单条 episode")
     try:
         paths = discover(root)
     except Exception as ex:

@@ -59,7 +59,8 @@ def source_height(root):
         from .simulation import height_reference
         return height_reference(root)
     # All episodes in a dataset share the height declared by its first-level directory.
-    base = Path("/data/zerith_data")
+    from .config import REAL_SOURCE_ROOT
+    base = REAL_SOURCE_ROOT
     candidates = [root, *root.parents]
     if root.is_relative_to(base) and root != base:
         candidates = [base / root.relative_to(base).parts[0]]

@@ -3,11 +3,12 @@ const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const labels={retry_wait:'等待接口恢复',queued:'排队',running:'处理中',checking:'质检中',ready:'通过待导出',review:'待确认',needs_review:'有待处理项',rejected:'不通过',incomplete:'检查未完成',completed:'已完成',paused:'已暂停',cancelled:'已取消',error:'任务未完成',pass:'通过',fail:'不通过',warn:'告警',na:'不适用',uncertain:'证据不足',skipped:'未复核'};
 const badge=x=>`<span class="badge ${esc(x)}">${esc(labels[x]||x||'未分级')}</span>`;
 let page=({settings:'settings',lerobot:'lerobot',compare:'compare'})[location.pathname.replace(/^\/auto\/?/,'')]||'home',allRuns=[],catalog=[],selectedRoot=new URLSearchParams(location.search).get('root')||localStorage.getItem('qc.dataset')||'',activeRun=null,currentEp=null,tab='raw',filter='all',search='',tablePage=0;
+let sourceRoots={real:'',simulation:''};
 let renderVersion=0,refreshBusy=false,detailsOpen=false,exportOpen=false;
 async function api(url,opts={}){const r=await fetch('/auto/api'+url,{headers:{'Content-Type':'application/json'},...opts});if(!r.ok){let t=await r.json().catch(()=>({detail:r.statusText}));throw Error(typeof t.detail==='string'?t.detail:JSON.stringify(t.detail))}return r.json()}
 function toast(t){$('#toast').textContent=t;$('#toast').style.display='block';setTimeout(()=>$('#toast').style.display='none',5000)}
 function datasetRuns(){return allRuns.filter(r=>r.root===selectedRoot||r.root.startsWith(selectedRoot+'/'))}
-function sourceSummary(){const d=catalog.find(d=>d.root===selectedRoot);const busy=datasetRuns().some(r=>r.root===selectedRoot&&['queued','running','paused','retry_wait'].includes(r.status));$('#start-button').disabled=!d?.count||busy;$('#start-button').textContent=busy?'已有任务，请继续处理':'处理整组数据';$('#source-summary').textContent=d?`${d.root} · 共 ${d.count} 条 · ${d.height?.expected_m!=null?`升降高度 ${d.height.expected_m} m（±0.02 m）`:d.height?.note||d.error||d.height?.error||'未识别高度'} · 本次处理整组全部数据`:'自动读取 /data/zerith_data 和 /data/sim_data 下的数据集，请选择一组';}
+function sourceSummary(){const d=catalog.find(d=>d.root===selectedRoot);const busy=datasetRuns().some(r=>r.root===selectedRoot&&['queued','running','paused','retry_wait'].includes(r.status));$('#start-button').disabled=!d?.count||busy;$('#start-button').textContent=busy?'已有任务，请继续处理':'处理整组数据';$('#source-summary').textContent=d?`${d.root} · 共 ${d.count} 条 · ${d.height?.expected_m!=null?`升降高度 ${d.height.expected_m} m（±0.02 m）`:d.height?.note||d.error||d.height?.error||'未识别高度'} · 本次处理整组全部数据`:`自动读取 ${sourceRoots.real} 和 ${sourceRoots.simulation} 下的数据集，请选择一组`;}
 async function loadSources(){const button=$('#refresh-sources');button.disabled=true;try{catalog=await api('/datasets');if(!catalog.some(d=>d.root===selectedRoot))selectedRoot='';$('#root').innerHTML='<option value="">请选择数据集</option>'+catalog.map(d=>`<option value="${esc(d.root)}" ${d.root===selectedRoot?'selected':''}>${esc(d.source_label||'')} · ${esc(d.name)} · ${d.count} 条</option>`).join('');sourceSummary();await render()}catch(e){$('#source-summary').textContent='读取目录失败：'+e.message;toast(e.message)}finally{button.disabled=false}}
 async function refresh(){if(refreshBusy)return;refreshBusy=true;try{allRuns=await api('/runs');$('#service').textContent='服务已连接';sourceSummary();if(page!=='settings')await render()}catch(e){$('#service').textContent='连接中断';toast(e.message)}finally{refreshBusy=false}}
 function navigate(p,push=true){
@@ -87,7 +88,7 @@ function matchingReport(v){
  return html;
 }
 
-api('/settings').then(c=>{$('#run-vlm-enabled').checked=c.vlm_enabled===true}).catch(e=>toast('读取 VLM 开关默认值失败：'+e.message));
+api('/settings').then(c=>{sourceRoots=c.source_roots||sourceRoots;$('#run-vlm-enabled').checked=c.vlm_enabled===true;sourceSummary()}).catch(e=>toast('读取 VLM 开关默认值失败：'+e.message));
 
 function combinedAssessmentReport(v){
  const m=v.motion_review||{},c=v.category_review||{};

@@ -18,13 +18,13 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import db
-from .config import EXPORTS, VAR
+from .config import EXPORTS, VAR, REAL_SOURCE_ROOT, SIM_SOURCE_ROOT
 from .io import NAMES, clean, read_json, write_json
 from .export import jsonl, rows, stats
 
 router = APIRouter(prefix="/api")
 LEGACY = Path(__file__).resolve().parents[1] / 'legacy/scripts/embodied_data_pipeline-main'
-DEFAULT_ROOTS = [EXPORTS, Path('/data'), EXPORTS.parent / 'lerobot']
+DEFAULT_ROOTS = [EXPORTS, REAL_SOURCE_ROOT, SIM_SOURCE_ROOT, EXPORTS.parent / 'lerobot']
 
 
 def legacy():

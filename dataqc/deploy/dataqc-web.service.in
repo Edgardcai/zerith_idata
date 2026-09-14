@@ -6,11 +6,15 @@ Type=simple
 WorkingDirectory=@PROJECT_ROOT@
 Environment=PYTHONUNBUFFERED=1
 Environment=DATAQC_HOME=@RUNTIME@
+Environment=DATAQC_REAL_ROOT=@REAL_ROOT@
+Environment=DATAQC_SIM_ROOT=@SIM_ROOT@
+Environment=DATAQC_PORT=@PORT@
+Environment=PATH=@PATH@
 Environment=PYTHONPATH=@PROJECT_ROOT@:@PROJECT_ROOT@/vendor
 Environment=YOLO_CONFIG_DIR=@RUNTIME@/var/yolo-config
 Environment=OMP_NUM_THREADS=1
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=@PYTHON@ @PROJECT_ROOT@/workbench.py --host 0.0.0.0 --port 8091
+ExecStart=@PYTHON@ @PROJECT_ROOT@/workbench.py --host 0.0.0.0 --port @PORT@
 Restart=on-failure
 RestartSec=3
 [Install]
