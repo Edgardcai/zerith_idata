@@ -2,7 +2,7 @@
 window.QCReport=(()=>{
  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
  let dialog,report,options,filter='problems',search='',previousFocus;
- function close(){dialog?.close();previousFocus?.focus?.()}
+ function close(){dialog?.close();previousFocus?.focus?.({preventScroll:true})}
  function render(){
   const all=report.items||[],shown=all.filter(i=>(filter==='all'||i.problem)&&(!search||(i.label+' '+i.text+' '+i.source).toLowerCase().includes(search.toLowerCase())));
   dialog.querySelector('.qc-report-count').textContent=`${report.problem_count||0} 项问题 · 显示 ${shown.length}/${all.length} 项 · 帧号从0开始`;
@@ -29,6 +29,6 @@ window.QCReport=(()=>{
   }
   previousFocus=document.activeElement;report=value||{};options=opts;filter=report.problem_count?'problems':'all';search='';dialog.querySelector('input').value='';
   dialog.dataset.theme=opts.dark?'dark':'light';dialog.querySelector('.qc-report-title').textContent=(opts.episode||'当前 Episode')+' · 质检详情';dialog.querySelector('.qc-report-task').textContent=report.task||'';
-  render();if(!dialog.open)dialog.showModal();dialog.querySelector('.qc-report-close').focus();
+  render();if(!dialog.open)dialog.showModal();dialog.querySelector('.qc-report-close').focus({preventScroll:true});
  },close};
 })();

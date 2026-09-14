@@ -7,7 +7,7 @@ from test_pipeline import source
 from dataqc.io import load,write_json,parse_task,fingerprint
 from dataqc.motion import source_height,lift_check,RULE_VERSION
 from dataqc.checks import numeric_checks
-from dataqc.reporting import presentation
+from dataqc.reporting import presentation,number
 
 
 def test_mixed_targets_and_names_do_not_determine_height(tmp_path):
@@ -20,6 +20,11 @@ def test_mixed_targets_and_names_do_not_determine_height(tmp_path):
         assert source_height(root)['policy']=='episode_target'
         a[1,16]+=0.03
         assert lift_check(s,a,root)['detail']['channels']['action']['bad_frames']==[1]
+
+
+@pytest.mark.parametrize('value',[.0202,-.0202,.8002,.0200002])
+def test_threshold_exceedance_is_not_hidden_by_display_rounding(value):
+    assert float(number(value))==value
 
 
 @pytest.mark.parametrize('value',[True,'unknown','NaN','Infinity'])

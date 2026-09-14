@@ -6,7 +6,12 @@ STATUS={'pass':'正常','warn':'预警','fail':'失败','review':'待复核','na
 
 
 def number(value,digits=3):
-    return f'{value:.{digits}f}' if isinstance(value,(int,float)) else '未提供'
+    if not isinstance(value,(int,float)):return '未提供'
+    text=f'{value:.{digits}f}'
+    # Do not round a failing measurement into an apparently passing boundary.
+    if float(text)!=value and any(abs(float(text))==round(limit,digits) for limit in (.0001,.02,.05,.1,.8)):
+        return f'{value:.8f}'.rstrip('0').rstrip('.')
+    return text
 
 
 def human(text):
