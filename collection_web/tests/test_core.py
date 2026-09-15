@@ -13,7 +13,7 @@ import h5py
 import numpy as np
 from protocol import Vendor, MetaRequest, MetaData
 from episodes import EpisodeStore, atomic_json, validate_finished
-from tasks import validate_task,parse_targets,dataset_name,DEFAULT_PROMPT
+from tasks import validate_task,parse_targets,dataset_name,DEFAULT_PROMPT,default_task_id
 from device_monitor import DeviceMonitor
 from collector import Collector
 
@@ -41,21 +41,33 @@ class TaskTests(unittest.TestCase):
         for value in ('false','true',0,1,None):
             with self.subTest(value=value),self.assertRaises(ValueError):
                 validate_task({'task_name':'test','record_depth':value})
-    def test_directory_name_height_and_unchanged_vendor_config(self):
-        original,targets=validate_task({'task_name':DEFAULT_PROMPT})
-        config,with_height=validate_task({'task_name':DEFAULT_PROMPT,'lift_height':'00.800'})
-        self.assertEqual(config,original)
-        self.assertEqual(dataset_name(with_height,with_height['lift_height']),('DahongpaoMilkTea_Ifcoconut_0.8','0.8'))
-        self.assertEqual(dataset_name({'left':'左 商品','right':'右商品'},'0')[0],'左商品_右商品_0')
+    def test_scene_name_independent_of_prompt_targets_and_height(self):
+        original,_=validate_task({'task_name':DEFAULT_PROMPT,'scene_id':3})
+        config,targets=validate_task({'task_name':DEFAULT_PROMPT,'scene_id':3,'lift_height':'00.800','left':'Tea / Coffee'})
+        self.assertEqual(config['scene_id'],3)
+        self.assertEqual(config['task_name'],original['task_name'])
+        self.assertEqual(targets['lift_height'],'0.8')
+        self.assertEqual(dataset_name(3,20260914),'20260914_scene3')
         for height in ['-1','NaN','Infinity','1e2','../0.8',True,'0.1234567']:
             with self.subTest(height=height),self.assertRaises(ValueError):validate_task({'task_name':DEFAULT_PROMPT,'lift_height':height})
-        for target in ['','../tea','a/b','a_b','a\x00b']:
-            with self.subTest(target=target),self.assertRaises(ValueError):validate_task({'task_name':DEFAULT_PROMPT,'left':target,'lift_height':'0.8'})
+        for value in [0,-1,True,1.5,'../1','1/2','scene1','1e2','',None,100000000]:
+            with self.subTest(scene=value),self.assertRaises(ValueError):validate_task({'task_name':'test','scene_id':value})
+        self.assertEqual(validate_task({'task_name':'test','scene_id':'002'})[0]['scene_id'],2)
     def test_targets_and_descriptions(self):
         prompt='Grasp Dahongpao Milk Tea with the left hand and then grasp If coconut with the right hand'
         config,targets=validate_task({'task_name':prompt})
         self.assertEqual(targets,{'left':'Dahongpao Milk Tea','right':'If coconut'})
         self.assertNotIn('AD Calcium',config['action_desc']);self.assertIn('If coconut',config['scene_desc'])
+    def test_date_task_number_default_and_eight_digits(self):
+        with patch('tasks.default_task_id',return_value=20260911):
+            self.assertEqual(validate_task({'task_name':'test'})[0]['task_id'],20260911)
+        config,targets=validate_task({'task_id':'20260911','task_name':DEFAULT_PROMPT,
+            'left':'Yili Peach Yogurt','right':'Coca-Cola','lift_height':'0.80'})
+        self.assertEqual(dataset_name(config['scene_id'],config['task_id']),
+                         '20260911_scene1')
+        for value in ('100000000','20260911.5',True,-1):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                validate_task({'task_id':value,'task_name':'test'})
     def test_task_path_and_numeric_validation(self):
         for payload in [{'task_name':'../bad'},{'task_name':'a/b'},{'task_name':'ok','frequency':float('nan')},{'task_name':'ok','subtask_num':True},{'task_name':'ok','frequency':30.5}]:
             with self.subTest(payload=payload),self.assertRaises(ValueError):validate_task(payload)

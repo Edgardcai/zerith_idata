@@ -26,6 +26,8 @@ def eventually(fn):
 
 class CollectorTests(unittest.TestCase):
     def setUp(self):
+        date_default=patch('tasks.default_task_id',return_value=1)
+        date_default.start();self.addCleanup(date_default.stop)
         self.tmp=tempfile.TemporaryDirectory();self.root=Path(self.tmp.name)/'data';self.root.mkdir()
         self.runtime=Path(self.tmp.name)/'runtime';self.store=EpisodeStore(self.runtime,self.root)
         self.cancelled=threading.Event();self.fail_event=threading.Event()
@@ -39,8 +41,9 @@ class CollectorTests(unittest.TestCase):
         self.server=grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=2))
         h=grpc.unary_stream_rpc_method_handler(meta,request_deserializer=MetaRequest.FromString,response_serializer=MetaData.SerializeToString)
         self.server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler('robot.RobotService',{'MetaTransfer':h}),))
-        port=self.server.add_insecure_port('127.0.0.1:0');self.server.start()
+        port=self.server.add_insecure_port('127.0.0.1:0');self.port=port;self.server.start()
         self.collector=Collector(self.store,ReadyMonitor(),self.runtime,vendor_factory=lambda:Vendor(f'127.0.0.1:{port}'))
+        self.collector.apply_scene({'task_id':1,'scene_id':1})
     def tearDown(self):self.collector.close();self.store.close();self.server.stop(0).wait();self.tmp.cleanup()
     def start(self):
         self.collector.start({'task_name':'test'});eventually(lambda:self.collector.status()['accepted'])
@@ -95,7 +98,7 @@ class CollectorTests(unittest.TestCase):
         self.start();self.assertTrue(self.collector.status()['connected'])
     def test_named_destination_preserves_rpc_and_source_ack(self):
         payload={'task_name':'test','left':'Left Tea','right':'Right Tea','lift_height':'0.80'}
-        dest=self.root/'LeftTea_RightTea_0.8';dest.mkdir();(dest/'task_meta.json').write_text('{"history":true}')
+        dest=self.root/'1_scene1';(dest/'task_meta.json').write_text('{"history":true}')
         result=self.collector.start(payload);eventually(lambda:self.collector.accepted)
         self.assertEqual(result['session']['dataset'],str(dest))
         actual=json.loads((self.root/'1_test'/'task_meta.json').read_text())
@@ -103,9 +106,107 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(json.loads((dest/'task_meta.json').read_text()),{'history':True})
         episode(self.root/'1_test');eventually(lambda:self.collector.status()['counts']['completed']==1)
         self.assertTrue((dest/'episode_000001').exists());self.collector.end()
+        self.assertFalse((self.root/'1_test').exists())
+        self.assertEqual(json.loads((dest/'task_meta.json').read_text()),{'history':True})
+        backup=self.runtime/f"source_task_meta_{result['session']['id']}.json"
+        self.assertEqual(json.loads(backup.read_text()),actual)
         second=self.collector.start({**payload,'lift_height':'0.9'});eventually(lambda:self.collector.accepted)
-        self.assertTrue(second['session']['dataset'].endswith('LeftTea_RightTea_0.9'))
+        self.assertEqual(second['session']['dataset'],str(dest))
         episode(self.root/'1_test','b'*32);eventually(lambda:self.collector.status()['counts']['completed']==1)
-        self.assertTrue((self.root/'LeftTea_RightTea_0.9'/'episode_000001').exists())
+        self.assertTrue((dest/'episode_000002').exists())
+    def test_date_directories_keep_days_separate_and_preserve_source_mapping(self):
+        payload={'task_name':'test','left':'Yili Peach Yogurt','right':'Coca-Cola','lift_height':'0.8'}
+        for date in (20260911,20260912):
+            self.collector.apply_scene({'task_id':date,'scene_id':1})
+            paths=self.collector.start({**payload,'task_id':date})['session']
+            eventually(lambda:self.collector.accepted)
+            source=self.root/f'{date}_test'
+            self.assertEqual(paths['dataset'],str(self.root/f'{date}_scene1'))
+            self.assertEqual(paths['source_dataset'],str(source))
+            episode(source)
+            eventually(lambda:self.collector.status()['counts']['completed']==1)
+            meta=json.loads((Path(paths['dataset'])/'episode_000001'/'collection_task.json').read_text())
+            self.assertEqual(meta['config']['task_id'],date)
+            self.collector.end()
+        self.assertEqual(len(self.store.list()),2)
+
+    def test_empty_named_session_cleanup(self):
+        result=self.collector.start({'task_name':'test','left':'Left','right':'Right','lift_height':'0.8'})
+        eventually(lambda:self.collector.accepted)
+        source=Path(result['session']['source_dataset']);dest=Path(result['session']['dataset'])
+        self.collector.end()
+        self.assertFalse(source.exists());self.assertTrue(dest.is_dir());self.assertFalse((dest/'task_meta.json').exists())
+        self.assertEqual(self.collector.status()['phase'],'closed')
+
+    def test_cleanup_preserves_unfinished_and_unknown_files(self):
+        for name in ('unfinished','notes.txt'):
+            with self.subTest(name=name):
+                result=self.collector.start({'task_name':name,'left':'Left','right':'Right','lift_height':'0.8'})
+                eventually(lambda:self.collector.accepted)
+                source=Path(result['session']['source_dataset'])
+                if name=='unfinished':
+                    pending=source/('a'*32);pending.mkdir();(pending/'episode.hdf5').write_bytes(b'unfinished data')
+                else:(source/name).write_text('keep me')
+                self.collector.end()
+                self.assertTrue((source/'task_meta.json').exists())
+                self.assertTrue((source/('a'*32)/'episode.hdf5').exists() if name=='unfinished' else (source/name).exists())
+
+    def test_cleanup_preserves_changed_metadata_and_symlinks(self):
+        for kind in ('changed','symlink'):
+            with self.subTest(kind=kind):
+                result=self.collector.start({'task_name':kind,'left':'Left','right':'Right','lift_height':'0.8'})
+                eventually(lambda:self.collector.accepted)
+                source=Path(result['session']['source_dataset']);meta=source/'task_meta.json'
+                if kind=='changed':atomic_json(meta,{'task_id':999,'task_name':'another task'})
+                else:
+                    target=self.root/'external.json';meta.rename(target);meta.symlink_to(target)
+                self.collector.end()
+                self.assertTrue(meta.exists());self.assertTrue(source.exists())
+
+    def test_cleanup_failure_does_not_fail_end(self):
+        self.collector.start({'task_name':'test','left':'Left','right':'Right','lift_height':'0.8'})
+        eventually(lambda:self.collector.accepted)
+        with patch('collector.atomic_json',side_effect=PermissionError('test backup failure')):
+            self.collector.end()
+        self.assertEqual(self.collector.status()['phase'],'closed')
+        self.assertTrue((self.root/'1_test'/'task_meta.json').exists())
+
+    def test_cleanup_keeps_legacy_source_when_it_is_final_dataset(self):
+        source=self.root/'1_test';source.mkdir();atomic_json(source/'task_meta.json',{'task_name':'test'})
+        self.assertFalse(self.collector._cleanup_source({'dataset':str(source),'source_dataset':str(source),'config':{'task_id':1,'task_name':'test'}}))
+        self.assertTrue((source/'task_meta.json').exists())
+
+    def test_prompts_share_scene_numbering_and_each_episode_keeps_its_task(self):
+        def capture(prompt,scene,uid,seq):
+            self.collector.apply_scene({'task_id':1,'scene_id':scene})
+            paths=self.collector.start({'task_name':prompt,'scene_id':scene})['session']
+            eventually(lambda:self.collector.accepted)
+            episode(Path(paths['source_dataset']),uid)
+            eventually(lambda:self.collector.status()['counts']['completed']==1)
+            target=self.root/f'1_scene{scene}'/f'episode_{seq:06d}'
+            meta=json.loads((target/'collection_task.json').read_text())
+            self.assertEqual(meta['config']['task_name'],prompt)
+            self.assertEqual(meta['config']['scene_id'],scene)
+            self.collector.end()
+            return target
+        first=capture('first product',1,'a'*32,1)
+        capture('second product',1,'b'*32,2)
+        capture('first product',2,'c'*32,1)
+        row=next(row for row in self.store.list() if row['path']==str(first))
+        self.store.delete(row['id'])
+        self.collector.close()
+        self.collector=Collector(self.store,ReadyMonitor(),self.runtime,vendor_factory=lambda:Vendor(f'127.0.0.1:{self.port}'))
+        self.assertEqual(self.collector.selected_scene['scene_id'],2)
+        capture('third product',1,'d'*32,3)
+        self.assertEqual({g['dataset']:g['total'] for g in self.store.groups()},
+                         {str(self.root/'1_scene1'):3,str(self.root/'1_scene2'):1})
+
+    def test_apply_rejected_during_session_and_start_requires_applied_scene(self):
+        with self.assertRaisesRegex(ValueError,'先应用'):
+            self.collector.start({'task_name':'test','scene_id':2})
+        self.start()
+        with self.assertRaisesRegex(ValueError,'结束当前会话'):
+            self.collector.apply_scene({'scene_id':2})
+        self.assertEqual(self.collector.selected_scene['scene_id'],1)
 
 if __name__=='__main__':unittest.main()

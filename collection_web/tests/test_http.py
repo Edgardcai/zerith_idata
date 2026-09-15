@@ -66,10 +66,10 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/static/../../app.py')[0],400)
         self.assertEqual(self.request('/api/video/999/head')[0],400)
     def test_directory_preview_is_readonly_and_matches_archived_video(self):
-        payload={'task_name':'test','left':'Dahongpao Milk Tea','right':'If coconut','lift_height':'0.8'}
+        payload={'task_id':20260911,'task_name':'test','left':'Dahongpao Milk Tea','right':'If coconut','lift_height':'0.8'}
         code,raw=self.request('/api/task/directory',payload);self.assertEqual(code,200)
         paths=json.loads(raw);dest=Path(paths['dataset']);source=Path(paths['source_dataset'])
-        self.assertEqual(dest.name,'DahongpaoMilkTea_Ifcoconut_0.8');self.assertFalse(dest.exists());self.assertFalse(source.exists())
+        self.assertEqual(dest.name,'20260911_scene1');self.assertFalse(dest.exists());self.assertFalse(source.exists())
         self.assertEqual(self.app.collector.phase,'idle')
         self.app.store.new_session('routed',paths['config'],paths['targets'],dest,source)
         episode(source);self.app.store.observe({'id':'routed','dataset':str(dest),'source_dataset':str(source),'baseline':[]})
@@ -77,5 +77,59 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/api/episode/rate',{'id':1,'grade':'B'})[0],200)
         self.assertEqual(self.request('/api/episode/delete',{'id':1,'confirm':'delete'})[0],200)
         self.assertFalse((dest/'episode_000001').exists())
+
+    def test_apply_scene_without_prompt_creates_directory_and_persists(self):
+        code,raw=self.request('/api/scene/apply',{'task_id':20260914,'scene_id':'001'})
+        self.assertEqual(code,200)
+        result=json.loads(raw);self.assertEqual(result['scene_id'],1)
+        self.assertTrue((self.root/'20260914_scene1').is_dir())
+        self.assertEqual(json.loads(self.request('/api/bootstrap')[1])['selected_scene'],result)
+        self.assertEqual(json.loads((self.app.runtime/'selected_scene.json').read_text()),result)
+        self.assertEqual(self.app.collector.phase,'idle')
+        marker=self.root/'20260914_scene1'/'keep.txt';marker.write_text('history')
+        self.assertEqual(self.request('/api/scene/apply',{'task_id':20260914,'scene_id':1})[0],200)
+        self.assertEqual(marker.read_text(),'history')
+        for payload in [{'scene_id':'../1'},{'scene_id':True},{'scene_id':0},{'scene_id':1.5}]:
+            self.assertEqual(self.request('/api/scene/apply',payload)[0],400)
+        self.assertEqual(self.request('/api/scene/apply',{'scene_id':2},token=False)[0],403)
+        self.app.collector.phase='waiting'
+        self.assertEqual(self.request('/api/scene/apply',{'scene_id':2})[0],400)
+        self.assertEqual(self.app.collector.selected_scene,result)
+        self.app.collector.phase='idle'
+
+    def test_scene_symlink_rejected(self):
+        outside=Path(self.tmp.name)/'outside';outside.mkdir()
+        (self.root/'20260914_scene1').symlink_to(outside,target_is_directory=True)
+        self.assertEqual(self.request('/api/scene/apply',{'task_id':20260914,'scene_id':1})[0],400)
+        self.assertEqual(list(outside.iterdir()),[])
+
+    def test_compact_status_keeps_live_episode_without_history(self):
+        dataset=self.root/'compact';dataset.mkdir()
+        self.app.store.new_session('compact',{'subtask_num':2},{},dataset)
+        episode(dataset,'a'*32)
+        session={'id':'compact','dataset':str(dataset),'baseline':[],'config':{'subtask_num':2}}
+        self.app.store.observe(session)
+        episode(dataset,'b'*32,finished=False);self.app.store.observe(session)
+        self.app.collector.session=session
+        full=json.loads(self.request('/api/status')[1])['collection']
+        compact=json.loads(self.request('/api/status?compact=1')[1])['collection']
+        self.assertEqual(len(full['episodes']),2)
+        self.assertNotIn('episodes',compact)
+        self.assertEqual(compact['current'],full['current'])
+        self.assertEqual(compact['counts'],full['counts'])
+        self.assertEqual(compact['current']['uuid'],'b'*32)
+
+    def test_timing_warning_defaults_A_and_manual_rating_is_unrestricted(self):
+        import h5py
+        dataset=self.root/'quality';dataset.mkdir()
+        self.app.store.new_session('quality',{}, {},dataset)
+        p=episode(dataset)
+        with h5py.File(p/'episode.hdf5','a') as f:f['timestamp/t'][3]=f['timestamp/t'][2]
+        self.app.store.observe({'id':'quality','dataset':str(dataset),'baseline':[]})
+        row=self.app.store.list()[0];self.assertEqual(row['grade'],'A')
+        for grade in ('F','B','A'):
+            self.assertEqual(self.request('/api/episode/rate',{'id':row['id'],'grade':grade})[0],200)
+            self.assertEqual(self.app.store.list()[0]['grade'],grade)
+        self.assertEqual(self.app.store.list()[0]['detail']['timing_qc']['status'],'failed')
 
 if __name__=='__main__':unittest.main()

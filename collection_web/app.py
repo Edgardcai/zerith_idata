@@ -12,16 +12,20 @@ import subprocess
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from cameras import Cameras, NAMES
 from collector import Collector
 from device_monitor import DeviceMonitor
 from episodes import EpisodeStore
-from tasks import DEFAULT_PROMPT, parse_targets
+from tasks import DEFAULT_PROMPT, parse_targets, default_task_id
 from teleop_status import TeleopStatus
 
 ROOT=Path(__file__).resolve().parent
+
+class CollectionHTTPServer(ThreadingHTTPServer):
+    request_queue_size=64
+    daemon_threads=True
 
 class Application:
     def __init__(self,data_root='/data/zerith_data',runtime=None,start_devices=True):
@@ -45,8 +49,8 @@ class Application:
             except subprocess.TimeoutExpired:self.worker.kill();self.worker.wait()
         if self.worker_log:self.worker_log.close()
         self.store.close()
-    def status(self):
-        return {'device':self.monitor.snapshot(),'collection':self.collector.status(),'camera':self.cameras.status(),'teleop':self.teleop.snapshot()}
+    def status(self,compact=False):
+        return {'device':self.monitor.snapshot(),'collection':self.collector.status(compact=compact),'camera':self.cameras.status(),'teleop':self.teleop.snapshot(),'default_task_id':default_task_id()}
 
 class Handler(BaseHTTPRequestHandler):
     server_version='CollectionWeb/1.0'
@@ -55,19 +59,37 @@ class Handler(BaseHTTPRequestHandler):
         return
     @property
     def app(self):return self.server.app
+    def video_target(self,ident,name):
+        if name not in NAMES:raise ValueError('未知相机')
+        row=self.app.store.get(int(ident))
+        if not row or row['state']!='completed':raise ValueError('数据不存在或尚未保存')
+        directory=self.app.store.video_directory(row)
+        target=directory/'videos'/'rs'/(NAMES[name]+'.mp4')
+        if target.is_symlink() or not target.resolve().is_relative_to(directory):raise ValueError('视频路径无效')
+        return target
     def json(self,value,status=200):
         data=json.dumps(value,ensure_ascii=False,allow_nan=False).encode()
         self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.end_headers();self.wfile.write(data)
     def do_GET(self):
         try:
             path=urlparse(self.path).path
-            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_PROMPT,'depth_recording_supported':True})
-            if path=='/api/status':return self.json(self.app.status())
+            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_PROMPT,'depth_recording_supported':True,'default_task_id':default_task_id(),'selected_scene':self.app.collector.selected_scene})
+            if path=='/api/status':return self.json(self.app.status(compact=parse_qs(urlparse(self.path).query).get('compact')==['1']))
             if path=='/api/episode-groups':return self.json({'groups':self.app.store.groups()})
             if path=='/api/episodes':
-                from urllib.parse import parse_qs
                 dataset=parse_qs(urlparse(self.path).query).get('dataset',[None])[0]
                 return self.json({'episodes':self.app.store.list(dataset=dataset)})
+            if path.startswith('/api/review/'):
+                ident=int(path.rsplit('/',1)[1]);streams={}
+                for name in NAMES:
+                    try:
+                        target=self.video_target(ident,name)
+                        stat=target.stat()
+                        if stat.st_size==0:raise ValueError('录像文件为空')
+                        streams[name]={'url':f'/api/video/{ident}/{name}?v={stat.st_mtime_ns}-{stat.st_size}'}
+                    except (OSError,ValueError) as exc:
+                        streams[name]={'error':'录像文件不存在' if isinstance(exc,FileNotFoundError) else str(exc)}
+                return self.json({'streams':streams})
             if path.startswith('/api/camera/'):
                 name=path.rsplit('/',1)[1]
                 if name not in NAMES:raise ValueError('未知相机')
@@ -75,13 +97,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_response(200);self.send_header('Content-Type','image/jpeg');self.send_header('Content-Length',str(len(data)));self.send_header('Cache-Control','no-store');self.end_headers();return self.wfile.write(data)
             if path.startswith('/api/video/'):
                 _,_,_,ident,name=path.split('/')
-                if name not in NAMES:raise ValueError('未知相机')
-                row=self.app.store.get(int(ident))
-                if not row or row['state']!='completed':raise ValueError('数据不存在或尚未保存')
-                directory=self.app.store.safe(row['path'])
-                target=directory/'videos'/'rs'/(NAMES[name]+'.mp4')
-                if target.is_symlink() or not target.resolve().is_relative_to(directory):raise ValueError('视频路径无效')
-                return self.file(target,video=True)
+                return self.file(self.video_target(ident,name),video=True)
             if path=='/':return self.file(ROOT/'static'/'index.html')
             if path.startswith('/static/'):
                 target=(ROOT/'static'/path.removeprefix('/static/')).resolve()
@@ -92,25 +108,37 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:self.json({'error':str(exc)},400)
     def file(self,path,video=False):
         if not path.is_file():return self.json({'error':'文件不存在'},404)
-        size=path.stat().st_size;start=0;end=size-1;status=200
+        # Open before sending headers, retaining a stable file across directory renames.
+        with path.open('rb') as f:return self.stream_file(path,f,video)
+    def stream_file(self,path,f,video):
+        stat=os.fstat(f.fileno());size=stat.st_size;start=0;end=size-1;status=200
+        etag=f'"{stat.st_mtime_ns:x}-{size:x}"'
+        if video and self.headers.get('If-None-Match')==etag:
+            self.send_response(304);self.send_header('ETag',etag);self.send_header('Cache-Control','private, max-age=0, must-revalidate');self.end_headers();return
         value=self.headers.get('Range')
-        if video and value:
+        if video and value and self.headers.get('If-Range',etag)==etag:
             import re
-            match=re.fullmatch(r'bytes=(\d+)-(\d*)',value)
-            if not match:return self.json({'error':'不支持的分段请求'},416)
-            start=int(match[1]);end=min(int(match[2]) if match[2] else end,end)
-            if start>end:return self.json({'error':'分段越界'},416)
+            match=re.fullmatch(r'bytes=(\d*)-(\d*)',value.strip())
+            if match and (match[1] or match[2]):
+                if match[1]:start=int(match[1]);end=min(int(match[2]) if match[2] else end,end)
+                else:start=max(0,size-int(match[2]))
+            else:start=size
+            if start>end or size==0:
+                self.send_response(416);self.send_header('Content-Range',f'bytes */{size}');self.send_header('Content-Length','0');self.end_headers();return
             status=206
-        self.send_response(status);self.send_header('Content-Type',mimetypes.guess_type(str(path))[0] or 'application/octet-stream');self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff')
-        if video:self.send_header('Accept-Ranges','bytes')
+        self.send_response(status);self.send_header('Content-Type',mimetypes.guess_type(str(path))[0] or 'application/octet-stream');self.send_header('Content-Length',str(end-start+1));self.send_header('Cache-Control','private, max-age=0, must-revalidate' if video else 'no-store');self.send_header('X-Content-Type-Options','nosniff')
+        if video:self.send_header('Accept-Ranges','bytes');self.send_header('ETag',etag)
         if status==206:self.send_header('Content-Range',f'bytes {start}-{end}/{size}')
         self.end_headers()
-        with path.open('rb') as f:
-            f.seek(start);remaining=end-start+1
-            while remaining:
-                chunk=f.read(min(remaining,256*1024))
-                if not chunk:break
-                self.wfile.write(chunk);remaining-=len(chunk)
+        if self.command=='HEAD':return
+        f.seek(start);remaining=end-start+1
+        while remaining:
+            chunk=f.read(min(remaining,256*1024))
+            if not chunk:break
+            self.wfile.write(chunk);remaining-=len(chunk)
+    def do_HEAD(self):
+        if urlparse(self.path).path.startswith('/api/video/'):return self.do_GET()
+        self.send_response(405);self.send_header('Content-Length','0');self.end_headers()
     def do_POST(self):
         try:
             origin=self.headers.get('Origin')
@@ -123,6 +151,7 @@ class Handler(BaseHTTPRequestHandler):
             path=urlparse(self.path).path
             if path=='/api/task/parse':return self.json(parse_targets(str(body.get('prompt',''))))
             if path=='/api/task/directory':return self.json(self.app.collector.task_paths(body))
+            if path=='/api/scene/apply':return self.json(self.app.collector.apply_scene(body))
             if path=='/api/preflight':return self.json(self.app.collector.preflight(body))
             if path=='/api/session/start':return self.json(self.app.collector.start(body))
             if path=='/api/session/end':return self.json(self.app.collector.end())
@@ -148,7 +177,7 @@ def main():
     lock=(runtime/'server.lock').open('w')
     try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:raise SystemExit('采集网站已运行')
-    server=ThreadingHTTPServer((args.host,args.port),Handler);server.daemon_threads=True
+    server=CollectionHTTPServer((args.host,args.port),Handler)
     app=Application(args.data_root,runtime);server.app=app
     def shutdown(*_):threading.Thread(target=server.shutdown,daemon=True).start()
     signal.signal(signal.SIGTERM,shutdown);signal.signal(signal.SIGINT,shutdown)

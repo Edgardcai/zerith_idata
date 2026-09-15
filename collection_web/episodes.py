@@ -32,6 +32,65 @@ def warning_kind(line):
     return 'warnings'
 
 
+def timing_quality(f, t, dt, rate):
+    """Terminal quality result, not an exception that leaves files saving forever."""
+    reasons=[]; n=len(t)
+    duplicates=int(np.count_nonzero(dt==0))
+    backwards=int(np.count_nonzero(dt<0))
+    gaps=int(np.count_nonzero(dt>1.5/rate))
+    if duplicates:reasons.append(f'{duplicates} 个重复时间戳')
+    if backwards:reasons.append(f'{backwards} 处时间戳倒退')
+    if gaps:reasons.append(f'{gaps} 处采样间断')
+    result={'status':'failed' if reasons else 'legacy_unverified','reasons':reasons,
+            'duplicate_count':duplicates,'backward_count':backwards,'gap_count':gaps}
+    if 'timing' not in f:return result
+    try:
+        g=f['timing']
+        if int(g.attrs['version'])!=1:raise ValueError('不支持的时序格式版本')
+        def column(path):
+            a=np.asarray(g[path][:])
+            if a.shape!=(n,) or not np.isfinite(a).all():raise ValueError('时序字段不完整：'+path)
+            return a
+        ref=column('reference_receive_ns')
+        if np.any(np.diff(ref)<=0):reasons.append('主机参考时间未递增')
+        max_skew=0.; max_state_age=0.
+        for cam in ('cam_high','cam_left_wrist','cam_right_wrist'):
+            kinds=('color','depth') if bool(f.attrs.get('depth_recorded',False)) else ('color',)
+            for kind in kinds:
+                p='cameras/rs/'+cam+'/'+kind+'/'
+                raw=column(p+'device_timestamp_ms'); frames=column(p+'frame_number')
+                epochs=column(p+'epoch'); received=column(p+'receive_ns')
+                if np.any(np.diff(raw)<=0) or np.any(np.diff(frames)<=0):
+                    reasons.append(cam+'/'+kind+' 帧号或时间重复/倒退')
+                if np.any(np.diff(epochs)!=0):reasons.append(cam+'/'+kind+' 时钟会话发生变化')
+                skew=float(np.max(np.abs(received-ref)))
+                max_skew=max(max_skew,skew)
+                if skew>20_000_000:reasons.append(cam+'/'+kind+' 对齐偏差超过 20ms')
+                if cam=='cam_high' and kind=='color' and not np.array_equal(raw,t):
+                    reasons.append('主时间戳与头部图片不一致')
+        for field in ('upper_joint','gripper','chassis','waist','head'):
+            for kind in ('state','control'):
+                p='messages/'+field+'_'+kind+'/'
+                received=column(p+'receive_ns'); seq=column(p+'seq')
+                age=ref-received
+                if np.any(received<0) or np.any(seq<1) or np.any(age<0):
+                    reasons.append(field+'_'+kind+' 缺失或使用未来消息')
+                if kind=='state':
+                    max_state_age=max(max_state_age,float(age.max()))
+                    if np.any(age>50_000_000):reasons.append(field+' 状态过期超过 50ms')
+        stats=json.loads(g.attrs['sample_stats'])
+        if int(stats.get('rejected',0))>0:reasons.append(f"{stats['rejected']} 个候选样本因无法对齐被跳过")
+        events=json.loads(g.attrs.get('source_events','{}'))
+        if events.get('clock_or_stream_reset',0):reasons.append('采集中相机时钟或流重置')
+        if events.get('invalid_source_time',0):reasons.append('相机产生无效源时间')
+        result.update(max_camera_skew_ms=max_skew/1e6,max_state_age_ms=max_state_age/1e6,
+                      alignment='host_receive_causal_hold',sample_stats=stats,source_events=events)
+    except (KeyError,ValueError,TypeError,OverflowError) as exc:
+        reasons.append('时序元数据校验失败：'+str(exc))
+    result['status']='failed' if reasons else 'passed'
+    return result
+
+
 def validate_finished(directory):
     directory=Path(directory)
     meta=json.loads((directory/'episode_meta.json').read_text())
@@ -57,10 +116,12 @@ def validate_finished(directory):
         steps=[s for s in meta.get('step_index',[]) if s.get('end_frame_id',-1)>=s.get('start_frame_id',0)]
         warnings=[]
         if completed<total:warnings.append(f'只完成 {completed}/{total} 阶段')
-        scale=1000 if float(np.median(t))>1e11 else 1
+        scale=1000 if f['timestamp'].attrs.get('unit')=='ms' or float(np.median(t))>1e11 else 1
         dt=np.diff(t)/scale; duration=float((t[-1]-t[0])/scale) if n>1 else 0
-        if len(dt) and (dt<0).any():raise ValueError('时间戳倒退')
         rate=float(f.attrs.get('control_frequency',30)); actual=(n-1)/duration if duration>0 else 0
+        if not np.isfinite(rate) or rate<=0:raise ValueError('采样频率无效')
+        timing_qc=timing_quality(f,t,dt,rate)
+        if timing_qc['status']=='failed':warnings.append('时序不合格：'+'；'.join(timing_qc['reasons']))
         if n>1 and actual<rate*.9:warnings.append(f'实际采样 {actual:.1f} Hz')
         if len(dt) and (dt==0).any():warnings.append(f'{int((dt==0).sum())} 个重复时间戳')
         long_intervals=int(np.count_nonzero(dt > 1.5/rate))
@@ -70,6 +131,7 @@ def validate_finished(directory):
         return {'frames':n,'duration_s':duration,'rate_hz':rate,'actual_hz':actual,'completed_steps':completed,
             'total_steps':total,'steps':steps,'warnings':warnings,'timestamp_unit':'ms' if scale==1000 else 's',
             'long_interval_count':long_intervals,'max_interval_ms':max_interval_ms,
+            'timing_qc':timing_qc,
             'record_depth':all(f'observation/images/rs/{name}/depth' in f for name in ['cam_high','cam_left_wrist','cam_right_wrist'])}
 
 
@@ -89,6 +151,7 @@ class EpisodeStore:
         if 'source_dataset' not in {r['name'] for r in self.db.execute('PRAGMA table_info(sessions)')}:
             self.db.execute('ALTER TABLE sessions ADD COLUMN source_dataset TEXT');self.db.commit()
         self.offsets={};self.log_counts={}
+        self.video_paths={};self.video_path_lock=threading.Lock()
         self.recover()
 
     def recover(self):
@@ -145,6 +208,7 @@ class EpisodeStore:
     def groups(self):
         with self.lock:
             rows=self.db.execute('''SELECT dataset, COUNT(*) AS total, MAX(id) AS latest_id,
+                SUM(state NOT IN ('deleted','deleting')) AS retained,
                 SUM(state='completed') AS completed, SUM(state='deleted') AS deleted,
                 SUM(state='completed' AND grade='A') AS A,
                 SUM(state='completed' AND grade='B') AS B,
@@ -154,14 +218,74 @@ class EpisodeStore:
 
     def get(self,ident):
         with self.lock:
-            row=self.db.execute('SELECT id,state,path FROM episodes WHERE id=?',(ident,)).fetchone()
+            row=self.db.execute('SELECT id,state,path,uuid,dataset,seq FROM episodes WHERE id=?',(ident,)).fetchone()
         return dict(row) if row else None
 
-    def list(self,session_id=None,dataset=None):
+    def video_directory(self,row):
+        """Locate renamed recordings by identity, never by a guessed sequence number.
+
+        This read-only index leaves collection numbering and history untouched.
+        Cache directory scans, but recheck identity before serving each recording.
+        """
+        def identity(path):
+            try:
+                path=self.safe(path)
+                for name,key in [('review.json','episode_uuid'),('episode_meta.json','source_episode_id'),
+                                 ('episode_meta.json','episode_id')]:
+                    meta=path/name
+                    if meta.is_symlink():continue
+                    try:
+                        value=json.loads(meta.read_text()).get(key)
+                        if value:return value
+                    except (OSError,ValueError,AttributeError):pass
+            except ValueError:pass
+            return None
+
+        original=self.safe(row['path'])
+        if identity(original)==row['uuid']:return original
+        dataset=original.parent
+        # A collection path must stay inside its recorded dataset.
+        if dataset!=Path(row['dataset']):raise ValueError('录像目录与采集记录不一致')
+        with self.video_path_lock:
+            def lookup(folder):
+                if folder.is_symlink() or folder.resolve()!=folder:return []
+                try:stamp=folder.stat().st_mtime_ns
+                except OSError:return []
+                cached=self.video_paths.get(str(folder))
+                if not cached or cached[0]!=stamp:
+                    index={}
+                    for child in folder.iterdir():
+                        if child.is_symlink() or not child.is_dir():continue
+                        uid=identity(child)
+                        if uid:index.setdefault(uid,[]).append(child)
+                    cached=(stamp,index);self.video_paths[str(folder)]=cached
+                return cached[1].get(row['uuid'],[])
+            matches=lookup(dataset)
+            if not matches:
+                # Prefer the preserved original batch over a copied/edited scene.
+                matches=lookup(self.root/'raw_data'/dataset.name)
+            if not matches:
+                # Historical datasets may be renamed or archived in raw_data.
+                # Scan dataset directories only, never HDF5 contents or video trees.
+                folders=[]
+                for parent in (self.root,self.root/'raw_data'):
+                    if not parent.is_dir() or parent.is_symlink():continue
+                    folders.extend(p for p in parent.iterdir() if p.is_dir() and
+                                   not p.is_symlink() and p.name not in ('lerobot','qc_reports','raw_data'))
+                for folder in folders:
+                    if folder!=dataset:matches.extend(lookup(folder))
+                archived=[p for p in matches if p.is_relative_to(self.root/'raw_data')]
+                if len(archived)==1:matches=archived
+            if len(matches)>1:raise ValueError('发现多份相同标识的录像，无法确定原始数据')
+            if len(matches)==1 and identity(matches[0])==row['uuid']:return self.safe(matches[0])
+        raise ValueError('录像已移动或删除，采集目录及 raw_data 归档中未找到对应数据')
+
+    def list(self,session_id=None,dataset=None,active_only=False):
         with self.lock:
             clauses=[];params=[]
             if session_id:clauses.append('session_id=?');params.append(session_id)
             if dataset is not None:clauses.append('dataset=?');params.append(dataset)
+            if active_only:clauses.append("state IN ('recording','saving','finalizing')")
             sql='SELECT * FROM episodes'+(' WHERE '+' AND '.join(clauses) if clauses else '')+' ORDER BY id DESC'
             if dataset is None:sql+=' LIMIT 1000'
             rows=self.db.execute(sql,params).fetchall()
@@ -184,13 +308,46 @@ class EpisodeStore:
                 if row['grade'] in ('A','B','F'):result[row['grade']]+=row['n']
         return result
 
+    def reconcile_missing(self,session_id,now=None):
+        """Missing recording directories must not leave the session busy forever.
+
+        Keep files and grades untouched. Require two observations separated by
+        30 seconds, and protect a destination created by an in-flight rename.
+        """
+        now=time.time() if now is None else now
+        events=[]
+        with self.lock:
+            rows=self.db.execute("SELECT * FROM episodes WHERE session_id=? AND state IN ('recording','saving')",(session_id,)).fetchall()
+            for row in rows:
+                source=self.safe(row['source']);path=self.safe(row['path'])
+                destination=self.safe(Path(row['dataset'])/f"episode_{row['seq']:06d}")
+                progress=json.loads(row['progress'] or '{}')
+                if any(p.exists() for p in (source,path,destination)):
+                    if 'missing_since' in progress:
+                        progress.pop('missing_since')
+                        self.db.execute('UPDATE episodes SET progress=? WHERE id=?',(json.dumps(progress),row['id']))
+                    continue
+                if 'missing_since' not in progress:
+                    progress['missing_since']=now
+                    self.db.execute('UPDATE episodes SET progress=? WHERE id=?',(json.dumps(progress),row['id']))
+                    continue
+                if now-progress['missing_since']<30:continue
+                detail=json.loads(row['detail'] or '{}')
+                detail.update(error='采集目录已不存在，录制状态已解除；请检查是否被采集端取消或在外部移动／删除',missing_source=str(source),missing_detected_at=now)
+                self.db.execute("UPDATE episodes SET state='error',detail=? WHERE id=?",(json.dumps(detail,ensure_ascii=False),row['id']))
+                self.db.execute('INSERT INTO audit(at,episode_id,action,detail) VALUES(?,?,?,?)',(now,row['id'],'missing_directory',json.dumps(detail,ensure_ascii=False)))
+                events.append({'type':'missing_directory','episode':row['id']})
+            self.db.commit()
+        return events
+
     def observe(self,session,allow_new=True):
         dataset=Path(session['dataset'])
         source_dataset=Path(session.get('source_dataset') or dataset)
-        if not source_dataset.exists():return []
+        missing_events=self.reconcile_missing(session['id'])
+        if not source_dataset.exists():return missing_events
         for p in (dataset,source_dataset):
             if p.is_symlink() or p.resolve().parent!=self.root:raise ValueError('任务目录路径异常')
-        baseline=set(session['baseline']); events=[]
+        baseline=set(session['baseline']); events=missing_events
         # Include known finalizing paths: a crash may have happened just after moving.
         directories=list(source_dataset.iterdir())
         if dataset!=source_dataset:
@@ -259,10 +416,13 @@ class EpisodeStore:
 
     def _finish_index(self,row,path):
         session=self.db.execute('SELECT * FROM sessions WHERE id=?',(row['session_id'],)).fetchone()
-        if session and session['source_dataset'] and session['source_dataset']!=session['dataset']:
+        if session:
             atomic_json(path/'collection_task.json',{'config':json.loads(session['config']),
                 'targets':json.loads(session['targets']),'source_dataset':session['source_dataset'],'dataset':session['dataset']})
-        review={'episode_uuid':row['uuid'],'number':row['seq'],'grade':row['grade'] or 'A','reviewed':False,'updated_at':time.time()}
+        detail=json.loads(row['detail'] or '{}')
+        qc=detail.get('timing_qc',{})
+        review={'episode_uuid':row['uuid'],'number':row['seq'],'grade':row['grade'] or 'A','reviewed':False,'updated_at':time.time(),'timing_qc':qc}
+        atomic_json(path/'timing_quality.json',qc)
         atomic_json(path/'review.json',review)
         self.db.execute("UPDATE episodes SET path=?,state='completed',grade=? WHERE id=?",(str(path),review['grade'],row['id']))
 
@@ -285,7 +445,8 @@ class EpisodeStore:
         with self.lock:
             row=self.db.execute('SELECT * FROM episodes WHERE id=?',(ident,)).fetchone()
             if not row or row['state']!='completed':raise ValueError('只能评价保存完成的数据')
-            path=self.safe(row['path']);atomic_json(path/'review.json',{'episode_uuid':row['uuid'],'number':row['seq'],'grade':grade,'reviewed':True,'updated_at':time.time()})
+            qc=json.loads(row['detail'] or '{}').get('timing_qc',{})
+            path=self.safe(row['path']);atomic_json(path/'review.json',{'episode_uuid':row['uuid'],'number':row['seq'],'grade':grade,'reviewed':True,'updated_at':time.time(),'timing_qc':qc})
             self.db.execute('UPDATE episodes SET grade=? WHERE id=?',(grade,ident));self.db.execute('INSERT INTO audit(at,episode_id,action,detail) VALUES(?,?,?,?)',(time.time(),ident,'grade',grade));self.db.commit()
 
     def delete(self,ident):

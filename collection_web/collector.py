@@ -6,7 +6,7 @@ import time
 import uuid
 from pathlib import Path
 from episodes import tail, atomic_json
-from tasks import validate_task, dataset_name
+from tasks import validate_task, dataset_name, scene_config
 from protocol import Vendor
 
 class Collector:
@@ -15,6 +15,10 @@ class Collector:
         self.lock=threading.RLock();self.operation=threading.Lock();self.shutdown=threading.Event()
         self.session=store.last_session();self.stream=None;self.vendor=None;self.rpc_thread=None
         self.phase='idle';self.error=None;self.responses=[];self.events=[];self.transport=False;self.accepted=False
+        self.selected_scene=None
+        selection_file=self.runtime/'selected_scene.json'
+        if selection_file.exists():
+            self.selected_scene=self.scene_paths(json.loads(selection_file.read_text()))
         if self.session and self.session['state'] not in ('closed','rejected'):
             self.phase='disconnected';self.error='网站曾重启，请先确认原会话状态';self.store.set_session(self.session['id'],'disconnected')
         self.thread=threading.Thread(target=self._watch,daemon=True);self.thread.start()
@@ -30,10 +34,26 @@ class Collector:
                 except OSError:pass
         return active
 
+    def scene_paths(self,payload):
+        values=scene_config(payload)
+        dataset=self.store.root/dataset_name(values['scene_id'],values['task_id'])
+        if dataset.is_symlink() or (dataset.exists() and not dataset.is_dir()):raise ValueError('场景输出目录异常')
+        return {**values,'dataset':str(dataset)}
+
+    def apply_scene(self,payload):
+        with self.operation:
+            with self.lock:
+                if self.phase not in ('idle','closed','rejected'):raise ValueError('请先结束当前会话，再应用场景')
+            selection=self.scene_paths(payload)
+            Path(selection['dataset']).mkdir(exist_ok=True)
+            atomic_json(self.runtime/'selected_scene.json',selection)
+            with self.lock:self.selected_scene=selection
+            return selection
+
     def task_paths(self,payload):
         config,targets=validate_task(payload)
         source=self.store.root/f"{config['task_id']}_{config['task_name']}"
-        dataset=self.store.root/dataset_name(targets,targets['lift_height'])[0] if 'lift_height' in targets else source
+        dataset=Path(self.scene_paths(config)['dataset'])
         for directory in (source,dataset):
             if directory.is_symlink() or (directory.exists() and not directory.is_dir()):raise ValueError('任务输出目录异常')
         return {'config':config,'targets':targets,'dataset':str(dataset),'source_dataset':str(source)}
@@ -55,12 +75,13 @@ class Collector:
             with self.lock:
                 if self.phase not in ('idle','closed','rejected'):raise ValueError('请先结束当前会话')
             report=self.preflight(payload)
+            if not self.selected_scene or report['dataset']!=self.selected_scene['dataset']:
+                raise ValueError('请先应用当前日期和场景，再启动采集')
             if not report['ready']:raise ValueError('启动前检查未通过：'+'、'.join(c['label'] for c in report['checks'] if not c['ok']))
             ident=uuid.uuid4().hex
             if report['dataset']!=report['source_dataset']:
                 destination=Path(report['dataset']);destination.mkdir(exist_ok=True)
-                # Existing dataset metadata and historical episodes remain untouched.
-                if not (destination/'task_meta.json').exists():atomic_json(destination/'task_meta.json',report['config'])
+                # A scene contains many prompts: task metadata belongs to episodes.
             baseline=self.store.new_session(ident,report['config'],report['targets'],report['dataset'],report['source_dataset'])
             session={'id':ident,'started':time.time(),'config':report['config'],'targets':report['targets'],'dataset':report['dataset'],'source_dataset':report['source_dataset'],'baseline':baseline}
             atomic_json(self.runtime/f'session_{ident}.json',session)
@@ -110,7 +131,7 @@ class Collector:
                 taskfile=Path(session.get('source_dataset') or session['dataset'])/'task_meta.json'
                 if taskfile.exists() and taskfile.stat().st_mtime>=session['started']-1:
                     actual=json.loads(taskfile.read_text())
-                    if (all(actual.get(k)==session['config'].get(k) for k in ['task_id','task_name','subtask_num','frequency'])
+                    if (all(actual.get(k)==session['config'].get(k) for k in ['task_id','task_name','scene_id','subtask_num','frequency'])
                             and actual.get('record_depth',False)==session['config'].get('record_depth',False)):
                         with self.lock:
                             self.accepted=True
@@ -124,6 +145,34 @@ class Collector:
             except Exception as exc:
                 with self.lock:self.error='目录监测：'+str(exc)
 
+    def _cleanup_source(self,session):
+        """Remove only an ended session's empty staging directory and metadata.
+
+        Never recursively delete: unfinished episodes, unknown files and links
+        must survive. Keep the exact vendor metadata in the session audit files.
+        Called under operation after cancelling/joining the session RPC.
+        """
+        source=Path(session.get('source_dataset') or session['dataset'])
+        destination=Path(session['dataset'])
+        expected=self.store.root/f"{session['config']['task_id']}_{session['config']['task_name']}"
+        if source==destination or source!=expected:return False
+        for path in (source,destination):
+            if path.is_symlink() or path.resolve()!=path or path.parent!=self.store.root:return False
+        if not source.exists():return True
+        if not source.is_dir() or not destination.is_dir():return False
+        with self.store.lock:
+            if any(row['state'] not in ('completed','deleted') for row in self.store.list(session['id'])):return False
+            entries=list(source.iterdir())
+            metadata=source/'task_meta.json'
+            if entries:
+                if entries!=[metadata] or metadata.is_symlink() or not metadata.is_file():return False
+                actual=json.loads(metadata.read_text())
+                if not isinstance(actual,dict) or any(actual.get(k)!=v for k,v in session['config'].items()):return False
+                atomic_json(self.runtime/f"source_task_meta_{session['id']}.json",actual)
+                metadata.unlink()
+            source.rmdir()
+        return True
+
     def end(self):
         with self.operation:
             if self.external_active():raise ValueError('请先在 Meta Quest 结束录制，等待数据保存后再结束会话')
@@ -135,15 +184,24 @@ class Collector:
             with self.lock:
                 self.phase='closed';self.transport=False;self.error=None
                 if self.session:self.store.set_session(self.session['id'],'closed')
+                session=dict(self.session) if self.session else None
+            if session and not (self.rpc_thread and self.rpc_thread.is_alive()):
+                try:
+                    if self._cleanup_source(session):
+                        with self.lock:self.events.append({'at':time.time(),'type':'source_cleanup','detail':'已清理采集临时目录'})
+                except (OSError,ValueError) as exc:
+                    # Cleanup failure must not turn a successfully ended session
+                    # into an RPC error or endanger saved/unfinished data.
+                    with self.lock:self.events.append({'at':time.time(),'type':'source_cleanup_skipped','detail':str(exc)})
             return self.status()
 
-    def status(self):
+    def status(self,compact=False):
         with self.lock:
             session=dict(self.session) if self.session else None
             connected=self.transport or bool(self.accepted and self.stream and self.stream.is_active())
-            result={'phase':self.phase,'accepted':self.accepted,'connected':connected,'error':self.error,
+            result={'phase':self.phase,'accepted':self.accepted,'connected':connected,'error':self.error,'selected_scene':self.selected_scene,
                 'session':session,'responses':list(self.responses),'events':list(self.events)}
-        rows=self.store.list(session['id']) if session else []
+        rows=self.store.list(session['id'],active_only=compact) if session else []
         active=[r for r in rows if r['state'] in ('recording','saving','finalizing')]
         result['current']=active[0] if active else None
         if result['current']:
@@ -156,7 +214,7 @@ class Collector:
                     progress['completed_steps']=max(progress.get('completed_steps',0),stage)
         if active and result['phase'] not in ('disconnected',):result['display_phase']=active[0]['state']
         else:result['display_phase']=result['phase']
-        result['episodes']=rows
+        if not compact:result['episodes']=rows
         result['counts']=self.store.counts(session['id'] if session else None)
         return result
 
