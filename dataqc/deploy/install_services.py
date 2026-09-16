@@ -14,7 +14,7 @@ def systemd_path(path):
     return value.replace('\\', '\\x5c').replace(' ', '\\x20').replace('"', '\\x22').replace('%', '%%')
 
 
-def render(output, python, runtime, port=8091, real_root='/data/zerith_data', sim_root='/data/sim_data', binary_path=None):
+def render(output, python, runtime, port=9990, real_root='/data/zerith_data', sim_root='/data/sim_data', binary_path=None):
     if isinstance(port, bool) or not 1 <= int(port) <= 65535:
         raise ValueError('端口必须介于 1 和 65535')
     output = Path(output).expanduser()
@@ -39,7 +39,7 @@ if __name__ == '__main__':
     parser.add_argument('--runtime', type=Path, default=ROOT / 'runtime')
     parser.add_argument('--output', type=Path, default=ROOT / 'runtime/service-preview')
     parser.add_argument('--apply', action='store_true')
-    parser.add_argument('--port', type=int, default=8091)
+    parser.add_argument('--port', type=int, default=9990)
     parser.add_argument('--real-root', type=Path, default=Path('/data/zerith_data'))
     parser.add_argument('--sim-root', type=Path, default=Path('/data/sim_data'))
     parser.add_argument('--binary-path', type=Path, help='ffmpeg/ffprobe 所在目录')

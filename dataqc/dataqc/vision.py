@@ -214,10 +214,10 @@ def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
             raise
         except (httpx.HTTPError, ValueError, RuntimeError) as exc:
             last = str(exc)[:300]
-            progress(f"视觉接口尝试 {attempt + 1}/{attempts}：{last}")
+            progress(f"模型接口尝试 {attempt + 1}/{attempts}：{last}")
             if attempt + 1 < attempts:
                 time.sleep(2**attempt)
-    raise RuntimeError("视觉检查未完成：" + last)
+    raise RuntimeError("模型请求未完成：" + last)
 
 
 def image_content(root, cam, idx, evidence):

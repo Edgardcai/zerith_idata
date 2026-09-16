@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import re
 from pathlib import Path
 import threading
 from urllib.parse import urlparse, parse_qs
@@ -22,11 +23,18 @@ def capture(root):
         grade=meta.get('quality_grade')
     grade=str(grade or '').upper()
     identity=str(review.get('episode_uuid') or meta.get('source_episode_id') or meta.get('episode_uuid') or root.name)
-    return identity,dict(grade=grade if grade in GRADES else '',source=source if grade in GRADES else '')
+    number=review.get('number')
+    name=f'episode_{int(number):06d}' if str(number).isdigit() and int(number)>0 else str(meta.get('source_episode_name') or '')
+    if not re.fullmatch(r'episode_?\d+',name):name=''
+    return identity,dict(grade=grade if grade in GRADES else '',source=source if grade in GRADES else '',episode_name=name)
 
 
 def integrate_grades(app):
-    scopes={};lock=threading.RLock()
+    scopes={};indexes={};locks={};registry_lock=threading.RLock()
+    def lock_for(cfg):
+        key=str(Path(cfg['hdf5_root']).resolve())
+        with registry_lock:return locks.setdefault(key,threading.RLock())
+    def scope_key(cfg):return str(Path(cfg['hdf5_root']).resolve())
     old_status=app.dataset_status
     def store_path(cfg):
         key=hashlib.sha256(str(Path(cfg['hdf5_root']).resolve()).encode()).hexdigest()
@@ -45,10 +53,12 @@ def integrate_grades(app):
             root=Path(row.get('episode_dir') or '')
             if not root.is_dir() or not row.get('episode_dir'):continue
             key,original=capture(root)
+            row.update(collection_episode_name=original.get('episode_name',''),current_episode_name=root.name)
             if key not in captures:captures[key]=original;changed=True
             original=captures[key]
             report_path=Path(row['qc_output'])/'qc_report.json' if row.get('qc_output') else None
-            report=read_json(report_path) if report_path else {}
+            from dataqc.quality_policy import display_report
+            report=display_report(read_json(report_path)) if report_path else {}
             from dataqc.reporting import presentation
             row['qc_presentation']=presentation(report)
             raw=report.get('raw_report',{})
@@ -56,9 +66,16 @@ def integrate_grades(app):
             if measured_fps is not None:row['fps']=measured_fps
             # Reports produced before this workflow may already contain an old manual edit.
             baseline=report.get('qc_original') or (report if not report.get('manual_review') else {})
-            qc=baseline.get('quality_grade') or ('F' if row.get('qc_ok') is False else '')
+            qc=baseline.get('quality_grade') or ('B' if baseline.get('review_required') else 'F' if row.get('qc_ok') is False else '')
             token=hashlib.sha256(json.dumps([str(report_path),report_path.stat().st_mtime_ns if report_path and report_path.is_file() else 0,row.get('qc_ok')],sort_keys=True).encode()).hexdigest()
             choice=choices.get(key,{})
+            # Migrate explicit legacy choices before comparing the report token;
+            # otherwise a refreshed report would erase the human selection.
+            if choice.get('source') in ('collection','qc') and choice.get('grade') in GRADES:
+                choice=dict(choice,selected_from=choice['source'],source='manual')
+                choices[key]=choice;changed=True
+            if choice.get('source')=='manual':
+                choice={k:v for k,v in choice.items() if k not in ('approval','export_block')}
             if choice.get('qc_token')!=token:
                 if choice.get('source')=='manual':
                     # A new report may invalidate export approval, never the human grade.
@@ -67,17 +84,13 @@ def integrate_grades(app):
             if choice.get('source')!='manual' and report.get('manual_review'):
                 choice=dict(source='manual',grade=report.get('quality_grade',''),qc_token=token)
                 choices[key]=choice;changed=True
-            # Older explicit bulk selections were stored by selected source. They
-            # are human choices too; retain them, including across later reports.
-            if choice.get('source') in ('collection','qc') and choice.get('grade') in GRADES:
-                choice=dict(choice,selected_from=choice['source'],source='manual')
-                choices[key]=choice;changed=True
             manual=choice.get('grade') if choice.get('source')=='manual' else ''
             effective=manual or qc or original['grade']
-            revision=hashlib.sha256(json.dumps([token,original,choice],sort_keys=True).encode()).hexdigest()
+            revision=hashlib.sha256(json.dumps([key,token,original,choice],sort_keys=True).encode()).hexdigest()
             row.update(collection_grade=original['grade'],collection_grade_source=original['source'],
                        qc_grade=qc,qc_reason=baseline.get('reason',''),qc_grade_label=qc or ('历史结论未保留' if report.get('manual_review') and not baseline else '待复核' if baseline.get('review_required') else '待质检'),quality_grade=effective,
                        manual_quality_grade=choice.get('grade','') if choice.get('source')=='manual' else '',
+                       manual_note=choice.get('note',''),manual_problem=choice.get('problem',''),
                        grade_source='manual' if manual else 'qc' if qc else 'collection',
                        manual_selected_from=choice.get('selected_from','manual') if manual else '',
                        grade_changed=bool(original['grade'] and qc and original['grade']!=qc),
@@ -106,7 +119,11 @@ def integrate_grades(app):
     def status(payload):
         cfg=app.derive_paths(payload)
         scopes[str(Path(cfg['hdf5_root']).resolve())]=cfg
-        with lock:return enrich(old_status(payload),cfg)
+        with lock_for(cfg):
+            result=enrich(old_status(payload),cfg)
+            indexes[scope_key(cfg)]=copy.deepcopy(result)
+            if len(indexes)>8:indexes.pop(next(iter(indexes)))
+            return result
     app.dataset_status=status
 
     old_replay=app.start_replay
@@ -126,27 +143,53 @@ def integrate_grades(app):
         return root,cfg
     def row_snapshot(row,cfg):
         return dict(root=row['episode_dir'],episode_name=row['episode_id'],current_grade=row.get('quality_grade',''),
+                    collection_episode_name=row.get('collection_episode_name',''),current_episode_name=row.get('current_episode_name',row['episode_id']),
                     collection_grade=row.get('collection_grade',''),qc_grade=row.get('qc_grade',''),qc_grade_label=row.get('qc_grade_label',''),
-                    manual_grade=row.get('manual_quality_grade',''),grade_source=row.get('grade_source'),
+                    manual_grade=row.get('manual_quality_grade',''),manual_note=row.get('manual_note',''),manual_problem=row.get('manual_problem',''),grade_source=row.get('grade_source'),
                     grade_changed=row.get('grade_changed',False),review_required=row.get('grade_review_required',False),
                     review_pending=row.get('review_pending',False),
                     qc_presentation=row.get('qc_presentation',{}),
                     reason=row.get('qc_reason',''),revision=row['grade_revision'],busy=busy(cfg))
+    def current_rows(cfg,names=None):
+        key=scope_key(cfg)
+        if key not in indexes:status(app.stringify_config(cfg))
+        rows=indexes[key]['episodes']
+        selected=[copy.deepcopy(r) for r in rows if names is None or r['episode_id'] in names]
+        latest=None
+        if hasattr(app,'latest_qc_report') and cfg.get('qc_root') and cfg.get('dataset_name'):
+            latest=app.latest_qc_report(Path(cfg['qc_root']),cfg['dataset_name'],cfg.get('qc_report_dir'))
+        for row in selected:
+            root=Path(row['episode_dir'])
+            if not root.is_dir() or not hdf5_path(root).is_file():raise ValueError('源记录已变化，请刷新后再次保存')
+            if latest:
+                path=latest/row['episode_id']
+                if (path/'qc_report.json').is_file() and str(path)!=str(row.get('qc_output')):
+                    row['qc_output']=str(path)
+                    row['qc_ok']=read_json(path/'qc_report.json').get('accepted')
+        # Only read current reports and choices for requested episodes; no media reads.
+        return enrich(dict(episodes=selected),cfg)['episodes']
     def snapshot(root):
-        root,cfg=context(root);app.invalidate_status_cache()
-        result=status(app.stringify_config(cfg))
-        row=next((e for e in result['episodes'] if Path(e.get('episode_dir','')).resolve()==root),None)
-        if row is None:raise ValueError('当前数据集中未找到此 episode')
-        return row_snapshot(row,cfg),cfg
+        root,cfg=context(root)
+        with lock_for(cfg):
+            if scope_key(cfg) not in indexes:status(app.stringify_config(cfg))
+            row=next((r for r in indexes[scope_key(cfg)]['episodes'] if Path(r['episode_dir']).resolve()==root),None)
+            if row is None:
+                status(app.stringify_config(cfg))
+                row=next((r for r in indexes[scope_key(cfg)]['episodes'] if Path(r['episode_dir']).resolve()==root),None)
+            if row is None:raise ValueError('当前数据集中未找到此 episode')
+            row=current_rows(cfg,{row['episode_id']})[0]
+            return row_snapshot(row,cfg),cfg
     def grade_list(root):
         _,cfg=context(root)
         result=status(app.stringify_config(cfg))
         return dict(episodes=[{k:v for k,v in row_snapshot(row,cfg).items() if k!='qc_presentation'} for row in result.get('episodes',[])])
     def apply(cfg,requests,source='manual'):
         if source not in ('manual','collection','qc'):raise ValueError('无效等级来源')
-        with lock:
+        with lock_for(cfg):
             if busy(cfg):raise ValueError('该数据集正在处理，请完成后保存等级')
-            app.invalidate_status_cache();current=status(app.stringify_config(cfg));rows={r['episode_id']:r for r in current['episodes']}
+            names={r['episode_name'] for r in requests}
+            if len(names)!=len(requests):raise ValueError('同一记录不能重复提交')
+            rows={r['episode_id']:r for r in current_rows(cfg,names)}
             pending=[];skipped=[];preserved_manual=[]
             for req in requests:
                 row=rows.get(req['episode_name'])
@@ -157,25 +200,36 @@ def integrate_grades(app):
                 grade=row.get(source+'_grade','') if source!='manual' else str(req.get('grade','')).upper()
                 if source!='manual' and grade not in GRADES:skipped.append(row['episode_id']);continue
                 if grade not in GRADES:raise ValueError('等级仅支持 A/B/C/F')
-                choice=dict(qc_token=row['qc_token'],source='manual',selected_from=source,grade=grade)
-                if source!='qc' and grade in ('A','B') and (row.get('shared_review_required') or row.get('shared_quality_grade')=='F'):
-                    from .zerith_rules import prepare_manual_approval
-                    try:
-                        approved=prepare_manual_approval(app,cfg,row['episode_id'],grade,'人工采用'+('采集等级' if source=='collection' else '筛选等级'))
-                        if approved:choice['approval']=approved[1]
-                    except ValueError as exc:choice['export_block']=str(exc)
+                note=req.get('note',row.get('manual_note',''));problem=req.get('problem',row.get('manual_problem',''))
+                if not isinstance(note,str) or len(note)>2000:raise ValueError('备注最多 2000 字')
+                if problem not in ('','视觉异常','动作异常','时序异常','标注问题','其他'):raise ValueError('无效问题类型')
+                choice=dict(qc_token=row['qc_token'],source='manual',selected_from=source,grade=grade,note=note.strip(),problem=problem)
                 pending.append((row,choice))
             path=store_path(cfg);saved=read_json(path);choices=saved.setdefault('choices',{})
-            for row,choice in pending:
-                choices[row['grade_key']]=choice
-            # One atomic dataset write: a bulk choice can never save only half the rows.
-            write_json(path,saved);app.invalidate_status_cache()
-            return dict(saved_count=len(pending),skipped=skipped,preserved_manual=preserved_manual,status=status(app.stringify_config(cfg)))
+            for row,choice in pending:choices[row['grade_key']]=choice
+            write_json(path,saved)
+            updated=enrich(dict(episodes=list(rows.values())),cfg)['episodes']
+            by_id={r['episode_id']:r for r in updated}
+            current=dict(indexes[scope_key(cfg)])
+            current['qc_overview']=dict(current.get('qc_overview',{}))
+            current['grade_comparison']=dict(current.get('grade_comparison',{}))
+            current['episodes']=[by_id.get(r['episode_id'],r) for r in current['episodes']]
+            allrows=current['episodes']
+            current.setdefault('qc_overview',{})['quality_grade_counts']=app.qc_overview_quality_grade_counts(allrows)
+            comparison=current.setdefault('grade_comparison',{})
+            comparison['pending_count']=sum(bool(r.get('review_pending')) for r in allrows)
+            current['grade_busy']=False
+            indexes[scope_key(cfg)]=current
+            return dict(saved_count=len(pending),skipped=skipped,preserved_manual=preserved_manual,status=current,updated_rows=updated)
     def save(payload):
-        with lock:
-            before,cfg=snapshot(payload['root'])
-            apply(cfg,[dict(episode_name=before['episode_name'],grade=payload.get('grade'),revision=payload.get('revision'))])
-            after,_=snapshot(payload['root'])
+        root,cfg=context(payload['root'])
+        with lock_for(cfg):
+            before,_=snapshot(root)
+            req=dict(episode_name=before['episode_name'],grade=payload.get('grade'),revision=payload.get('revision'))
+            for key in ('note','problem'):
+                if key in payload:req[key]=payload[key]
+            result=apply(cfg,[req])
+            after=row_snapshot(result['updated_rows'][0],cfg)
             return dict(after,before_grade=before['current_grade'],saved_grade=payload['grade'])
     app.replay_grade_snapshot=lambda root:snapshot(root)[0]
     app.replay_grade_list=grade_list
@@ -200,6 +254,9 @@ def integrate_grades(app):
         try:
             payload=json.loads(handler.rfile.read(int(handler.headers.get('Content-Length',0))))
             result=save(payload) if route=='/api/replay-grade' else apply(app.derive_paths(payload),payload['episodes'],payload.get('source','manual'))
+            if route=='/api/grade-choices':
+                # The client already has unchanged rows; avoid retransmitting their reports.
+                result=dict(result,status=dict(result['status'],episodes=result['updated_rows']))
             app.json_response(handler,result)
         except (ValueError,OSError,KeyError) as exc:app.json_response(handler,dict(error=str(exc)),409)
     app.Handler.do_GET=get;app.Handler.do_POST=post

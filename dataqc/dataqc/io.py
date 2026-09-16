@@ -55,11 +55,22 @@ def clean(x):
 def write_json(p, data):
     p = Path(p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    tmp.write_text(
-        json.dumps(clean(data), ensure_ascii=False, indent=2, allow_nan=False)
-    )
-    os.replace(tmp, p)
+    import uuid
+    import stat
+    temporary = p.with_name(p.name+'.'+uuid.uuid4().hex+'.tmp')
+    previous_mode = stat.S_IMODE(p.stat().st_mode) if p.exists() else None
+    try:
+        # O_EXCL gives concurrent writers independent files; 0666 honors the service umask.
+        fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o666)
+        with os.fdopen(fd,'w',encoding='utf-8') as f:
+            if previous_mode is not None:os.fchmod(f.fileno(),previous_mode)
+            json.dump(clean(data),f,ensure_ascii=False,indent=2,allow_nan=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary,p)
+    finally:
+        temporary.unlink(missing_ok=True)
+
 
 
 def read_json(p, default=None):
@@ -80,20 +91,30 @@ def sha(p):
 
 
 def fingerprint(root):
-    root = Path(root)
-    paths = sorted(
-        [
-            p
-            for p in root.rglob("*")
-            if p.is_file() and p.suffix in (".hdf5", ".h5", ".mp4", ".json")
-        ]
-    )
-    return {
-        str(p.relative_to(root)): dict(
-            size=p.stat().st_size, mtime=p.stat().st_mtime_ns, sha256=sha(p)
-        )
-        for p in paths
-    }
+    # Cache hashes against inode, size, mtime and ctime; content changes invalidate reuse.
+    from . import config
+    root = Path(root).resolve()
+    cache = config.VAR/'fingerprints'/(hashlib.sha256(str(root).encode()).hexdigest()+'.json')
+    old = read_json(cache); records = {}; result = {}
+    for p in sorted(root.rglob('*')):
+        if not p.is_file() or p.suffix not in ('.hdf5','.h5','.mp4','.json'):continue
+        key=str(p.relative_to(root));stat=p.stat()
+        stamp=[stat.st_dev,stat.st_ino,stat.st_size,stat.st_mtime_ns,stat.st_ctime_ns]
+        item=old.get(key,{})
+        digest=item.get('sha256') if item.get('stamp')==stamp else sha(p)
+        after=p.stat()
+        if stamp!=[after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns]:
+            raise ValueError('读取期间源数据发生变化，请稍后重试：'+str(p))
+        records[key]=dict(stamp=stamp,sha256=digest)
+        result[key]=dict(size=stat.st_size,mtime=stat.st_mtime_ns,sha256=digest)
+    if old!=records:
+        # Processes may fingerprint the same source concurrently.
+        import tempfile
+        cache.parent.mkdir(parents=True,exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode='w',dir=cache.parent,delete=False) as f:
+            json.dump(records,f);temporary=Path(f.name)
+        os.replace(temporary,cache)
+    return result
 
 
 def discover(root):
@@ -177,31 +198,39 @@ def frame(root, cam, i, max_width=768):
     return img
 
 
-ITEM = r"(?!\s)(?:(?!\b(?:with|then|grasp)\b)[^\r\n])+?(?<!\s)"
-DOUBLE = re.compile(
-    r"Grasp ("
-    + ITEM
-    + r") with the left hand and then grasp ("
-    + ITEM
-    + r") with the right hand"
-)
-SINGLE = re.compile(r"Grasp (" + ITEM + r") with the (left|right) hand")
-
-
-def parse_task(text):
-    # Raw recordings with or without a final period share the same semantics.
-    text=text[:-1] if text.endswith('.') else text
-    if "  " in text:
-        return None
-    m = DOUBLE.fullmatch(text)
-    if m:
-        return {"left": m[1], "right": m[2]}
-    m = SINGLE.fullmatch(text)
-    return {m[2]: m[1]} if m else None
+DOUBLE = re.compile(r"Grasp (.+?) with the left hand and then grasp (.+?) with the right hand", re.I)
+SINGLE = re.compile(r"Grasp (.+?) with the (left|right) hand", re.I)
 
 
 def normalized_task(text):
-    return " ".join(text.split())
+    return " ".join(str(text or '').split())
+
+
+def parse_task(text):
+    text = normalized_task(text).removesuffix('.').strip()
+    m = DOUBLE.fullmatch(text)
+    if m and m[1].strip() and m[2].strip():
+        return {"left": m[1].strip(), "right": m[2].strip()}
+    # Recognizable multi-step syntax cannot masquerade as a single item name.
+    if re.search(r"with the (?:left|right) hand\s+and\s+then", text, re.I):
+        return None
+    m = SINGLE.fullmatch(text)
+    return {m[2].lower(): m[1].strip()} if m and m[1].strip() else None
+
+
+def prompt_issues(text):
+    if parse_task(text): return []
+    value = normalized_task(text).removesuffix('.').strip()
+    if not value: return ['任务文本为空，请填写操作手和物品名称']
+    if re.search(r'grasp\s+with the (left|right) hand', value, re.I):
+        return ['物品名称为空：Grasp 和 with the … hand 之间必须填写物品名称']
+    if re.search(r'with the right hand\s+and\s+then', value, re.I):
+        return ['双手任务顺序不符合模板：要求先左手，再右手']
+    if not re.match(r'^grasp\b', value, re.I):
+        return ['任务开头缺少 Grasp；请使用支持的抓取模板']
+    if not re.search(r'with the (left|right) hand', value, re.I):
+        return ['缺少操作手：请写 with the left hand 或 with the right hand']
+    return ['任务句式不完整或连接词不符合模板：单手以 with the left/right hand 结束；双手使用 with the left hand and then grasp … with the right hand']
 
 
 def spans(mask):

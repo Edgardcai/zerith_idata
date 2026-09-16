@@ -21,7 +21,7 @@ def integrate(app):
     new = '''      <button id="manualScreeningWorkspaceBtn" class="workspace-btn" type="button">③ VLM 自动质检</button>
       <button id="lerobotWorkspaceBtn" class="workspace-btn" type="button">④ 仿真与真机比较</button>'''
     app.HTML = replace(app.HTML, old, new)
-    app.HTML = app.HTML.replace('服务端 9988', '服务端 ' + str(int(os.environ.get('DATAQC_PORT', '8091')))).replace('src="/manual-screening/" title="数据人工筛查模块"', 'src="/auto/hdf5" title="VLM 自动质检"')
+    app.HTML = app.HTML.replace('服务端 9988', '服务端 ' + str(int(os.environ.get('DATAQC_PORT', '9990')))).replace('src="/manual-screening/" title="数据人工筛查模块"', 'src="/auto/hdf5" title="VLM 自动质检"')
     app.HTML = replace(app.HTML, '<span class="server-pill">', '<a href="/auto/settings" target="_blank" class="server-pill">设置</a><span class="server-pill">')
     app.HTML = replace(app.HTML, '<span class="step-badge">先选数据，再执行</span>', '<span class="step-badge">手工执行</span>')
     app.HTML = replace(app.HTML, '    setWorkspace("collection");', '    setWorkspace("lerobot-visualization");')
@@ -160,5 +160,7 @@ def integrate(app):
 
     from .collection_layout import integrate_layout
     integrate_layout(app)
+    from .direct_controls import integrate_direct_controls
+    integrate_direct_controls(app)
     from .replay_grades import integrate_grades
     integrate_grades(app)

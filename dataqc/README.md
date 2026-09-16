@@ -1,6 +1,6 @@
 # 数据质检工作台 · 最终版
 
-统一处理零次方真机／仿真 HDF5 的质检、人工复核、回放和 LeRobot 转换。默认端口 **8091**。
+统一处理零次方真机／仿真 HDF5 的质检、人工复核、回放和 LeRobot 转换。默认端口 **9990**。
 
 ## 功能入口
 
@@ -38,14 +38,14 @@ chmod 600 runtime/config/api.txt
 分别在两个终端启动：
 
 ```bash
-.venv/bin/python workbench.py --host 0.0.0.0 --port 8091
+.venv/bin/python workbench.py --host 0.0.0.0 --port 9990
 ```
 
 ```bash
 .venv/bin/python -m dataqc.worker
 ```
 
-访问 `http://<服务器地址>:8091/`。网页“设置”也可调整模型与质检选项。
+访问 `http://<服务器地址>:9990/`。网页“设置”也可调整模型与质检选项。
 用 `DATAQC_HOME=/绝对路径` 可以把所有运行状态放到源码目录以外。
 
 长期运行使用 [systemd 部署说明](docs/deployment.md)。

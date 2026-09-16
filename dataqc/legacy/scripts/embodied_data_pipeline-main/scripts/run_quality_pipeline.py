@@ -171,6 +171,9 @@ def _process_episode(
     profile: Any,
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    from dataqc.incremental import reuse_cli, remember_cli
+    cached= reuse_cli(episode_input,out_dir,profile,args)
+    if cached:return cached
     episode = read_raw_episode(episode_input, profile, actions_json=args.actions_json)
     if args.task and episode.meta.get("source_format") != "g2_hdf5":
         episode.meta["prompt"] = str(args.task)
@@ -205,7 +208,7 @@ def _process_episode(
 
     quality_issues = _quality_issue_summary(qc_report)
     delete_status = _delete_status_from_qc(qc_report)
-    return {
+    result = {
         "ok": True,
         "episode_id": episode.episode_id,
         "profile_id": profile.profile_id,
@@ -223,6 +226,8 @@ def _process_episode(
         "artifacts": artifacts,
         "output": str(out_dir),
     }
+    remember_cli(episode_input,profile,args,result)
+    return result
 
 
 def _worker_args_from_namespace(args: argparse.Namespace) -> dict[str, Any]:

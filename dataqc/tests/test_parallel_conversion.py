@@ -114,3 +114,25 @@ def test_conversion_workers_are_distinct_from_qc_parallelism():
     cmd,_,_=app.qc_command(cfg);assert cmd[cmd.index('--num-workers')+1]=='2'
     for invalid in (0,-1,1.5,True,'bad'):
         with pytest.raises(ValueError,match='转换进程数'):app.derive_paths(dict(lerobot_workers=invalid))
+
+
+def test_parallel_unchecked_batch_isolates_failures(source,tmp_path):
+    import shutil
+    other=tmp_path/'other';shutil.copytree(source,other)
+    write_json(tmp_path/'direct-entries.json',[dict(root=str(p),grade='F',direct=True) for p in [source,tmp_path/'missing',other]])
+    isolated('''import sys
+from pathlib import Path
+from dataqc.direct_export import create_direct_dataset
+from dataqc.parallel import episode_pool
+from dataqc.io import read_json
+from dataqc.export import path_for
+import pyarrow.parquet as pq
+if __name__=='__main__':
+ base=Path(sys.argv[1])
+ with episode_pool(2,'cpu'):
+  result=create_direct_dataset(read_json(base/'direct-entries.json'),base/'parallel-direct')
+ assert result['episodes']==2 and len(result['skipped'])==1,result
+ table=pq.read_table(path_for(base/'parallel-direct',1))
+ assert set(table['episode_index'].to_pylist())=={1}
+ assert table['index'][0].as_py()==150
+''',tmp_path,tmp_path)

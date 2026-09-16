@@ -63,7 +63,7 @@ class NewRun(Strict):
 class Review(Strict):
     revision: int
     grade: Literal["A", "B", "F"]
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(default="", max_length=2000)
     corrected_prompt: str
     stages: list[Stage]
     safe_trim_ids: list[int]
@@ -178,7 +178,7 @@ def datasets():
             episodes = discover(p)
             count = len(episodes)
             sim = bool(episodes) and all(is_simulation(e) for e in episodes)
-            height = dict(policy='per_episode',note='逐条读取目标高度；无独立目标时检查首帧指令保持，容差±0.02 m')
+            height = dict(policy='disabled',note='升降柱不参与质检')
             out.append(dict(root=str(p.resolve()), name=p.name, count=count, height=height,
                             source_format='zerith_sim_v1' if sim else 'zerith_columnar',source_label='仿真' if sim else '真机'))
         except (OSError, ValueError):
@@ -337,6 +337,8 @@ def review(eid: int, body: Review):
     report = data.get("raw_report")
     if not report:
         raise HTTPException(409, "尚无基础质检报告")
+    from .quality_policy import normalize_raw
+    report=normalize_raw(report)
     fatal = [
         c
         for c in report["checks"]

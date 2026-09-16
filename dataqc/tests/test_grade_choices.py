@@ -62,6 +62,20 @@ def test_explicit_save_restart_regrade_and_stale_conflict(grades):
     assert row['qc_grade']=='A'
 
 
+@pytest.mark.parametrize('selected_from',['collection','qc'])
+def test_legacy_explicit_selection_survives_report_change(grades,selected_from):
+    app,cfg,rows=grades;app.dataset_status(cfg)
+    path=next((config.VAR/'grade-selections').glob('*.json'))
+    saved=read_json(path)
+    saved.setdefault('choices',{})['uuid-0']=dict(source=selected_from,grade='F',qc_token='old-report',note='人工保留',problem='动作异常')
+    write_json(path,saved)
+    write_json(Path(rows[0]['qc_output'])/'qc_report.json',dict(quality_grade='A',accepted=True))
+    current=app.dataset_status(cfg)['episodes'][0]
+    assert current['manual_quality_grade']=='F'
+    assert current['manual_note']=='人工保留'
+    assert current['quality_grade']=='F'
+
+
 def test_bulk_atomic_on_stale_and_busy(grades):
     app,cfg,rows=grades;s=app.dataset_status(cfg);req=requests(s,'F');req[-1]['revision']='stale'
     with pytest.raises(ValueError):app.apply_grade_choices(cfg,req)
@@ -77,12 +91,40 @@ def test_capture_identity_survives_renumber_and_edits(grades):
     assert app.dataset_status(cfg)['episodes'][0]['collection_grade']=='A'
 
 
+def test_original_number_and_manual_note_follow_uuid_after_rename(grades):
+    app,cfg,rows=grades;root=Path(rows[0]['episode_dir'])
+    write_json(root/'review.json',dict(episode_uuid='uuid-0',grade='A',number=269))
+    first=app.dataset_status(cfg)
+    req=requests(first,'B')[:1];req[0].update(note='视觉遮挡',problem='视觉异常')
+    app.apply_grade_choices(cfg,req)
+    moved=root.with_name('episode255');root.rename(moved)
+    rows[0].update(episode_dir=str(moved),episode_id=moved.name)
+    current=app.dataset_status(cfg)['episodes'][0]
+    assert current['collection_episode_name']=='episode_000269'
+    assert current['current_episode_name']=='episode255'
+    assert (current['manual_quality_grade'],current['manual_note'])==('B','视觉遮挡')
+    snapshot=app.replay_grade_snapshot(str(moved))
+    assert snapshot['collection_episode_name']=='episode_000269'
+    assert snapshot['current_episode_name']=='episode255'
+    assert snapshot['manual_problem']=='视觉异常'
+
+
+def test_collection_name_uses_source_metadata_not_current_number(tmp_path):
+    from integrations.replay_grades import capture
+    root=tmp_path/'episode255';root.mkdir()
+    write_json(root/'episode_meta.json',dict(source_episode_id='uuid-269',source_episode_name='episode_000269'))
+    key,original=capture(root)
+    assert key=='uuid-269' and original['episode_name']=='episode_000269'
+    write_json(root/'episode_meta.json',dict(episode_id='episode255'))
+    assert capture(root)[1]['episode_name']==''
+
+
 def test_pending_without_model_grade_uses_capture_but_stays_in_review(grades):
     app,cfg,rows=grades
     write_json(Path(rows[0]['qc_output'])/'qc_report.json',dict(quality_grade='',review_required=True,accepted=False))
     row=app.dataset_status(cfg)['episodes'][0]
-    assert row['collection_grade']=='A' and row['quality_grade']=='A' and row['grade_review_required']
-    assert row['review_pending'] and row['grade_source']=='collection'
+    assert row['collection_grade']=='A' and row['quality_grade']=='B' and row['grade_review_required']
+    assert row['review_pending'] and row['grade_source']=='qc'
 
 
 def test_replay_reads_custom_report_root_and_shared_choices(grades):
@@ -152,7 +194,7 @@ def test_new_report_drops_old_export_approval_but_preserves_grade(grades):
     path=next((config.VAR/'grade-selections').glob('*.json'))
     store=read_json(path);store['choices']['uuid-0']['approval']={'quality_grade':'A','accepted':True}
     write_json(path,store)
-    assert app.dataset_status(cfg)['episodes'][0]['grade_approval']
+    assert app.dataset_status(cfg)['episodes'][0]['grade_approval'] is None
     write_json(Path(rows[0]['qc_output'])/'qc_report.json',dict(quality_grade='B',review_required=True,reason='new review'))
     row=app.dataset_status(cfg)['episodes'][0]
     assert row['quality_grade']=='A' and row['grade_approval'] is None

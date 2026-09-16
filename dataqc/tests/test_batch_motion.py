@@ -31,6 +31,39 @@ def items_for(root, tmp_path, count):
     return result
 
 
+@pytest.mark.parametrize('grade',['A','B','F'])
+@pytest.mark.parametrize('fatal',[False,True])
+def test_numeric_recheck_preserves_manual_grade(source,cfg,tmp_path,monkeypatch,grade,fatal):
+    monkeypatch.setattr(db,'DB',tmp_path/'db.sqlite3');db.init()
+    rid=db.create(str(source),'auto',cfg,[str(source)]);ep=db.episodes(rid)[0]
+    decision=dict(grade=grade,reason='人工已复核',note='保留备注')
+    db.update('episodes',ep['id'],grade=grade,data=dict(manual_decision=decision))
+    report=dict(checks=[dict(key='finite' if fatal else 'stationary',status='fail' if fatal else 'warn',label='测试',detail={})])
+    monkeypatch.setattr(batch_prepare,'measure',lambda *args:(report,{}))
+    monkeypatch.setattr(batch_motion,'review_many',lambda *args:pytest.fail('Manual records must not invoke models'))
+    batch_prepare.prepare_run(db.get_run(rid),tmp_path/'work',lambda _:None)
+    current=db.episodes(rid)[0]
+    assert current['grade']==grade
+    assert current['data']['manual_decision']==decision
+    if fatal:assert current['status']=='rejected'  # Keep structural export protection independent of human grade.
+
+
+def test_worker_upgrade_keeps_human_grade_but_blocks_corrupt_export(source,cfg,tmp_path,monkeypatch):
+    import h5py
+    monkeypatch.setattr(db,'DB',tmp_path/'db.sqlite3');db.init()
+    monkeypatch.setattr(worker,'VAR',tmp_path/'var');monkeypatch.setattr(worker,'EXPORTS',tmp_path/'exports')
+    rid=db.create(str(source),'auto',cfg,[str(source)]);ep=db.episodes(rid)[0]
+    manual=dict(grade='A',reason='先前人工已确认',note='保留原因')
+    db.update('episodes',ep['id'],grade='A',status='ready',data=dict(manual_decision=manual,raw_report=dict(version='zerith_qc_6',checks=[])))
+    with h5py.File(source/'episode.hdf5','a') as f:f['action/arm/position'][12,0]=float('nan')
+    monkeypatch.setattr(ZerithAdapter,'inspect',lambda *a,**k:pytest.fail('No model for corrupt values'))
+    worker.process_run(db.get_run(rid))
+    current=db.episodes(rid)[0]
+    assert current['grade']=='A' and current['status']=='rejected'
+    assert current['data']['manual_decision']==manual
+    assert not db.get_run(rid)['exports']
+
+
 def test_21_episodes_three_calls_two_concurrent_after_all_numeric(moving_source,cfg,tmp_path,monkeypatch):
     items=items_for(moving_source,tmp_path,21)
     monkeypatch.setattr(db,'DB',tmp_path/'db.sqlite3');db.init()

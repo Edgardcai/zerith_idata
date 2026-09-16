@@ -7,7 +7,7 @@ import numpy as np
 
 from .io import NAMES, clean, normalized_task, parse_task, read_json
 
-RULE_VERSION = "zerith_qc_6"
+RULE_VERSION = "zerith_qc_7"
 EPS = 1e-7  # float32 round-trip tolerance, not a physical tolerance
 
 
@@ -38,6 +38,8 @@ def failure_reason(checks):
                 description = f"实际 {detail['actual']:.2f} fps，最低 {detail['minimum']} fps"
             if not description and c["key"] == "finite":
                 description = "包含 NaN 或 Inf"
+                locations = [f"{kind} 第 {pos[0]} 帧" for kind, positions in detail.get('invalid', {}).items() for pos in positions[:6] if pos]
+                if locations:description += "；" + "、".join(locations)
         reasons.append(c["label"] + ("：" + str(description) if description else ""))
     return "；".join(reasons)
 
@@ -83,7 +85,7 @@ def arm_and_posture_checks(s, a, t):
                 result(
                     f"arm_{source}_{hand}",
                     f"{source.title()} · {'左' if hand == 'left' else '右'}臂连续性",
-                    "fail" if issues else "pass",
+                    "warn" if issues else "pass",
                     dict(
                         max_step_rad=float(delta.max()),
                         jump_limit_rad=0.8,
@@ -252,7 +254,7 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
                             f"{hand} {name} 第 {frame} 帧闭合落在 {st['hand']} 阶段"
                         )
                         bad_frames.append(frame)
-    status = "fail" if issues else "pass"
+    status = "warn" if issues else "pass"
     if not valid_stages:
         issues.append("阶段标注缺失或不完整，需补全后核对闭合阶段")
         if status == "pass":
@@ -290,7 +292,6 @@ def contextual_checks(d, root, stages=None):
         return []
     return [
         gripper_check(d["state"], d["action"], d["task"], d["transitions"], stages, d.get("gripper_feedback_available", True)),
-        lift_check(d["state"], d["action"], root),
     ]
 
 

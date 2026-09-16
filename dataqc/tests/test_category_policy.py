@@ -25,7 +25,7 @@ def unsupported(root,samples,cfg,digest,thresholds):
     return predictions,{k:v for k,v in classes.items() if v!='Milk'}
 
 
-@pytest.mark.parametrize('enabled,status,expected',[(True,'pass','REVIEW'),(True,'fail','F'),(True,'uncertain','REVIEW'),(False,'pass','A')])
+@pytest.mark.parametrize('enabled,status,expected',[(True,'pass','REVIEW'),(True,'fail','REVIEW'),(True,'uncertain','REVIEW'),(False,'pass','A')])
 @pytest.mark.parametrize('predict',[unsupported,detector(warn=['left'])])
 def test_unsupported_or_unstable_class(moving_source,cfg,tmp_path,monkeypatch,enabled,status,expected,predict):
     monkeypatch.setattr(gate,'predict_samples',predict if enabled else lambda *a,**kw:pytest.fail('disabled YOLO must never run'))
@@ -66,7 +66,7 @@ def test_cache_switch_never_reuses_skipped_as_pass(moving_source,cfg,tmp_path,mo
     off=gate.inspect(moving_source,report,cfg|dict(vlm_enabled=False),tmp_path)
     on=gate.inspect(moving_source,report,cfg|dict(vlm_enabled=True),tmp_path)
     assert off['matching_policy']!=on['matching_policy']
-    assert off['decision']['grade']=='A' and on['decision']['grade']=='F'
+    assert off['decision']['grade']=='A' and on['decision']['grade']=='REVIEW'
     assert off['yolo']['status']=='na' and on['yolo']['signature']
 
 
@@ -92,7 +92,7 @@ def test_off_preserves_stationary_review_and_hard_fail(source,cfg,tmp_path,monke
     _,_,d=assess(source,cfg|dict(vlm_enabled=False),tmp_path/'stationary',lambda _:None)
     assert d['grade']=='REVIEW'
     with h5py.File(source/'episode.hdf5','a') as f:
-        a=f['action/arm/position'][:];a[50,0]+=1.1;f['action/arm/position'][:]=a
+        a=f['action/arm/position'][:];a[50,0]=float('nan');f['action/arm/position'][:]=a
     monkeypatch.setattr(gate,'inspect',lambda *a,**kw:pytest.fail('hard failure stops category QC'))
     _,v,d=assess(source,cfg|dict(vlm_enabled=False),tmp_path/'fatal',lambda _:None)
     assert d['grade']=='F' and v=={}
@@ -125,7 +125,9 @@ def test_collection_toggle_is_per_job_and_snapshotted(tmp_path):
     configs=[app.derive_paths(dict(hdf5_root=str(tmp_path),vlm_enabled=enabled)) for enabled in (False,True)]
     for cfg in configs:
         _,_,env=app.qc_command(cfg)
-        assert json.loads(env['DATAQC_CATEGORY_POLICY'])=={k:cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency')}
+        policy=json.loads(env['DATAQC_CATEGORY_POLICY'])
+        assert all(policy[k]==cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force'))
+        assert policy['qc_refresh_token']
     with pytest.raises(ValueError,match='布尔'):
         app.derive_paths(dict(hdf5_root=str(tmp_path),vlm_enabled='false'))
 

@@ -33,7 +33,7 @@ def test_catalog_and_whole_dataset_creation(tmp_path, monkeypatch):
     assert len(catalog) == 1
     assert catalog[0]['root'] == str(group)
     assert catalog[0]['count'] == 2
-    assert catalog[0]['height']['policy'] == 'per_episode'
+    assert catalog[0]['height']['policy'] == 'disabled'
     assert 'expected_m' not in catalog[0]['height']
     for invalid in [base, group / 'episode_000001', single, base / 'external_0']:
         response = client.post('/api/runs', json={'root': str(invalid)})

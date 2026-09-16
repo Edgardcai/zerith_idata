@@ -92,6 +92,8 @@ def integrate_collection(app):
             raise ValueError('LeRobot 转换进程数必须是正整数')
         cfg=old_config(payload)
         cfg['lerobot_workers']=int(workers)
+        if type(payload.get('qc_force',False)) is not bool:raise ValueError('qc_force 必须为布尔值')
+        cfg['qc_force']=payload.get('qc_force',False)
         # The LeRobot directory contains sibling buckets for full and split episodes.
         if cfg.get('robot_type')=='zerith' and cfg['lerobot_root'].name.lower()=='lerobot':
             cfg['lerobot_root']=cfg['lerobot_root']/'twohands'
@@ -110,6 +112,9 @@ def integrate_collection(app):
         if cfg.get('robot_type')=='zerith':
             cmd[cmd.index('--num-workers')+1]=str(max(1,min(2,int(cfg.get('convert_jobs',2)))))
             env=dict(env)
-            env['DATAQC_CATEGORY_POLICY']=json.dumps({k:cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency')})
+            import uuid
+            policy={k:cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force')}
+            policy['qc_refresh_token']=uuid.uuid4().hex
+            env['DATAQC_CATEGORY_POLICY']=json.dumps(policy)
         return cmd,cwd,env
     app.qc_command=qc_command

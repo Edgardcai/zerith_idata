@@ -53,7 +53,7 @@ def test_manual_and_auto_share_measurements_and_grade(shared,cfg,tmp_path):
 def test_manual_hard_fail_never_calls_vision(shared,monkeypatch):
     root,profile=shared
     with h5py.File(root/'episode.hdf5','a') as f:
-        a=f['action/arm/position'][:];a[50,0]+=1.1;f['action/arm/position'][:]=a
+        a=f['action/arm/position'][:];a[50,0]=float('nan');f['action/arm/position'][:]=a
     monkeypatch.setattr(yolo_gate,'inspect',lambda *a,**kw:pytest.fail('Hard fail must stop vision'))
     report=run_quality_checks(read_raw_episode(root,profile),profile)
     assert report['quality_grade']=='F' and not report['accepted'] and '50' in report['reason']
@@ -89,7 +89,8 @@ def test_manual_export_roundtrip_and_split(shared,tmp_path,monkeypatch):
     report=run_manual_checks(read_raw_episode(root,profile),profile)
     report_dir=tmp_path/'report';write_json(report_dir/'qc_report.json',report)
     entry=dict(episode_id=root.name,episode_dir=root,hdf5_file=root/'episode.hdf5',quality_grade='B',source_episode_index=0,status_row=dict(qc_output=str(report_dir)))
-    monkeypatch.setattr(app,'authoritative_quality_grade_entries',lambda cfg:[entry])
+    from integrations import manual_export
+    monkeypatch.setattr(manual_export,'direct_entries',lambda app,cfg:[entry])
     monkeypatch.setattr(app,'stationary_threshold_for_cfg',lambda cfg:40)
     monkeypatch.setattr(app,'lerobot_grade_dataset_dir',lambda cfg,g:tmp_path/'exports'/g)
     monkeypatch.setattr(app,'lerobot_grade_repo_id',lambda cfg,g:'test/'+g)
@@ -111,19 +112,20 @@ def test_manual_export_roundtrip_and_split(shared,tmp_path,monkeypatch):
         maps=read_json(tmp_path/'split'/hand/'B/meta/episode_name_mapping.json')['episodes']
         assert all(m['num_frames']==len(m['source_frames']) for m in maps)
     assert fingerprint(root)==before
-    # Stale source must be blocked before writing anything.
+    # Direct conversion does not depend on the earlier QC fingerprint.
     (root/'meta.json').write_text('{}')
-    with pytest.raises(ValueError,match='源数据有变化'):convert_step(app,{'hdf5_root':root})({})
+    convert_step(app,{'hdf5_root':root})({})
+    assert not (tmp_path/'exports/B/qc_report.json').exists()
 
 
-def test_pending_and_f_excluded_from_old_conversion(tmp_path,monkeypatch):
+def test_all_grades_and_unrated_included_without_qc_gates(tmp_path,monkeypatch):
     import workbench
     app=workbench.load_legacy()
     rows=[dict(episode_id=str(i),quality_grade=g,shared_rules_version='zerith_qc_5',shared_quality_grade=g,shared_review_required=review)for i,(g,review)in enumerate([('A',False),('B',False),('F',False),('B',True),('',True)])]
     monkeypatch.setattr(app,'dataset_status',lambda _:dict(episodes=rows))
     monkeypatch.setattr(app,'stringify_config',lambda cfg:cfg)
     monkeypatch.setattr(app,'lerobot_source_episode_entries',lambda _: [dict(episode_id=str(i))for i in range(5)])
-    assert [e['quality_grade']for e in app.authoritative_quality_grade_entries(dict(robot_type='zerith',hdf5_root=tmp_path))]==['A','B']
+    assert [e['quality_grade']for e in app.authoritative_quality_grade_entries(dict(robot_type='zerith',hdf5_root=tmp_path))]==['A','B','F','B','UNRATED']
 
 
 def test_manual_export_rebinds_new_model_report_without_changing_human_grade(tmp_path,monkeypatch):
@@ -135,15 +137,10 @@ def test_manual_export_rebinds_new_model_report_without_changing_human_grade(tmp
     monkeypatch.setattr(app,'dataset_status',lambda _:dict(episodes=[row]))
     monkeypatch.setattr(app,'stringify_config',lambda cfg:cfg)
     monkeypatch.setattr(app,'lerobot_source_episode_entries',lambda _:[dict(episode_id='episode1')])
-    approval=dict(quality_grade='A',accepted=True,review_required=False)
-    monkeypatch.setattr(zerith_rules,'prepare_manual_approval',lambda *args:(tmp_path/'report',approval,tmp_path))
+    def forbidden(*args):pytest.fail('manual conversion must not execute QC approval')
+    monkeypatch.setattr(zerith_rules,'prepare_manual_approval',forbidden,raising=False)
     entries=app.authoritative_quality_grade_entries(dict(robot_type='zerith',hdf5_root=tmp_path))
-    assert entries[0]['quality_grade']=='A' and entries[0]['status_row']['grade_approval']==approval
-    def rejected(*args):raise ValueError('数值硬失败')
-    monkeypatch.setattr(zerith_rules,'prepare_manual_approval',rejected)
-    with pytest.raises(ValueError,match='人工等级保留为 A'):
-        app.authoritative_quality_grade_entries(dict(robot_type='zerith',hdf5_root=tmp_path))
-    assert row['quality_grade']=='A'
+    assert entries[0]['quality_grade']=='A' and row['quality_grade']=='A'
 
 
 def test_old_cli_status_conversion_and_manual_approval(shared,tmp_path,monkeypatch):

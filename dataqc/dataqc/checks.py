@@ -10,6 +10,7 @@ from .io import (
     load,
     normalized_task,
     parse_task,
+    prompt_issues,
     stationary_spans,
     video_path,
 )
@@ -125,7 +126,7 @@ def numeric_checks(s, a, t, threshold=40):
     d = j.max(axis=1)
     add(
         "motion",
-        "pass" if d.max() <= 0.8 else "fail",
+        "pass" if d.max() <= 0.8 else "warn",
         {"max_step": d.max(), "bad_frames": (np.where(d > 0.8)[0] + 1).tolist()},
         25,
     )
@@ -140,7 +141,7 @@ def numeric_checks(s, a, t, threshold=40):
     long = [dict(start=b, end=e, frames=e - b) for b, e in runs if e - b > threshold]
     add(
         "stationary",
-        "fail" if long else "pass",
+        "warn" if long else "pass",
         {
             "threshold": threshold,
             "max_frames": max([e - b for b, e in runs], default=0),
@@ -247,7 +248,8 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
             ]:
                 if attrs.get(key) != expect:
                     problems.append({key: attrs.get(key), "expected": expect})
-            add("schema", "fail" if problems else "pass", problems, 35)
+            add("schema", "fail" if mismatches else "pass", {"length_mismatch": mismatches}, 35)
+            add("metadata", "warn" if problems else "pass", {"issues": [str(p) for p in problems if "length_mismatch" not in p]}, 0)
             for cam in CAMS:
                 progress("完整解码 " + cam)
                 key = f"observation/images/rs/{cam}/color"
@@ -331,8 +333,8 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
     norm = normalized_task(task)
     add(
         "prompt",
-        "pass" if targets else "fail",
-        {"original": task, "normalized_candidate": norm if parse_task(norm) else None},
+        "pass" if targets else "warn",
+        {"original": task, "normalized_candidate": norm if parse_task(norm) else None, "issues": prompt_issues(task)},
         5,
     )
     mism = list(d.get("metadata_issues", []))

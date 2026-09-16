@@ -47,6 +47,30 @@ def test_gaps_warn_and_keep_exact_locations():
     assert warning_grade({'grade':'F','reason':'拿错物品'},{'checks':c})['grade']=='F'
 
 
+def test_review_ignores_retired_height_failure_in_old_report(client,source):
+    rid=db.create(str(source),'manual',config.settings(),[str(source)])
+    db.update('runs',rid,status='paused')
+    ep=db.episodes(rid)[0];report=raw_checks(source)
+    report['checks'].append(dict(key='lift_height',label='旧版升降柱',status='fail',detail={}))
+    db.update('episodes',ep['id'],status='review',grade='F',data=dict(raw_report=report))
+    body=decision();body.pop('findings');body.update(revision=0,actor='test')
+    response=client.post(f"/api/episodes/{ep['id']}/review",json=body)
+    assert response.status_code==200,response.text
+    assert response.json()['grade']=='A'
+
+
+@pytest.mark.parametrize('grade',['A','B','F'])
+def test_offline_refresh_preserves_every_manual_grade(client,source,tmp_path,monkeypatch,grade):
+    from dataqc import maintenance
+    monkeypatch.setattr(maintenance,'VAR',tmp_path/'work')
+    rid=db.create(str(source),'manual',config.settings(),[str(source)]);db.update('runs',rid,status='paused')
+    ep=db.episodes(rid)[0];manual=decision();manual.update(grade=grade,reason='人工已看过')
+    db.update('episodes',ep['id'],grade=grade,data=dict(manual_decision=manual))
+    counts=maintenance.refresh_paused_run(rid);current=db.episodes(rid)[0]
+    assert current['grade']==grade and counts[grade]==1
+    assert current['data']['manual_decision']==manual
+
+
 def test_gap_warning_exports_as_b_with_source_clock(source,tmp_path,monkeypatch):
     monkeypatch.setattr(db,'DB',tmp_path/'db.sqlite3');db.init()
     monkeypatch.setattr(worker,'VAR',tmp_path/'var');monkeypatch.setattr(worker,'EXPORTS',tmp_path/'exports')

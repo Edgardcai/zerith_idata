@@ -67,7 +67,7 @@ def supervise(args):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', type=int, default=8091)
+    parser.add_argument('--port', type=int, default=9990)
     parser.add_argument('--runtime', type=Path, default=ROOT/'runtime')
     parser.add_argument('--real-root', type=Path, default=Path('/data/zerith_data'))
     parser.add_argument('--sim-root', type=Path, default=Path('/data/sim_data'))

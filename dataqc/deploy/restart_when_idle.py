@@ -10,7 +10,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = Path(os.environ.get('DATAQC_HOME', ROOT / 'runtime'))
 STATUS = RUNTIME / 'var/deployment.json'
-BASE = os.environ.get('DATAQC_SERVICE_URL', 'http://127.0.0.1:8091')
+BASE = os.environ.get('DATAQC_SERVICE_URL', 'http://127.0.0.1:9990')
 
 
 def get(path):

@@ -20,12 +20,13 @@ from .io import (
     open_video,
     load,
     parse_task,
+    normalized_task,
     read_json,
     video_path,
     hdf5_path,
     write_json,
 )
-from .motion import RULE_VERSION, contextual_checks, lift_check
+from .motion import RULE_VERSION, contextual_checks
 from .parallel import ordered_map
 
 DATA = "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
@@ -104,12 +105,21 @@ def video_stats(p):
     ), shape
 
 
+def entry_data(entry):
+    if "source_parquet" not in entry:
+        return load(entry["root"])
+    table = pq.read_table(entry["source_parquet"])
+    return dict(n=len(table), state=np.asarray(table["observation.state"].to_pylist()),
+                action=np.asarray(table["action"].to_pylist()), task=entry.get("task", ""),
+                t=np.asarray(table["timestamp"].to_pylist()), transitions=[], attrs={})
+
+
 def describe_entry(entry):
-    d=load(entry['root'])
+    d=entry_data(entry)
     b,e=entry.get('range',[0,d['n']])
     if not 0<=b<e<=d['n']:raise ValueError('导出区间越界')
     task=entry.get('task',d['task'])
-    if not parse_task(task):raise ValueError('导出指令不符合模板')
+    if not (entry.get('direct') or entry.get('skip_quality_checks')) and not parse_task(task):raise ValueError('导出指令不符合模板')
     return e-b,task
 
 
@@ -117,14 +127,14 @@ def write_episode(payload):
     i,entry,temp,global_index,tid=payload
     features={}
     root = Path(entry["root"])
-    d = load(root)
+    d = entry_data(entry)
     b, e = entry.get("range", [0, d["n"]])
     idx = np.arange(b, e)
     n = len(idx)
     if not 0 <= b < e <= d["n"]:
         raise ValueError("导出区间越界")
     task = entry.get("task", d["task"])
-    if not parse_task(task):
+    if not (entry.get("direct") or entry.get("skip_quality_checks")) and not parse_task(task):
         raise ValueError("导出指令不符合模板")
     cols = {
         "observation.state": pa.array(
@@ -177,6 +187,8 @@ def write_episode(payload):
         else:
             encode_selection(source_video, v, idx)
         st, shape = video_stats(v)
+        if st["count"][0] != n:
+            raise ValueError(f"{cam} 视频帧数 {st['count'][0]} 与数据帧数 {n} 不一致")
         epstats[k] = st
         if k in features and features[k]["shape"] != list(shape):
             raise ValueError("同一数据集视频分辨率不一致")
@@ -192,12 +204,23 @@ def write_episode(payload):
                 "has_audio": False,
             },
         )
-    provenance = read_json(root / "provenance.json")
+    provenance = entry.get("provenance") or read_json(root / "provenance.json")
+    if entry.get("direct"):
+        targets = parse_task(normalized_task(task)) or {}
+        ends = d.get("transitions", [])
+        hands = list(targets) if len(ends)==len(targets) else ['left','right'] if len(ends)==2 else []
+        stages = [dict(hand=hand, item=targets.get(hand,''), start=b, end=e)
+                  for hand,b,e in zip(hands, [0]+ends[:-1], ends)]
+        provenance = dict(source=str(root), source_frame_indices=list(range(d["n"])),
+                          stages=stages, output_prompt=task)
+        from .references import height_reference
+        try:provenance["height_reference"] = height_reference(root)
+        except (OSError,ValueError,KeyError,TypeError) as exc:provenance["height_reference"] = dict(error=str(exc))
     m = dict(
         episode_index=i,
         lerobot_episode_index=i,
         num_frames=n,
-        source_hdf5=str(hdf5_path(root)),
+        source_hdf5=entry.get("source_hdf5", "") if "source_parquet" in entry else str(hdf5_path(root)),
         source_format=d.get("source_format", "zerith_columnar"),
         source_episode=str(root),
         source_root=str(root),
@@ -208,12 +231,15 @@ def write_episode(payload):
         task=task,
         stages=provenance["stages"],
         source_lerobot=entry.get("source_lerobot"),
+        source_lerobot_episode_index=entry.get("source_lerobot_episode_index"),
+        direct=bool(entry.get("direct")),
+        provenance=provenance,
     )
     ep=dict(episode_index=i,tasks=[task],length=n,quality_grade=entry["grade"])
     return ep,dict(episode_index=i,stats=epstats),m,features
 
 
-def create_dataset(entries, out, threshold=40, progress=lambda _: None):
+def create_dataset(entries, out, threshold=40, progress=lambda _: None, *, quality_check=True):
     """entries contain a repaired root, optional [start,end) and task for stage exports."""
     out = Path(out)
     if out.exists():
@@ -241,61 +267,67 @@ def create_dataset(entries, out, threshold=40, progress=lambda _: None):
                     raise ValueError('同一数据集字段或视频分辨率不一致：'+key)
                 features[key]=value
             ep_rows.append(ep);stat_rows.append(st);mapping.append(m)
-        info = dict(
-            codebase_version="v2.1",
-            robot_type="zerith",
-            fps=30,
-            total_episodes=len(entries),
-            total_frames=global_index,
-            total_tasks=len(tasks),
-            total_videos=len(entries) * 3,
-            total_chunks=math.ceil(len(entries) / 1000),
-            chunks_size=1000,
-            splits={"train": f"0:{len(entries)}"},
-            data_path=DATA,
-            video_path=VIDEO,
-            features=features,
-        )
-        write_json(temp / "meta/info.json", info)
-        jsonl(
-            temp / "meta/tasks.jsonl",
-            [dict(task_index=i, task=t) for i, t in enumerate(tasks)],
-        )
-        jsonl(temp / "meta/episodes.jsonl", ep_rows)
-        jsonl(temp / "meta/episodes_stats.jsonl", stat_rows)
-        write_json(temp / "meta/episode_name_mapping.json", dict(episodes=mapping))
-        aggregate = {}
-        for key in features:
-            values = [r["stats"][key] for r in stat_rows]
-            weights = np.array([v["count"][0] for v in values], dtype=float)
-            if not len(values):
-                continue
-            means = np.array([v["mean"] for v in values])
-            stds = np.array([v["std"] for v in values])
-            mean = np.average(means, axis=0, weights=weights)
-            variance = np.average(
-                stds**2 + (means - mean) ** 2, axis=0, weights=weights
-            )
-            aggregate[key] = dict(
-                min=np.min([v["min"] for v in values], axis=0),
-                max=np.max([v["max"] for v in values], axis=0),
-                mean=mean,
-                std=np.sqrt(variance),
-                count=[int(weights.sum())],
-            )
-        write_json(temp / "meta/stats.json", aggregate)
-        report = validate_dataset(temp, threshold, progress)
-        write_json(temp / "qc_report.json", report)
-        if not report["passed"]:
-            raise ValueError(
-                "LeRobot 复检失败："
-                + json.dumps(report["issues"], ensure_ascii=False)[:800]
-            )
-        os.replace(temp, out)
+        return publish_dataset(temp, out, ep_rows, stat_rows, mapping, tasks, features, global_index, threshold, progress, quality_check)
     except BaseException:
         # Keep failed output and report isolated for diagnosis. Never publish it.
         raise
-    return dict(path=str(out), episodes=len(entries), frames=global_index, passed=True)
+
+
+
+def publish_dataset(temp, out, ep_rows, stat_rows, mapping, tasks, features, global_index,
+                    threshold=40, progress=lambda _:None, quality_check=False):
+    info = dict(
+        codebase_version="v2.1",
+        robot_type="zerith",
+        fps=30,
+        total_episodes=len(ep_rows),
+        total_frames=global_index,
+        total_tasks=len(tasks),
+        total_videos=len(ep_rows) * 3,
+        total_chunks=math.ceil(len(ep_rows) / 1000),
+        chunks_size=1000,
+        splits={"train": f"0:{len(ep_rows)}"},
+        data_path=DATA,
+        video_path=VIDEO,
+        features=features,
+    )
+    write_json(temp / "meta/info.json", info)
+    jsonl(
+        temp / "meta/tasks.jsonl",
+        [dict(task_index=i, task=t) for i, t in enumerate(tasks)],
+    )
+    jsonl(temp / "meta/episodes.jsonl", ep_rows)
+    jsonl(temp / "meta/episodes_stats.jsonl", stat_rows)
+    write_json(temp / "meta/episode_name_mapping.json", dict(episodes=mapping))
+    aggregate = {}
+    for key in features:
+        values = [r["stats"][key] for r in stat_rows]
+        weights = np.array([v["count"][0] for v in values], dtype=float)
+        if not len(values):
+            continue
+        means = np.array([v["mean"] for v in values])
+        stds = np.array([v["std"] for v in values])
+        mean = np.average(means, axis=0, weights=weights)
+        variance = np.average(
+            stds**2 + (means - mean) ** 2, axis=0, weights=weights
+        )
+        aggregate[key] = dict(
+            min=np.min([v["min"] for v in values], axis=0),
+            max=np.max([v["max"] for v in values], axis=0),
+            mean=mean,
+            std=np.sqrt(variance),
+            count=[int(weights.sum())],
+        )
+    write_json(temp / "meta/stats.json", aggregate)
+    if quality_check:
+        report = validate_dataset(temp, threshold, progress)
+        write_json(temp / "qc_report.json", report)
+        if not report["passed"]:
+            raise ValueError("LeRobot 复检失败：" + json.dumps(report["issues"], ensure_ascii=False)[:800])
+    write_json(temp / "meta/conversion.json", dict(quality_check="completed" if quality_check else "not_run"))
+    os.replace(temp, out)
+    return dict(path=str(out), episodes=len(ep_rows), frames=global_index,
+                passed=True if quality_check else None, quality_check="completed" if quality_check else "not_run")
 
 
 def validate_episode(payload):
@@ -334,7 +366,7 @@ def validate_episode(payload):
             raise ValueError("任务映射不一致")
         source = load(m["source_root"])
         b, e = m["source_range"]
-        prov = read_json(Path(m["source_root"]) / "provenance.json")
+        prov = m.get("provenance") or read_json(Path(m["source_root"]) / "provenance.json")
         if m["source_frames"] != prov["source_frame_indices"][b:e]:
             raise ValueError("来源帧映射不一致")
         for key, src in [
@@ -363,15 +395,21 @@ def validate_episode(payload):
         # Both closures are assessed on the complete episode. A right-hand
         # clip may start with the left gripper already holding its object.
         full_context = dict(source, task=prov["output_prompt"])
+        if m.get("direct"):
+            full_context.update(state=np.array(data["observation.state"]), action=np.array(data["action"]),
+                                t=np.array(data["timestamp"]), n=n, task=normalized_task(task))
+            from .vision import validate_decision
+            try:
+                validate_decision(dict(grade="A", corrected_prompt=normalized_task(task), stages=m["stages"], safe_trim_ids=[]),
+                                  full_context, [], allow_relabel=True)
+            except (ValueError, KeyError) as ex:
+                warnings.append(dict(episode=i, check=dict(key="stages_prompt", label="任务文本与阶段", status="warn", detail=dict(issues=[str(ex)]))))
+            # Source-only metadata and embedded-image checks are deferred too.
+            from .checks import raw_checks
+            raw = raw_checks(m["source_root"], threshold)
+            checks.extend(c for c in raw["checks"] if c["key"] in ("schema", "timestamps", "fps") or c["key"].startswith(("hdf5_", "depth_")))
         checks.extend(
             contextual_checks(full_context, m["source_root"], prov["stages"])
-        )
-        checks.append(
-            lift_check(
-                np.array(data["observation.state"]),
-                np.array(data["action"]),
-                m["source_root"],
-            )
         )
         for c in checks:
             if c["status"] == "fail":
@@ -426,6 +464,9 @@ def validate_dataset(root, threshold=40, progress=lambda _:None):
     episodes = rows(root / "meta/episodes.jsonl")
     tasks = rows(root / "meta/tasks.jsonl")
     maps = read_json(root / "meta/episode_name_mapping.json")["episodes"]
+    from .portable_quality import sources_available, validate_portable
+    if not sources_available(maps):
+        return validate_portable(root, threshold, progress)
     issues = []
     warnings = []
     count = 0
@@ -444,8 +485,8 @@ def validate_dataset(root, threshold=40, progress=lambda _:None):
     ):
         issues.append("task 总量或索引不一致")
     for t in tasks:
-        if not parse_task(t["task"]):
-            issues.append("严格 Prompt 检查不通过")
+        if not parse_task(normalized_task(t["task"])):
+            warnings.append(dict(check="prompt",reason="提示词句式需要复核，物品名称不限"))
     for k in ["observation.state", "action"]:
         if info.get("features", {}).get(k, {}).get("names") != NAMES:
             issues.append(k + " 维度名称或顺序不符")
@@ -468,15 +509,23 @@ def validate_dataset(root, threshold=40, progress=lambda _:None):
     )
 
 
-def split_dataset(full, out, threshold=40, progress=lambda _: None):
+def split_dataset(full, out, threshold=40, progress=lambda _: None, *, quality_check=False):
+    if not quality_check:
+        from .direct_export import split_direct
+        return split_direct(full, out, threshold, progress)
     full = Path(full)
-    check = validate_dataset(full, threshold)
-    if not check["passed"]:
-        raise ValueError("完整 LeRobot 尚未通过复检，不能切分")
+    if quality_check:
+        check = validate_dataset(full, threshold)
+        if not check["passed"]:
+            raise ValueError("完整 LeRobot 尚未通过复检，不能切分")
     entries = {"left": [], "right": []}
     for m in read_json(full / "meta/episode_name_mapping.json")["episodes"]:
+        if not m.get("stages"):
+            raise ValueError(f"episode {m.get('episode_index')}: 缺少阶段边界，无法确定切分位置")
         for st in m["stages"]:
             hand = st["hand"]
+            if hand not in entries:
+                raise ValueError(f"无法识别阶段手别：{hand}")
             task = f"Grasp {st['item']} with the {hand} hand"
             entries[hand].append(
                 dict(
@@ -485,6 +534,8 @@ def split_dataset(full, out, threshold=40, progress=lambda _: None):
                     range=[st["start"], st["end"]],
                     task=task,
                     source_lerobot=str(full),
+                    skip_quality_checks=not quality_check,
+                    provenance=m.get("provenance"),
                     source_parquet=str(path_for(full, m["episode_index"])),
                     videos={
                         cam: str(
@@ -502,6 +553,8 @@ def split_dataset(full, out, threshold=40, progress=lambda _: None):
             continue
         target = Path(out) / hand
         if target.exists():
+            if not quality_check:
+                raise ValueError(f"切分输出已存在：{target}")
             report = validate_dataset(target, threshold)
             if not report["passed"]:
                 raise ValueError("已有切分目录未通过复检")
@@ -514,5 +567,5 @@ def split_dataset(full, out, threshold=40, progress=lambda _: None):
                 )
             )
         else:
-            results.append(create_dataset(values, target, threshold, progress))
+            results.append(create_dataset(values, target, threshold, progress, quality_check=quality_check))
     return results

@@ -11,14 +11,14 @@ from .io import frame, load, normalized_task, parse_task, read_json, sha, write_
 from .motion import RULE_VERSION, warning_grade
 from . import vision
 
-VERSION = 'motion_category_v4'
+VERSION = 'motion_category_v5'
 _MODELS = {}
 
 
 def cache_policy(cfg):
     if not cfg.get('vlm_enabled', False):
-        return dict(grade_policy='motion_category_v4', motion_policy='trajectory_review_v2', vlm_enabled=False)
-    return dict(grade_policy='motion_category_v4', motion_policy='trajectory_review_v2', vlm_enabled=cfg.get('vlm_enabled', False),
+        return dict(grade_policy='motion_category_v5', motion_policy='trajectory_review_v3', vlm_enabled=False)
+    return dict(grade_policy='motion_category_v5', motion_policy='trajectory_review_v3', vlm_enabled=cfg.get('vlm_enabled', False),
                 confidence=cfg.get('yolo_confidence', .25), frame_offset=cfg.get('yolo_frame_offset', 40),
                 model_hash=sha(cfg['yolo_path']),
                 thresholds_hash=sha(cfg['yolo_thresholds_path']) if cfg.get('yolo_thresholds_path') else '')

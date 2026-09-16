@@ -59,7 +59,7 @@ def test_unchecked_still_calls_text_vlm_and_no_images(moving_source,cfg,tmp_path
     assert not config.DEFAULTS['vlm_enabled']
 
 
-@pytest.mark.parametrize('yolo_ok,vlm_status,grade',[(True,'pass','A'),(True,'fail','F'),(True,'uncertain','REVIEW'),(False,'pass','REVIEW'),(False,'fail','F')])
+@pytest.mark.parametrize('yolo_ok,vlm_status,grade',[(True,'pass','A'),(True,'fail','REVIEW'),(True,'uncertain','REVIEW'),(False,'pass','REVIEW'),(False,'fail','REVIEW')])
 def test_category_is_conjunction_and_parallel(moving_source,cfg,tmp_path,monkeypatch,yolo_ok,vlm_status,grade):
     monkeypatch.setattr(yolo_gate,'predict_samples',detector(warn=[] if yolo_ok else ['left']))
     barrier=threading.Barrier(2,timeout=10);calls=[]
@@ -85,14 +85,14 @@ def test_motion_suspected_is_review_not_f(moving_source,cfg,tmp_path,monkeypatch
     assert result['decision']['grade']=='REVIEW'
 
 
-def test_unreadable_height_reference_remains_review_even_if_model_passes(moving_source,cfg,tmp_path,monkeypatch):
+def test_unreadable_height_reference_is_not_a_qc_check(moving_source,cfg,tmp_path,monkeypatch):
     from dataqc.io import write_json
     write_json(moving_source/'collection_task.json',dict(targets=dict(lift_height='unknown')))
     monkeypatch.setattr(vision,'call_vlm',lambda *args:motion_ok())
     report=clean(moving_source)
     result=assessment.inspect(moving_source,report,cfg|dict(vlm_enabled=False),tmp_path/'qc')
-    assert result['decision']['grade']=='REVIEW'
-    assert '目标高度无效' in result['decision']['reason']
+    assert result['decision']['grade']=='A'
+    assert not any(c['key']=='lift_height' for c in report['checks'])
 
 
 @pytest.mark.parametrize('bad',['fake_reference','missing_reference','duplicate','physical_claim'])

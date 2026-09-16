@@ -56,13 +56,13 @@ def test_simulation_read_qc_and_manual_share_rules(sim,tmp_path,monkeypatch):
     assert d['gripper_feedback_available'] is False
     report=raw_checks(sim)
     assert check(report,'schema')['status']=='pass'
-    assert check(report,'lift_height')['detail']['expected_m']==pytest.approx(.4)
+    assert not any(c['key']=='lift_height' for c in report['checks'])
     assert check(report,'gripper_feedback')['status']=='na'
     assert check(report,'gripper_sequence')['status']=='pass'
     assert check(report,'gripper_sequence')['detail']['channels']['left']['action_close_frames']==[133]
     assert check(report,'posture_state')['detail']['measurement_source']=='state/raw/joint_position_29'
     assert all(check(report,'video_'+cam)['status']=='pass' for cam in CAMS)
-    assert check(report,'stationary')['status']=='fail'
+    assert check(report,'stationary')['status']=='warn'
     assert [s['frames'] for s in check(report,'stationary')['detail']['intervals']]==[74,75]
     visual=yolo_gate.inspect(sim,report,cfg,tmp_path/'vision')
     assert visual_decision(visual,report)['grade']=='REVIEW'
@@ -90,19 +90,19 @@ def test_malformed_simulation_rejected(sim,problem):
     assert report['hard_fail'] and check(report,'schema')['status']=='fail'
 
 
-def test_height_is_per_episode_and_drift_still_fails(sim):
+def test_height_is_preserved_but_not_graded(sim):
     with h5py.File(hdf5_path(sim),'a') as f:
         for g in f.values():
             for kind in ('state','action'):
                 g[kind+'/vector'][16]=.65
                 g[kind+'/waist/position'][0]=.65
     assert source_height(sim)['expected_m']==pytest.approx(.65)
-    assert check(raw_checks(sim),'lift_height')['status']=='pass'
+    assert not any(c['key']=='lift_height' for c in raw_checks(sim)['checks'])
     with h5py.File(hdf5_path(sim),'a') as f:
         for kind in ('state','action'):
             f['200/'+kind+'/vector'][16]=.69
             f['200/'+kind+'/waist/position'][0]=.69
-    assert check(raw_checks(sim),'lift_height')['status']=='fail'
+    assert not any(c['key']=='lift_height' for c in raw_checks(sim)['checks'])
 
 
 def test_raw_posture_and_stage_annotations_are_checked(sim):
@@ -225,7 +225,7 @@ def test_collection_simulation_cli_and_replay(sim,tmp_path,monkeypatch):
     assert fingerprint(sim)==before
 
 
-@pytest.mark.parametrize('status,expected',[('pass','REVIEW'),('fail','F')])
+@pytest.mark.parametrize('status,expected',[('pass','REVIEW'),('fail','REVIEW')])
 def test_simulation_enabled_category_uses_terra_and_mapped_images(sim,tmp_path,monkeypatch,status,expected):
     weights=tmp_path/'fixture.pt';weights.write_bytes(b'fixture')
     cfg=config.DEFAULTS | dict(vlm_enabled=True,yolo_path=str(weights),api_model='gpt-5.6-terra')

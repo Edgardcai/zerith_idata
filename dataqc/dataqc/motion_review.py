@@ -10,7 +10,7 @@ from pydantic import Field
 from . import vision
 from .io import NAMES, clean, load, read_json, write_json
 
-VERSION = 'trajectory_review_v2'
+VERSION = 'trajectory_review_v3'
 CRITERIA = ('指标一致性','动作连续性','夹爪配合','阶段完成情况','掉落风险','碰撞风险','抓取失败风险','任务未完成风险')
 
 class Finding(vision.Strict):
@@ -63,6 +63,7 @@ def evidence_payload(d,report):
         coverage=dict(total_frames=n,sampled_frames=indices,all_frames_numerically_checked=True,full_trajectory_sent=False),
         semantics=dict(source_format=d.get('source_format','zerith_columnar'),
             timestamp_policy=d.get('timestamp_policy','recorded'),
+            excluded_checks=['lift_height'],
             independent_gripper_feedback=d.get('gripper_feedback_available',True),
             source_state_action_policy=d['attrs'].get('state_action_policy',''),
             unobserved=['视频/图像','物体位置与运动','接触力/力矩','碰撞传感器','任务成功传感器']))
@@ -89,6 +90,7 @@ def inspect(root,report,cfg,cache,progress=lambda _:None):
         '按指定8项逐项分析，每项恰好一次，引用提供的原样 evidence_id。'
         '全帧指标由确定性代码计算，轨迹帧只采样；不能据此声称完整观察全部动作。'
         'mean/max_tracking_error 中夹爪 State/Action 定义不同，不能直接比较阈值；仿真复制的 State 不能证明物理反馈正常。'
+        '升降柱高度不属于质检项目：不得依据 lift_m 的目标、取值或偏差要求复核或降级。'
         '规则中的预警不自动等于动作异常，不改已有数值阈值。请按 grading_effect 理解原规则，stationary/prompt 的fail仅代表待复核，不是硬失败F。已有硬失败不能被模型宣布通过。'
         '动作中有具体数据支持的可疑现象用 suspected，并说明原始帧/指标、推断过程和局限；这仅请求人工复核。'
         '只有可由现有数据直接评估的项目才能 pass。掉落、碰撞、实际抓住物体、实际完成任务缺少物体/力/接触证据时用 not_observable，'
@@ -99,7 +101,11 @@ def inspect(root,report,cfg,cache,progress=lambda _:None):
     write_json(cache/'motion_input.json',payload)
     progress('Terra 动作指标分析 · 仅数值与轨迹，不发送图像或视频')
     raw=vision.call_vlm(content,MotionReview,cfg|dict(api_attempts=1,max_output_tokens=2200),cache,progress)
-    result=validated_result(raw,payload,signature,cfg,time.perf_counter()-started)
+    try:result=validated_result(raw,payload,signature,cfg,time.perf_counter()-started)
+    except ValueError:
+        from .batch_motion import invalidate_response_cache
+        invalidate_response_cache(cache)
+        raise
     write_json(cache/'motion_report.json',result)
     return result
 

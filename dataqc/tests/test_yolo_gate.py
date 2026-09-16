@@ -56,7 +56,7 @@ def test_match_pass_still_requires_image_vlm(moving_source,cfg,tmp_path,monkeypa
     assert worker.visual_decision(r,raw_checks(moving_source))['grade']=='B'
 
 
-@pytest.mark.parametrize('status,grade',[('pass','REVIEW'),('fail','F'),('uncertain','REVIEW')])
+@pytest.mark.parametrize('status,grade',[('pass','REVIEW'),('fail','REVIEW'),('uncertain','REVIEW')])
 def test_all_hands_receive_image_vlm_even_on_yolo_warning(moving_source,cfg,tmp_path,monkeypatch,status,grade):
     monkeypatch.setattr(gate,'predict_samples',detector(warn=['left']))
     calls=[]

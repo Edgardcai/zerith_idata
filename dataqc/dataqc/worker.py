@@ -10,6 +10,7 @@ from .config import EXPORTS, VAR
 from .io import fingerprint, load, read_json, write_json
 from .motion import RULE_VERSION, contextual_checks, failure_reason, warning_grade, warning_messages
 from .robots import get_adapter
+from .quality_policy import manual_grade
 from .vision import RateLimited, APIUnavailable, validate_decision
 
 
@@ -93,7 +94,7 @@ def process_run(run):
                 "episodes",
                 ep["id"],
                 status="queued",
-                grade=None,
+                grade=manual_grade(ep['data'],None),
                 revision=ep["revision"],
             )
     from .batch_prepare import prepare_run
@@ -131,13 +132,13 @@ def process_run(run):
                     "episodes",
                     eid,
                     status="rejected",
-                    grade="F",
-                    reason="判 F：" + failure_reason(fatal),
+                    grade=manual_grade(data,"F"),
+                    reason="数值硬失败：" + failure_reason(fatal),
                     data=data,
                 )
                 continue
             if warning_messages(report):
-                db.update("episodes", eid, grade="B", reason="预警默认 B；视觉核对未完成：" + "；".join(warning_messages(report)))
+                db.update("episodes", eid, grade=manual_grade(data,"B"), reason="数值预警；动作复核待完成：" + "；".join(warning_messages(report)))
             decision = data.get("manual_decision")
             if decision is None:
                 if run["mode"] == "manual" and not cfg.get("assist_manual", True):
@@ -171,7 +172,7 @@ def process_run(run):
                 if visual.get('errors') and decision['grade'] != 'F':
                     if visual.get('api_unavailable'):raise APIUnavailable(decision['reason'])
                     if visual.get('retry_after'):raise RateLimited(visual['retry_after'])
-                    db.update('episodes',eid,status='incomplete',reason=decision['reason'],data=data)
+                    db.update('episodes',eid,status='incomplete',grade='B',reason=decision['reason'],data=data)
                     continue
                 if run["mode"] == "manual":
                     db.update(
@@ -180,7 +181,7 @@ def process_run(run):
                         status="review",
                         grade=decision["grade"]
                         if decision["grade"] != "REVIEW"
-                        else ("B" if warning_messages(report) else None),
+                        else "B",
                         reason=decision["reason"],
                         data=data,
                     )
@@ -192,7 +193,7 @@ def process_run(run):
                     "episodes",
                     eid,
                     status="rejected",
-                    grade="F",
+                    grade=manual_grade(data,"F"),
                     reason=decision["reason"],
                     data=data,
                 )
@@ -202,7 +203,7 @@ def process_run(run):
                     "episodes",
                     eid,
                     status="review",
-                    grade="B" if warning_messages(report) else None,
+                    grade="B",
                     reason=decision["reason"],
                     data=data,
                 )
@@ -230,8 +231,8 @@ def process_run(run):
                     "episodes",
                     eid,
                     status="rejected",
-                    grade="F",
-                    reason="标注复核判 F：" + failure_reason(annotation_checks),
+                    grade=manual_grade(data,"F"),
+                    reason="标注复核未通过：" + failure_reason(annotation_checks),
                     data=data,
                 )
                 continue
@@ -267,7 +268,7 @@ def process_run(run):
                     "episodes",
                     eid,
                     status="rejected",
-                    grade="F",
+                    grade=manual_grade(data,"F"),
                     reason="修复后仍未通过：" + failure_reason(post["checks"]),
                     data=data,
                 )
@@ -355,7 +356,8 @@ def process_run(run):
         if not split_manifest.exists():
             # If interrupted between left and right, retain existing validated side and finish missing side.
             split = adapter.split(
-                full, destination / "hands", cfg["stationary_frames"], progress
+                full, destination / "hands", cfg["stationary_frames"], progress,
+                quality_check=True,  # Explicit automatic QC workflow, unlike the manual split button.
             )
             write_json(split_manifest, split)
         else:

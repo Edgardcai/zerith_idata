@@ -41,7 +41,7 @@ def test_gripper_feedback_and_stages():
         "held_at_start",
     ],
 )
-def test_gripper_failures(problem):
+def test_gripper_warnings(problem):
     s, a, _ = trajectory()
     stages = [80, 150]
     if problem == "twice":
@@ -57,7 +57,7 @@ def test_gripper_failures(problem):
     else:
         s[:, 7], a[:, 7] = 0.26, 1.5
     c = gripper_check(s, a, TASK, stages)
-    assert c["status"] == "fail"
+    assert c["status"] == "warn"
     assert c["detail"]["issues"]
 
 
@@ -91,7 +91,7 @@ def test_both_arm_sources(source, hand, col):
     check = next(
         c for c in arm_and_posture_checks(s, a, t) if c["key"] == f"arm_{source}_{hand}"
     )
-    assert check["status"] == "fail"
+    assert check["status"] == "warn"
     assert check["detail"]["bad_frames"] == [60, 61]
 
 
@@ -147,7 +147,7 @@ def test_lift_provenance_and_directory_is_not_a_reference(tmp_path):
     assert "error" in source_height(tmp_path / "Milk_Tea" / "episode_000001")
 
 
-def test_vlm_stage_proposal_cannot_override_numeric_failure(
+def test_stage_feedback_disagreement_warns_instead_of_f(
     source, tmp_path, monkeypatch
 ):
     from test_pipeline import decision
@@ -179,9 +179,9 @@ def test_vlm_stage_proposal_cannot_override_numeric_failure(
     rid = db.create(str(source), "auto", config.settings(), [str(source)])
     worker.process_run(db.get_run(rid))
     ep = db.episodes(rid)[0]
-    assert ep["grade"] == "F" and ep["status"] == "rejected"
-    assert "110" in ep["reason"] and "阶段" in ep["reason"]
-    assert db.get_run(rid)["exports"] == []
+    assert ep["grade"] == "B"
+    assert ep["status"] == "ready"
+    assert any(c["key"]=="gripper_sequence" and c["status"]=="warn" for c in ep["data"]["repaired_report"]["checks"])
 
 
 def test_hard_failure_rejects_without_vlm_and_upgrade_cache(
@@ -197,7 +197,7 @@ def test_hard_failure_rejects_without_vlm_and_upgrade_cache(
     monkeypatch.setattr(worker, "VAR", tmp_path / "var")
     monkeypatch.setattr(worker, "EXPORTS", tmp_path / "exports")
     with h5py.File(source / "episode.hdf5", "a") as f:
-        f["action/waist/position"][33, 0] = 0.1
+        f["action/arm/position"][33, 0] = float("nan")
 
     def unexpected_call(*args):
         raise AssertionError("Numeric failure must not depend on VLM availability")
@@ -216,6 +216,6 @@ def test_hard_failure_rejects_without_vlm_and_upgrade_cache(
     )
     worker.process_run(db.get_run(rid))
     ep = db.episodes(rid)[0]
-    assert ep["grade"] == "F" and "33" in ep["reason"] and "升降" in ep["reason"]
+    assert ep["grade"] == "F" and "NaN" in ep["reason"]
     assert ep["data"]["raw_report"]["version"] == RULE_VERSION
     assert ep["revision"] == 1

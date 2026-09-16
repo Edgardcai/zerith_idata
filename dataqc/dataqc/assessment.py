@@ -6,7 +6,7 @@ from . import motion_review, yolo_gate, vision
 from .io import load, parse_task, normalized_task, write_json, read_json
 from .motion import RULE_VERSION, warning_grade, failure_reason
 
-VERSION='motion_category_v4'
+VERSION='motion_category_v5'
 
 
 def category(root,report,cfg,cache,progress):
@@ -53,14 +53,14 @@ def inspect(root,report,cfg,cache,progress=lambda _:None,*,motion_outcome=None):
     fatal=[c for c in report['checks'] if c['status']=='fail' and c['key'] not in ('stationary','prompt')]
     reasons=[]
     if fatal:grade='F';reasons.append(failure_reason(fatal))
-    elif cat['status']=='fail':grade='F';reasons.append('图像 VLM 有证据确认商品或操作手不匹配')
+    elif cat['status']=='fail':grade='REVIEW';reasons.append('图像模型提示商品或操作手不匹配，默认 B，等待人工复核')
     elif errors or motion['status']!='pass' or cat['status'] not in ('pass','skipped'):
         grade='REVIEW'
-        if errors:reasons.extend(k+' 分析未完成：'+v for k,v in errors.items())
+        if errors:reasons.extend(('动作复核' if k=='motion' else '类别复核')+'未完成：'+v for k,v in errors.items())
         if motion['status']=='review':reasons.append('动作指标存在可疑现象，需要人工复核')
         if cat['status']=='review':reasons.append('类别识别未同时满足每手 YOLO 至少2/3及图像 VLM通过')
     else:grade='A';reasons.append('动作指标分析完成；类别双检通过' if enabled else '动作指标分析完成；类别识别未启用')
-    if (not targets or not stages or any(c['key']=='stationary' and c['status']=='fail' for c in report['checks'])) and grade!='F':
+    if (not targets or not stages or any(c['key']=='stationary' and c['status'] in ('fail','warn') for c in report['checks'])) and grade!='F':
         grade='REVIEW';reasons.append('任务/阶段标注或超长静止段需要人工复核')
     references=[c for c in report['checks'] if isinstance(c.get('detail'),dict) and c['detail'].get('requires_review')]
     if references and grade!='F':

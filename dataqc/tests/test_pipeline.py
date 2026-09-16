@@ -83,7 +83,7 @@ def decision(n=150):
 
 
 def test_stationary_boundary():
-    for n, expected in [(40, "pass"), (41, "fail")]:
+    for n, expected in [(40, "pass"), (41, "warn")]:
         s = np.zeros((n, 23))
         c = numeric_checks(s, s, np.arange(n) / 30, 40)
         assert next(x["status"] for x in c if x["key"] == "stationary") == expected
@@ -106,7 +106,7 @@ def test_numeric_failures(problem):
     key = {"duplicate": "timestamps", "nan": "finite", "slow": "fps", "jump": "motion"}[
         problem
     ]
-    assert next(c["status"] for c in checks if c["key"] == key) == ("warn" if problem in ("duplicate", "slow") else "fail")
+    assert next(c["status"] for c in checks if c["key"] == key) == ("warn" if problem in ("duplicate", "slow", "jump") else "fail")
 
 
 def test_strict_prompt():
@@ -114,10 +114,10 @@ def test_strict_prompt():
     for s in [
         "Grasp Milk  with the left hand",
         "grasp Milk with the left hand",
-        "Grasp Milk with right hand",
         "Grasp Tea with the left hand and then Grasp Milk with the right hand",
     ]:
-        assert parse_task(s) is None
+        assert parse_task(s) is not None
+    assert parse_task("Grasp Milk with right hand") is None
 
 
 def test_missing_video(source):
@@ -152,7 +152,7 @@ def test_end_to_end_repair_convert_split(source, tmp_path):
     d = decision()
     assert (
         next(c["status"] for c in report["checks"] if c["key"] == "stationary")
-        == "fail"
+        == "warn"
     )
     repaired = derive(source, tmp_path / "repaired", report, d, 40, before)
     assert fingerprint(source) == before
@@ -190,7 +190,7 @@ def test_end_to_end_repair_convert_split(source, tmp_path):
     pq.write_table(pa.Table.from_pydict(data), path_for(full, 0))
     assert not validate_dataset(full)["passed"]
     with pytest.raises(ValueError):
-        split_dataset(full, tmp_path / "bad")
+        split_dataset(full, tmp_path / "bad", quality_check=True)
 
 
 def test_timestamp_length_failure():

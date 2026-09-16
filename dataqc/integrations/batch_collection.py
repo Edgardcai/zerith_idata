@@ -26,10 +26,14 @@ def prepare_collection(inputs, profile, args, out_root):
         if text.startswith('动作 VLM 复核 · 缓存复用'):
             review_summary[:] = [text]
         print(text, flush=True)
-    items = []; outcomes = {}
+    items = []; outcomes = {}; reused_count=0
     def check(root):
         progress(f'传统质检 · {root.name}')
         cache = manual_cache(root, cfg)
+        from dataqc.incremental import completed_report
+        if completed_report(cache,cfg):
+            progress('复用质检 · '+root.name)
+            return None
         raw, before = measure(root, cfg, cache, progress)
         return dict(root=root, report=raw, cache=cache / 'motion', fingerprint_expected=before)
     with ThreadPoolExecutor(max_workers=max(1, min(2, args.num_workers))) as pool:
@@ -37,10 +41,12 @@ def prepare_collection(inputs, profile, args, out_root):
         for future in as_completed(futures):
             try:
                 item = future.result()
-                if not fatal_checks(item['report']): items.append(item)
+                if item is None:reused_count+=1
+                elif not fatal_checks(item['report']): items.append(item)
             except Exception as exc: outcomes[episode_key(futures[future])] = error_outcome(exc)
+    progress(f'增量质检 · 发现 {len(roots)} 条 · 复用 {reused_count} 条 · 新增/变化/未完成 {len(roots)-reused_count} 条')
     items.sort(key=lambda item: str(item['root']))
-    progress(f'传统质检完成 · 动作 VLM 可审 {len(items)} 条 · 硬失败跳过 {len(roots)-len(items)-len(outcomes)} 条 · 准备失败 {len(outcomes)} 条')
+    progress(f'传统质检完成 · 动作 VLM 可审 {len(items)} 条 · 硬失败跳过 {len(roots)-reused_count-len(items)-len(outcomes)} 条 · 准备失败 {len(outcomes)} 条')
     branch_cfg = cfg | dict(vlm_token_budget=cfg.get('vlm_token_budget', 250000) // (2 if cfg.get('vlm_enabled', False) else 1))
     outcomes.update(review_many(items, branch_cfg, Path(out_root) / 'motion_batches', progress))
     folder = Path(out_root) / '.motion_outcomes'

@@ -2952,10 +2952,10 @@ def build_index_html() -> str:
     </aside>
   </main>
 
-  <link rel="stylesheet" href="/auto/assets/raw-grade.css?v=4">
-  <link rel="stylesheet" href="/auto/assets/raw-compact.css?v=1">
-  <link rel="stylesheet" href="/auto/assets/qc-report.css?v=1"><script src="/auto/assets/qc-report.js?v=1"></script><script src="/auto/assets/raw-grade.js?v=6"></script>
-  <script src="/auto/assets/raw-review-filter.js?v=1"></script>
+  <link rel="stylesheet" href="/auto/assets/raw-grade.css?v=20260916.2">
+  <link rel="stylesheet" href="/auto/assets/raw-compact.css?v=20260915">
+  <link rel="stylesheet" href="/auto/assets/qc-report.css?v=1"><script src="/auto/assets/qc-report.js?v=1"></script><script src="/auto/assets/raw-grade.js?v=20260916.2"></script>
+  <script src="/auto/assets/raw-review-filter.js?v=20260915"></script>
   <script>
     const $ = (id) => document.getElementById(id);
     let episodes = [];

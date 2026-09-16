@@ -13,3 +13,7 @@
 .raw-nav-controls{display:flex;align-items:center;gap:6px;padding:8px 10px}.raw-nav-controls select{flex:1;min-width:0;margin:0}.raw-nav-controls button{white-space:nowrap}#raw-replay-nav[hidden]{display:none}
 
 .noda-manual-controls{display:flex;align-items:center;gap:7px;flex-wrap:nowrap;min-width:0}.noda-manual-controls label,.noda-manual-controls button{flex-shrink:0}.noda-manual-controls small:empty{display:none}
+
+.noda-note-controls{display:flex;flex-wrap:wrap;align-items:center;gap:6px}.noda-note-controls[hidden]{display:none}.noda-note{min-width:140px;max-width:320px;flex:1}.noda-manual-controls{flex-wrap:wrap}
+
+.noda-identity{flex-basis:100%;font-size:12px;overflow-wrap:anywhere}

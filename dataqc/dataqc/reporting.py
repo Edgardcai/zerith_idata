@@ -28,6 +28,8 @@ def human(text):
 
 
 def presentation(report):
+    from .quality_policy import display_report
+    report=display_report(report)
     raw=report.get('raw_report') or (report if 'version' in report else {})
     visual=report.get('visual') or {}
     checks=raw.get('checks') or report.get('checks') or []
@@ -42,6 +44,7 @@ def presentation(report):
     arm_keys={c.get('key') for c in checks if c.get('key','').startswith('arm_state_')}
     for c in checks:
         k=c.get('key') or c.get('detail',{}).get('shared_key') or c.get('name','')
+        if k=='lift_height':continue
         label=c.get('label',k);status=c.get('status','na');detail=c.get('detail',{})
         d=detail if isinstance(detail,dict) else {};frames=d.get('bad_frames',[])
         issues=d.get('issues') or d.get('errors') or []
@@ -67,7 +70,7 @@ def presentation(report):
                 expected=v.get('expected_closures');ac=v.get('action_close_frames',[]);sc=v.get('state_close_frames',[])
                 feedback=not any(x.get('key')=='gripper_feedback' and x.get('status')=='na' for x in checks)
                 text=f"指令闭合 {len(ac)} 次，要求 {expected} 次"+(f"；状态闭合 {len(sc)} 次" if feedback else '；无独立物理反馈')
-                add(k,('左' if hand=='left' else '右')+'夹爪闭合次数','fail' if len(ac)!=expected or (feedback and len(sc)!=expected) else 'pass',text,ac+sc,'双手各1次；单手任务非操作手0次')
+                add(k,('左' if hand=='left' else '右')+'夹爪闭合次数','warn' if len(ac)!=expected or (feedback and len(sc)!=expected) else 'pass',text,ac+sc,'双手各1次；单手任务非操作手0次')
             for issue in issues:add(k,label,'review' if status=='warn' else status,issue,frames)
             if not issues:add(k,'夹爪阶段与反馈','pass','闭合位于对应操作阶段'+('，可用反馈延迟正常' if not any(x.get('key')=='gripper_feedback' for x in checks) else '；无独立反馈'),standard='反馈相对指令允许−2～15帧')
             continue
@@ -92,7 +95,7 @@ def presentation(report):
         elif k.startswith('arm_'):
             text=f"最大单步变化 {number(d.get('max_step_rad'))} rad；跳变 {len(d.get('jumps',[]))} 处";standard='≤0.800 rad'
             for jump in d.get('jumps',[]):
-                add(k,label,'fail',f"{jump['joint']} 第{jump['frame']}帧变化 {number(jump['delta_rad'])} rad（{number(jump['previous'])}→{number(jump['value'])}）",[jump['frame']],standard)
+                add(k,label,'warn',f"{jump['joint']} 第{jump['frame']}帧变化 {number(jump['delta_rad'])} rad（{number(jump['previous'])}→{number(jump['value'])}）",[jump['frame']],standard)
             if d.get('jumps'):continue
         elif k=='motion':text=f"最大单步变化 {number(d.get('max_step'))} rad";standard='≤0.800 rad'
         elif k=='joint':text=f"平均单步变化 {number(d.get('mean_rad'),6)} rad；最大 {number(d.get('max_rad'))} rad";standard='平均≥0.0001 rad；最大≤0.8 rad'
@@ -147,13 +150,13 @@ def presentation(report):
             [m['frame'] for m in hand.get('moments',[])],standard='每操作手≥2/3时刻匹配',source='YOLO')
     for hand in cat.get('hands',[]):
         refs=hand.get('evidence_ids',[]);frames=[int(e.rsplit(':',1)[1]) for e in refs if re.search(r':\d+$',e)]
-        add('category','类别复核 · '+('左手' if hand.get('hand')=='left' else '右手'),{'pass':'pass','fail':'fail'}.get(hand.get('status'),'review'),hand.get('reason',''),frames,source='Terra · 定点图像')
+        add('category','类别复核 · '+('左手' if hand.get('hand')=='left' else '右手'),{'pass':'pass','fail':'review'}.get(hand.get('status'),'review'),hand.get('reason',''),frames,source='Terra · 定点图像')
     if cat.get('status')=='skipped':add('category','类别识别','na','未启用YOLO与图像类别复核；不影响独立动作指标复核')
-    for branch,error in visual.get('errors',{}).items():add(branch,'动作复核' if branch=='motion' else '类别复核','review','执行未完成：'+str(error),source='执行状态')
-    if visual.get('error'):add('analysis','模型复核','review','执行未完成：'+str(visual['error']),source='执行状态')
+    for branch,error in visual.get('errors',{}).items():add(branch,'动作复核' if branch=='motion' else '类别复核','review','执行未完成：'+str(error).replace('视觉检查未完成：','模型请求未完成：'),source='执行状态')
+    if visual.get('error'):add('analysis','模型复核','review','执行未完成：'+str(visual['error']).replace('视觉检查未完成：','模型请求未完成：'),source='执行状态')
     if report.get('review_required') and not any(i['problem'] for i in items):add('review','待复核原因','review',report.get('reason') or '历史报告未保留具体原因，请重新质检')
     outdated=bool(raw) and raw.get('version')!=RULE_VERSION
-    if outdated:add('rules','报告版本','review','历史报告采用旧规则；请重新质检以使用逐条目标高度，当前等级尚未重算',source='报告状态')
+    if outdated:add('rules','报告版本','info','历史报告已按当前分级规则展示；升降柱不检查，人工等级保留。重新质检可更新完整报告',source='报告状态')
     items.sort(key=lambda i:{'fail':0,'review':1,'warn':2,'na':4,'info':5,'pass':6}.get(i['status'],6))
     problems=[i for i in items if i['problem']]
     return dict(version='readable_qc_v1',items=items,problem_count=len(problems),

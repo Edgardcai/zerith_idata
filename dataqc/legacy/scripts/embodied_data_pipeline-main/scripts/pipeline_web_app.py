@@ -1695,13 +1695,12 @@ def quality_check_items(cfg: dict[str, Any]) -> list[dict[str, str]]:
     if cfg.get("robot_type") == "zerith":
         return [dict(name=name,criterion=criterion) for name,criterion in [
             ("结构与完整性", "State/Action 各 23 维；数值有限；HDF5、3 路图像与视频逐帧完整"),
-            ("左右夹爪与阶段", "Action/State 左右各闭合一次，阶段 1 左手、阶段 2 右手"),
-            ("双臂连续性", "时间间隔 > 0.1 s、重复/倒退仅预警 B，显示帧位置和间隔；关节跳变 > 0.8 rad 判 F"),
+            ("左右夹爪与阶段", "按任务操作手检查次数、阶段和反馈；异常仅预警 B，人工复核"),
+            ("双臂连续性", "时间间隔 > 0.1 s、重复/倒退仅预警 B，显示帧位置和间隔；关节跳变 > 0.8 rad 预警 B，人工复核"),
             ("腰部 / 头部", "pitch/yaw 均值、Q01/Q99 均为 ±0.02 rad，State / Action 超限预警 B"),
-            ("升降柱", "真机按目录目标高度；仿真读取 episode_meta.json；允许 ±0.02 m"),
             ("静止与标注", "动作指标集中交给 Terra 审查；静止段及缺失阶段需人工确认"),
             ("视觉匹配", "类别识别默认关闭；开启后每手 YOLO ≥2/3 且 Terra 复核通过"),
-            ("结果与导出", "预警默认 B；F 与待确认不进入导出；A/B 转换后再次校验"),
+            ("结果与导出", "人工结果优先并持续保留；转换和切分默认不质检，转换后质检可选"),
         ]]
     from quality_pipeline.profiles import load_profile
 
@@ -2291,8 +2290,6 @@ def save_qc_report_quality_grade(
     if not grade:
         raise ValueError(f"invalid quality grade: {quality_grade}")
 
-    from integrations.zerith_rules import prepare_manual_approval, finish_manual_approval
-    prepared = prepare_manual_approval(sys.modules[__name__], cfg, name, grade, reason_label)
     hdf5_entry = hdf5_quality_grade_entry_for_episode(cfg, name, grade)
     sync_hdf5_quality_grade_entries([hdf5_entry])
 
@@ -2313,7 +2310,6 @@ def save_qc_report_quality_grade(
     }
     entries[name] = saved
     write_manual_failure_file(manual_failure_hdf5_path(cfg), entries)
-    finish_manual_approval(prepared)
     return saved
 
 
@@ -2830,6 +2826,12 @@ def authoritative_quality_grade_entries(cfg: dict[str, Any]) -> list[dict[str, A
     for source in lerobot_source_episode_entries(cfg["hdf5_root"]):
         episode_id = str(source.get("episode_id") or "").strip()
         matches = rows_by_id.get(episode_id, [])
+        if str(cfg.get("robot_type")) == "zerith":
+            if len(matches)>1:raise ValueError(f"duplicate status rows for {episode_id}")
+            row=matches[0] if matches else {}
+            grade=normalise_quality_grade(row.get("manual_quality_grade")) or normalise_quality_grade(row.get("quality_grade")) or "UNRATED"
+            entries.append(dict(source,quality_grade=grade,status_row=row))
+            continue
         if not matches:
             raise ValueError(
                 f"HDF5 episode {episode_id}: missing finalized Web QC status row"
@@ -2840,31 +2842,11 @@ def authoritative_quality_grade_entries(cfg: dict[str, Any]) -> list[dict[str, A
             )
         row = matches[0]
         grade = normalise_quality_grade(row.get("quality_grade"))
-        if str(cfg.get("robot_type")) == "zerith" and row.get("manual_quality_grade") in ("A", "B"):
-            if row.get("shared_review_required") or row.get("shared_quality_grade") == "F":
-                # Rebind approval to the newest report without replacing the
-                # persisted human grade with its lower-priority model result.
-                from integrations.zerith_rules import prepare_manual_approval
-                try:
-                    prepared = prepare_manual_approval(sys.modules[__name__], cfg, episode_id, grade, "采用已保存的人工复核等级")
-                except ValueError as exc:
-                    raise ValueError(f"{episode_id}: 人工等级保留为 {grade}，转换检查未通过：{exc}") from exc
-                if prepared:
-                    row = dict(row, grade_approval=prepared[1], shared_quality_grade=grade, shared_review_required=False, grade_export_block="")
-            if row.get("grade_export_block"):
-                raise ValueError(f"{episode_id}: 人工等级保留为 {grade}，转换检查未通过：{row['grade_export_block']}")
-        if str(cfg.get("robot_type")) == "zerith" and row.get("shared_rules_version") and row.get("shared_review_required"):
-            continue
         if not grade:
             raise ValueError(
                 f"HDF5 episode {episode_id}: invalid finalized Web QC quality grade "
                 f"{row.get('quality_grade')!r}"
             )
-        if str(cfg.get("robot_type")) == "zerith":
-            if not row.get("shared_rules_version"):
-                raise ValueError(f"{episode_id}: 请先执行新版质检，再转换 LeRobot")
-            if row.get("shared_quality_grade") == "F" or row.get("shared_review_required") or grade not in ("A", "B"):
-                continue
         entry = dict(source)
         entry["quality_grade"] = grade
         entry["status_row"] = row
@@ -3223,7 +3205,7 @@ def lerobot_episode_count(dataset_dir: Path) -> int:
 
 def grade_dataset_candidates(base: Path) -> list[tuple[str, Path]]:
     candidates: list[tuple[str, Path]] = []
-    for grade in QUALITY_GRADES:
+    for grade in (*QUALITY_GRADES, "UNRATED"):
         path = base / grade
         if is_lerobot_dataset_dir(path):
             candidates.append((grade, path.resolve()))
@@ -3253,7 +3235,7 @@ def available_lerobot_replay_grades(cfg: dict[str, Any]) -> list[dict[str, Any]]
     return [
         {
             "grade": grade,
-            "label": grade or "全部",
+            "label": "未评级" if grade == "UNRATED" else grade or "全部",
             "dataset_dir": str(path),
             "episode_count": lerobot_episode_count(path),
         }
@@ -3266,7 +3248,7 @@ def resolve_lerobot_replay_cfg(cfg: dict[str, Any], requested_grade: str | None 
     grades = available_lerobot_replay_grades(cfg)
     if not grades:
         raise FileNotFoundError(f"LeRobot dataset not found: {configured}")
-    requested = normalise_quality_grade(requested_grade)
+    requested = "UNRATED" if requested_grade == "UNRATED" else normalise_quality_grade(requested_grade)
     if requested:
         selected = next((item for item in grades if item["grade"] == requested), None)
         if selected is None:
@@ -3291,7 +3273,7 @@ def lerobot_grade_output_root(cfg: dict[str, Any], grade: str) -> Path:
 
 def lerobot_grade_repo_id(cfg: dict[str, Any], grade: str) -> str:
     base = str(cfg["repo_id"]).strip().strip("/")
-    grade_text = normalise_quality_grade(grade)
+    grade_text = "UNRATED" if grade == "UNRATED" else normalise_quality_grade(grade)
     return f"{base}/{grade_text}" if base else grade_text
 
 
@@ -3371,7 +3353,7 @@ def lerobot_stage_split_output_dir(
         side_text = "left_hand"  # Retain the old API alias; the output directory is lefthand.
     if side_text not in LEROBOT_STAGE_SPLIT_SIDES:
         raise ValueError(f"invalid LeRobot stage side: {side!r}")
-    grade_text = normalise_quality_grade(grade)
+    grade_text = "UNRATED" if grade == "UNRATED" else normalise_quality_grade(grade)
     if not grade_text:
         raise ValueError(f"invalid LeRobot quality grade: {grade!r}")
     root = Path(cfg["lerobot_root"]).expanduser().resolve()
@@ -4855,7 +4837,7 @@ exit "$fail"
 
 
 def qc_command(cfg: dict[str, Any]) -> tuple[list[str], Path, dict[str, str]]:
-    report_dir = cfg["qc_root"] / f"{cfg['dataset_name']}_{time.strftime('%Y%m%d_%H%M%S')}"
+    report_dir = cfg["qc_root"] / f"{cfg['dataset_name']}_{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
     ensure_creatable(report_dir, "QC report path")
     profile_path = effective_profile_path(cfg)
     cmd = [
@@ -6966,6 +6948,9 @@ class Handler(BaseHTTPRequestHandler):
                         hdf5_quality_grade_sync_steps(cfg),
                         cfg,
                     )
+                elif stage == "lerobot_post_qc":
+                    from integrations.manual_export import post_qc_step
+                    job = create_pipeline_job("LeRobot 转换后质检", [post_qc_step(sys.modules[__name__], cfg)], cfg)
                 elif stage == "lerobot":
                     job = create_pipeline_job("按质量等级生成 LeRobot", lerobot_commands(cfg), cfg)
                 elif stage == "split_lerobot_stages":
@@ -9270,7 +9255,8 @@ HTML = r"""<!doctype html>
         <div class="actions">
           <button class="primary" data-stage="convert_qc">转换并质检</button>
           <button data-stage="qc">仅批量质检</button>
-          <button class="primary" data-stage="lerobot">按等级生成 LeRobot</button>
+          <button class="primary" data-stage="lerobot">直接转换 LeRobot</button>
+          <button data-stage="lerobot_post_qc">LeRobot 转换后质检</button>
           <button id="replayBtn">打开 HDF5 回放</button>
           <button id="stopJobBtn" class="danger" type="button">停止当前任务</button>
         </div>

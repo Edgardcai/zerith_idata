@@ -67,3 +67,16 @@
  body.replay-mode .control-panel .action-card button{min-height:32px;padding:5px}
 }
 @media(min-width:1000px) and (max-width:1450px){body.replay-mode #collectionWorkspace{grid-template-columns:250px minmax(0,1fr)}}
+
+#collectionWorkspace .lerobot-actions [data-stage="lerobot_post_qc"]{grid-column:1 / -1}
+
+.manual-note-editor{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.manual-note-editor[hidden]{display:none}.manual-note{width:100%;min-width:160px;resize:vertical}.manual-problem{max-width:160px}.report-filters{flex-wrap:wrap}.report-filters input{max-width:180px}.qc-force-control{display:block;margin:12px 0;font-size:12px}
+
+#collectionWorkspace>.grid,#collectionWorkspace>.grid>section{min-width:0}.table-wrap:has(#episodeRows){max-width:100%}
+.table-wrap:has(#episodeRows) table{table-layout:fixed;min-width:900px}
+.table-wrap:has(#episodeRows) th:nth-child(1){width:28px}.table-wrap:has(#episodeRows) th:nth-child(2){width:86px}
+.table-wrap:has(#episodeRows) th:nth-child(3){width:58px}.table-wrap:has(#episodeRows) th:nth-child(4){width:72px}
+.table-wrap:has(#episodeRows) th:nth-child(5){width:70px}.table-wrap:has(#episodeRows) th:nth-child(6){width:64px}
+.table-wrap:has(#episodeRows) th:nth-child(7){width:116px}.table-wrap:has(#episodeRows) th:nth-child(8){width:124px}
+.table-wrap:has(#episodeRows) td{white-space:normal;overflow-wrap:anywhere}.table-wrap:has(#episodeRows) .grade-notes{min-width:0;width:auto}
+.grade-editor{flex-wrap:wrap}.grade-editor small{flex-basis:100%;max-width:100%;white-space:normal}.manual-note{min-width:0;box-sizing:border-box}.manual-problem{width:100%}

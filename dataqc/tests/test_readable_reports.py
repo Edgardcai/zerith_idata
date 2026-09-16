@@ -80,7 +80,7 @@ def test_nan_locations_and_model_unobservable_are_distinct():
 def test_old_report_is_explicitly_outdated_without_changing_grade():
     source=dict(quality_grade='A',raw_report=dict(version='zerith_qc_5',checks=[]))
     report=presentation(source)
-    assert report['outdated'] and '旧规则' in report['summary']
+    assert report['outdated'] and any(i['key']=='rules' and not i['problem'] for i in report['items'])
     assert source['quality_grade']=='A'
 
 

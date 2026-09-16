@@ -1,11 +1,12 @@
       <section class="action-card hdf5-actions" aria-labelledby="hdf5ActionsTitle">
         <h3 id="hdf5ActionsTitle">HDF5 数据处理</h3>
         <div class="actions">
-          <button id="optimizeHdf5Btn" class="primary" data-stage="optimize_hdf5">HDF5 质检</button>
+          <button id="optimizeHdf5Btn" class="primary" data-stage="qc">增量质检 HDF5</button>
           <button data-stage="repair">剔除静止帧</button>
           <button class="danger" data-stage="delete">选择 episode 删除</button>
           <button id="replayBtn">HDF5 数据可视化回放</button>
         </div>
+        <label class="qc-force-control"><input id="qcForce" type="checkbox"> 全部重新质检（保留人工结果，复用有效 VLM）</label>
         <div id="stationaryThresholdControl" class="stationary-threshold-control hidden">
           <label for="stationaryThreshold">静止帧上限</label>
           <select id="stationaryThreshold"><option value="20">20 帧</option><option value="40" selected>40 帧</option><option value="60">60 帧</option></select>
@@ -13,12 +14,14 @@
       </section>
       <section class="action-card lerobot-actions" aria-labelledby="lerobotActionsTitle">
         <h3 id="lerobotActionsTitle">LeRobot 转换</h3>
+        <p class="muted">转换和切分默认不质检，支持所有等级。单条异常会跳过并列出原因。</p>
         <div class="actions">
-          <button class="primary" data-stage="lerobot">按等级生成 LeRobot</button>
+          <button class="primary" data-stage="lerobot">直接转换 LeRobot</button>
           <div id="lerobotStageSplitControl" class="lerobot-stage-split-control hidden">
-            <button id="splitLerobotStagesBtn" data-stage="split_lerobot_stages" disabled>按左右手阶段切分</button>
+            <button id="splitLerobotStagesBtn" data-stage="split_lerobot_stages" disabled>直接切分左右手</button>
             <span id="lerobotStageSplitReason" hidden></span><span id="lerobotStageSplitPaths" hidden></span>
           </div>
+          <button data-stage="lerobot_post_qc">LeRobot 质检（可选）</button>
         </div>
       </section>
       <div class="job-controls"><button id="stopJobBtn" class="danger" type="button">停止当前任务</button></div>
