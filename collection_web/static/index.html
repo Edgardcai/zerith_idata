@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css?v=20260916.2"></head>
 <body>
 <header><a class="brand" href="/"><span class="brand-icon">Z</span>采集工作台</a><div class="header-status"><span id="connection" class="pill">连接中</span><span id="battery" class="battery">电量 —</span></div><div class="header-actions"><button id="check" class="secondary">设备检测</button><button id="end" class="secondary" disabled>结束会话</button><button id="start" class="primary">启动采集</button></div></header>
 <main>
@@ -31,5 +31,5 @@
 <div class="review-toolbar"><button id="reviewPlay" class="primary" disabled>三路播放</button><button id="reviewPause" class="secondary">暂停</button><input id="reviewSeek" type="range" min="0" max="0" step="0.01" value="0" aria-label="三路视频进度" disabled><span id="reviewTime">00:00 / 00:00</span><label>倍速 <select id="reviewSpeed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label><button id="reviewRetry" class="secondary">重新加载</button></div>
 <p id="reviewStatus" class="review-status" role="status" aria-live="polite"></p><div id="reviewGrid" class="review-grid"></div></dialog>
 <script src="/static/review.js" defer></script>
-<script src="/static/app.js" defer></script>
+<script src="/static/app.js?v=20260916.2" defer></script>
 </body></html>

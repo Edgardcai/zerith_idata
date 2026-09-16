@@ -6,3 +6,5 @@
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
 
 .review-toolbar{display:flex;align-items:center;gap:10px;padding:14px 16px 0;flex-wrap:wrap}.review-toolbar input[type=range]{flex:1;min-width:130px;width:auto;padding:0}.review-toolbar label,.review-toolbar span{font-size:13px;white-space:nowrap}.review-toolbar select{padding:5px;width:auto}.review-status{margin:0!important;padding:10px 16px 0;min-height:28px}.review-camera-status{display:block;color:var(--muted);font-size:12px;min-height:32px;overflow-wrap:anywhere}.review-grid video{aspect-ratio:4/3;object-fit:contain}#review{max-height:95vh;overflow:auto}
+
+.episode-location{display:block;color:var(--muted);font-size:12px;margin-top:4px;white-space:normal;overflow-wrap:anywhere}.episode-name{min-width:160px}

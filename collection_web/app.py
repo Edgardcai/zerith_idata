@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import logging
 import mimetypes
 import os
 from pathlib import Path
@@ -63,7 +64,7 @@ class Handler(BaseHTTPRequestHandler):
         if name not in NAMES:raise ValueError('未知相机')
         row=self.app.store.get(int(ident))
         if not row or row['state']!='completed':raise ValueError('数据不存在或尚未保存')
-        directory=self.app.store.video_directory(row)
+        directory=self.app.store.episode_directory(row)
         target=directory/'videos'/'rs'/(NAMES[name]+'.mp4')
         if target.is_symlink() or not target.resolve().is_relative_to(directory):raise ValueError('视频路径无效')
         return target
@@ -78,7 +79,11 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/episode-groups':return self.json({'groups':self.app.store.groups()})
             if path=='/api/episodes':
                 dataset=parse_qs(urlparse(self.path).query).get('dataset',[None])[0]
-                return self.json({'episodes':self.app.store.list(dataset=dataset)})
+                return self.json({'episodes':self.app.store.list(dataset=dataset,with_locations=True)})
+            if path.startswith('/api/episode-location/'):
+                row=self.app.store.get(int(path.rsplit('/',1)[1]))
+                if not row:raise ValueError('采集记录不存在')
+                return self.json(self.app.store.location(row))
             if path.startswith('/api/review/'):
                 ident=int(path.rsplit('/',1)[1]);streams={}
                 for name in NAMES:
@@ -143,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             origin=self.headers.get('Origin')
             if origin and urlparse(origin).netloc!=self.headers.get('Host'):return self.json({'error':'请求来源不匹配'},403)
-            if self.headers.get('X-Collection-Token')!=self.app.csrf:return self.json({'error':'页面连接已更新，请刷新'},403)
+            if self.headers.get('X-Collection-Token')!=self.app.csrf:return self.json({'error':'页面连接已更新，请刷新','code':'TOKEN_EXPIRED'},403)
             length=int(self.headers.get('Content-Length','0'))
             if not 0<length<=65536:raise ValueError('请求长度无效')
             body=json.loads(self.rfile.read(length))
@@ -168,7 +173,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.json({'error':'接口不存在'},404)
         except (BrokenPipeError,ConnectionResetError):pass
         except (ValueError,KeyError,TypeError) as exc:self.json({'error':str(exc)},400)
-        except Exception as exc:self.json({'error':str(exc)},500)
+        except Exception as exc:
+            logging.getLogger('collection').exception('Collection request failed: %s',urlparse(self.path).path)
+            self.json({'error':str(exc)},500)
 
 
 def main():

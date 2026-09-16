@@ -86,6 +86,26 @@ class CollectorTests(unittest.TestCase):
         episode(self.root/'1_test');time.sleep(.7)
         self.assertEqual(self.store.list(),[])
         self.assertEqual(self.collector.status()['phase'],'disconnected')
+
+    def test_previous_stream_ending_cannot_disconnect_current_session(self):
+        self.start()
+        before=self.collector.status()
+        self.collector._receive('previous-session',iter(()))
+        after=self.collector.status()
+        self.assertEqual(after['phase'],before['phase'])
+        self.assertEqual(after['connected'],before['connected'])
+        self.assertEqual(after['session']['id'],before['session']['id'])
+
+    def test_previous_stream_failure_cannot_disconnect_current_session(self):
+        self.start()
+        before=self.collector.status()
+        def old_stream():
+            raise RuntimeError('late failure from previous RPC')
+            yield
+        self.collector._receive('previous-session',old_stream())
+        after=self.collector.status()
+        self.assertEqual(after['phase'],before['phase'])
+        self.assertEqual(after['error'],before['error'])
     def test_completed_episode_and_no_watch_after_end(self):
         self.start();episode(self.root/'1_test');eventually(lambda:self.collector.status()['counts']['completed']==1)
         self.collector.end();episode(self.root/'1_test','b'*32);time.sleep(.7)

@@ -39,3 +39,4 @@ class TeleopStatusTests(unittest.TestCase):
         for value in (None,-1,.81,float('nan'),True):
             with self.assertRaises(ValueError):self.status.save({'lift_enabled':True,'lift_height_m':value},device,{'current':None})
         self.assertEqual(self.status.config(),config)
+

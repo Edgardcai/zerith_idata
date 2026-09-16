@@ -111,15 +111,16 @@ class Collector:
                 # not a generic response string which might itself describe an error.
         except Exception as exc:
             with self.lock:
-                if self.phase not in ('closed','closing'):
+                if self.session and self.session['id']==ident and self.phase not in ('closed','closing'):
                     self.phase='disconnected';self.error='采集接口连接中断'
                     self.events.append({'at':time.time(),'type':'connection_error','detail':str(exc)})
                     self.store.set_session(ident,'disconnected')
         finally:
             with self.lock:
-                self.transport=False
-                if self.phase not in ('closed','closing','disconnected'):
-                    self.phase='disconnected';self.error='采集接口连接已结束';self.store.set_session(ident,'disconnected')
+                if self.session and self.session['id']==ident:
+                    self.transport=False
+                    if self.phase not in ('closed','closing','disconnected'):
+                        self.phase='disconnected';self.error='采集接口连接已结束';self.store.set_session(ident,'disconnected')
 
     def _watch(self):
         while not self.shutdown.wait(.5):
@@ -176,6 +177,9 @@ class Collector:
     def end(self):
         with self.operation:
             if self.external_active():raise ValueError('请先在 Meta Quest 结束录制，等待数据保存后再结束会话')
+            with self.lock:session=self.session.copy() if self.session else None
+            if session and self.store.list(session['id'],active_only=True):
+                raise ValueError('仍有数据正在采集或保存，请等待完成后再结束会话')
             with self.lock:
                 self.phase='closing';stream=self.stream;vendor=self.vendor
             if stream:stream.cancel()

@@ -6,6 +6,7 @@ import shutil
 import sqlite3
 import threading
 import time
+import uuid
 from pathlib import Path
 
 import h5py
@@ -147,6 +148,7 @@ class EpisodeStore:
           CREATE TABLE IF NOT EXISTS episodes(id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, uuid TEXT, dataset TEXT, seq INTEGER,
             source TEXT, path TEXT, state TEXT, grade TEXT, detail TEXT, progress TEXT, created REAL, UNIQUE(dataset,uuid), UNIQUE(dataset,seq));
           CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, at REAL, episode_id INTEGER, action TEXT, detail TEXT);
+          CREATE TABLE IF NOT EXISTS pending_deletions(episode_id INTEGER PRIMARY KEY, intent TEXT NOT NULL);
         ''');self.db.commit()
         if 'source_dataset' not in {r['name'] for r in self.db.execute('PRAGMA table_info(sessions)')}:
             self.db.execute('ALTER TABLE sessions ADD COLUMN source_dataset TEXT');self.db.commit()
@@ -163,17 +165,24 @@ class EpisodeStore:
                         if dest.exists() and not source.exists():self._finish_index(row,dest)
                         elif source.exists() and not dest.exists():self.db.execute("UPDATE episodes SET state='saving' WHERE id=?",(row['id'],))
                         else:raise ValueError('编号恢复发现目录冲突')
-                    else:
-                        if dest.exists():shutil.rmtree(dest)
-                        self.db.execute("UPDATE episodes SET state='deleted' WHERE id=?",(row['id'],))
+                    else:self.delete(row['id'])
                 except Exception as exc:
-                    self.db.execute("UPDATE episodes SET state='error',detail=? WHERE id=?",(json.dumps({'error':str(exc)},ensure_ascii=False),row['id']))
+                    if row['state']=='deleting':
+                        detail=json.loads(row['detail'] or '{}');detail['delete_error']=str(exc)
+                        self.db.execute('UPDATE episodes SET detail=? WHERE id=?',(json.dumps(detail,ensure_ascii=False),row['id']))
+                    else:self.db.execute("UPDATE episodes SET state='error',detail=? WHERE id=?",(json.dumps({'error':str(exc)},ensure_ascii=False),row['id']))
             for row in self.db.execute("SELECT * FROM episodes WHERE state='completed'").fetchall():
                 try:
-                    review=json.loads((self.safe(row['path'])/'review.json').read_text())
+                    path=self.episode_directory(row)/'review.json'
+                    if path.is_symlink():continue
+                    review=json.loads(path.read_text())
+                    if not isinstance(review,dict):continue
+                    last=self.db.execute("SELECT MAX(at) FROM audit WHERE episode_id=? AND action='grade'",(row['id'],)).fetchone()[0]
+                    # An older archive must not undo a newer manual rating.
+                    if last is not None and float(review.get('updated_at',0))<last:continue
                     if review.get('episode_uuid')==row['uuid'] and review.get('grade') in ('A','B','F'):
                         self.db.execute('UPDATE episodes SET grade=? WHERE id=?',(review['grade'],row['id']))
-                except (ValueError,OSError):pass
+                except (ValueError,OSError,TypeError):pass
             self.db.commit()
 
     def safe(self,path):
@@ -222,6 +231,9 @@ class EpisodeStore:
         return dict(row) if row else None
 
     def video_directory(self,row):
+        return self.episode_directory(row)
+
+    def episode_directory(self,row):
         """Locate renamed recordings by identity, never by a guessed sequence number.
 
         This read-only index leaves collection numbering and history untouched.
@@ -236,7 +248,7 @@ class EpisodeStore:
                     if meta.is_symlink():continue
                     try:
                         value=json.loads(meta.read_text()).get(key)
-                        if value:return value
+                        if isinstance(value,str) and value:return value
                     except (OSError,ValueError,AttributeError):pass
             except ValueError:pass
             return None
@@ -255,7 +267,7 @@ class EpisodeStore:
                 if not cached or cached[0]!=stamp:
                     index={}
                     for child in folder.iterdir():
-                        if child.is_symlink() or not child.is_dir():continue
+                        if child.name.startswith('.collection-discard-') or child.is_symlink() or not child.is_dir():continue
                         uid=identity(child)
                         if uid:index.setdefault(uid,[]).append(child)
                     cached=(stamp,index);self.video_paths[str(folder)]=cached
@@ -280,7 +292,22 @@ class EpisodeStore:
             if len(matches)==1 and identity(matches[0])==row['uuid']:return self.safe(matches[0])
         raise ValueError('录像已移动或删除，采集目录及 raw_data 归档中未找到对应数据')
 
-    def list(self,session_id=None,dataset=None,active_only=False):
+    def location(self,row):
+        """Expose current location while preserving collection history and numbering."""
+        result=dict(collection_name=f"episode_{row['seq']:06d}",current_name='',current_path='',
+                    location_status='pending',location_error='',renamed=False)
+        if row['state'] in ('deleted','deleting'):
+            result['location_status']='discarded' if row['state']=='deleted' else 'discarding'
+        elif row['state']=='completed':
+            try:
+                path=self.episode_directory(row)
+                result.update(current_name=path.name,current_path=str(path),location_status='located',
+                              renamed=str(path)!=row['path'])
+            except (OSError,ValueError) as exc:
+                result.update(location_status='unavailable',location_error=str(exc))
+        return result
+
+    def list(self,session_id=None,dataset=None,active_only=False,with_locations=False):
         with self.lock:
             clauses=[];params=[]
             if session_id:clauses.append('session_id=?');params.append(session_id)
@@ -294,6 +321,7 @@ class EpisodeStore:
             value=dict(row)
             for k in ['detail','progress']:value[k]=json.loads(value[k] or '{}')
             value['name']=f"episode_{value['seq']:06d}"
+            if with_locations:value.update(self.location(value))
             result.append(value)
         return result
 
@@ -446,21 +474,68 @@ class EpisodeStore:
             row=self.db.execute('SELECT * FROM episodes WHERE id=?',(ident,)).fetchone()
             if not row or row['state']!='completed':raise ValueError('只能评价保存完成的数据')
             qc=json.loads(row['detail'] or '{}').get('timing_qc',{})
-            path=self.safe(row['path']);atomic_json(path/'review.json',{'episode_uuid':row['uuid'],'number':row['seq'],'grade':grade,'reviewed':True,'updated_at':time.time(),'timing_qc':qc})
+            # Collection history keeps its original path and sequence after QC
+            # renames/archives a batch. Resolve the same UUID used by playback.
+            path=self.episode_directory(row)
+            review_path=path/'review.json'
+            if review_path.is_symlink():raise ValueError('评级文件路径无效')
+            review=json.loads(review_path.read_text()) if review_path.exists() else {}
+            if not isinstance(review,dict):raise ValueError('评级文件格式无效')
+            review.update(episode_uuid=row['uuid'],number=row['seq'],grade=grade,
+                          reviewed=True,updated_at=time.time(),timing_qc=qc)
+            atomic_json(review_path,review)
             self.db.execute('UPDATE episodes SET grade=? WHERE id=?',(grade,ident));self.db.execute('INSERT INTO audit(at,episode_id,action,detail) VALUES(?,?,?,?)',(time.time(),ident,'grade',grade));self.db.commit()
 
     def delete(self,ident):
         with self.lock:
             row=self.db.execute('SELECT * FROM episodes WHERE id=?',(ident,)).fetchone()
             if not row or row['state'] not in ('completed','deleting'):raise ValueError('只能放弃已保存的数据')
-            path=self.safe(row['path'])
-            self.db.execute("UPDATE episodes SET state='deleting' WHERE id=?",(ident,));self.db.commit()
+            pending=self.db.execute('SELECT intent FROM pending_deletions WHERE episode_id=?',(ident,)).fetchone()
+            if pending:intent=json.loads(pending['intent'])
+            else:
+                path=self.episode_directory(row);stat=path.stat()
+                intent={'source':str(path),'trash':str(path.with_name('.collection-discard-'+uuid.uuid4().hex)),
+                        'device':stat.st_dev,'inode':stat.st_ino,'quarantined':False}
+                with self.db:
+                    self.db.execute('INSERT INTO pending_deletions VALUES(?,?)',(ident,json.dumps(intent)))
+                    self.db.execute("UPDATE episodes SET state='deleting' WHERE id=?",(ident,))
             try:
-                if path.exists():shutil.rmtree(path)
-            except OSError:
-                # Deleting remains durable and recoverable; never claim success on partial removal.
+                self._complete_delete(row,intent)
+            except (OSError,ValueError) as exc:
+                detail=json.loads(row['detail'] or '{}');detail['delete_error']=str(exc)
+                self.db.execute('UPDATE episodes SET detail=? WHERE id=?',(json.dumps(detail,ensure_ascii=False),ident));self.db.commit()
                 raise
-            self.db.execute("UPDATE episodes SET state='deleted' WHERE id=?",(ident,));self.db.execute('INSERT INTO audit(at,episode_id,action,detail) VALUES(?,?,?,?)',(time.time(),ident,'delete',row['path']));self.db.commit()
+
+    def _complete_delete(self,row,intent):
+        """Journal the approved directory, then rename before removal.
+
+        A crash or partial rmtree can resume without metadata and without ever
+        deleting a different recording that has reused the original pathname.
+        """
+        ident=row['id'];source=self.safe(intent['source']);trash=self.safe(intent['trash'])
+        if trash.parent!=source.parent or not trash.name.startswith('.collection-discard-'):
+            raise ValueError('删除恢复目录无效')
+        def same_directory(path):
+            stat=path.stat()
+            if (stat.st_dev,stat.st_ino)!=(intent['device'],intent['inode']):
+                raise ValueError('删除目标已被其他目录替换，未删除任何替代数据')
+        if not trash.exists() and not intent['quarantined']:
+            # Still intact before quarantine: verify UUID again as well as inode.
+            source=self.episode_directory(row)
+            same_directory(source)
+            if source.parent!=trash.parent:raise ValueError('删除目标已跨目录移动，请先检查数据位置')
+            source.rename(trash)
+        if trash.exists():
+            same_directory(trash)
+            if not intent['quarantined']:
+                intent['quarantined']=True
+                self.db.execute('UPDATE pending_deletions SET intent=? WHERE episode_id=?',(json.dumps(intent),ident));self.db.commit()
+            shutil.rmtree(trash)
+        detail=json.loads(row['detail'] or '{}');detail.pop('delete_error',None)
+        with self.db:
+            self.db.execute("UPDATE episodes SET state='deleted',detail=? WHERE id=?",(json.dumps(detail,ensure_ascii=False),ident))
+            self.db.execute('DELETE FROM pending_deletions WHERE episode_id=?',(ident,))
+            self.db.execute('INSERT INTO audit(at,episode_id,action,detail) VALUES(?,?,?,?)',(time.time(),ident,'delete',json.dumps(intent)))
 
     def close(self):
         with self.lock:self.db.close()

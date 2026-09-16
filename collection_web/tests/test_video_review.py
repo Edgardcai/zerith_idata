@@ -50,6 +50,36 @@ class VideoReviewTests(unittest.TestCase):
         self.assertEqual(self.request(f"/api/video/{row['id']}/head")[0],200)
         self.assertEqual(self.app.store.list()[0],row)
 
+    def test_location_api_tracks_renames_and_reused_old_name(self):
+        dataset,row,original=self.recording()
+        actual=dataset/'episode255';original.rename(actual)
+        original.mkdir();(original/'review.json').write_text(json.dumps({'episode_uuid':'different-record'}))
+        located=json.loads(self.request('/api/episodes?dataset='+str(dataset))[1])['episodes'][0]
+        self.assertEqual((located['seq'],located['name'],located['path']),(row['seq'],row['name'],row['path']))
+        self.assertEqual((located['current_name'],located['current_path'],located['renamed']),('episode255',str(actual),True))
+        actual.rename(dataset/'episode300')
+        location=json.loads(self.request(f"/api/episode-location/{row['id']}")[1])
+        self.assertEqual(location['current_name'],'episode300')
+        self.assertEqual(self.app.store.list()[0],row)
+
+    def test_location_api_distinguishes_discard_and_missing(self):
+        dataset,row,original=self.recording()
+        actual=dataset/'episode255';original.rename(actual)
+        self.app.store.delete(row['id'])
+        location=json.loads(self.request(f"/api/episode-location/{row['id']}")[1])
+        self.assertEqual(location['location_status'],'discarded')
+        self.assertEqual(location['current_path'],'')
+        self.assertEqual(self.request(f"/api/video/{row['id']}/head")[0],400)
+
+    def test_location_api_refuses_ambiguous_identity(self):
+        dataset,row,original=self.recording();original.rename(dataset/'episode255')
+        duplicate=dataset/'episode256';duplicate.mkdir()
+        (duplicate/'review.json').write_text(json.dumps({'episode_uuid':row['uuid']}))
+        location=json.loads(self.request(f"/api/episode-location/{row['id']}")[1])
+        self.assertEqual(location['location_status'],'unavailable')
+        self.assertIn('相同标识',location['location_error'])
+        self.assertEqual(location['current_path'],'')
+
     def test_preserved_archive_preferred_to_scene_copy(self):
         import shutil
         dataset,row,original=self.recording()
@@ -66,6 +96,36 @@ class VideoReviewTests(unittest.TestCase):
         self.assertIn('error',streams['head']);self.assertIn('url',streams['left'])
         head.symlink_to(original/'videos/rs/cam_left_wrist.mp4')
         self.assertEqual(self.request(f"/api/video/{row['id']}/head")[0],400)
+
+    def test_rate_renamed_episode_updates_real_file_without_changing_number(self):
+        dataset,row,original=self.recording();renamed=dataset/'episode99';original.rename(renamed)
+        metadata=renamed/'review.json';review=json.loads(metadata.read_text());review['annotation']='preserve';metadata.write_text(json.dumps(review))
+        # Reused old directory belongs to a different episode.
+        original.mkdir();wrong=original/'review.json';wrong.write_text(json.dumps({'episode_uuid':'b'*32,'grade':'A'}))
+        for grade in ('B','F','A'):
+            self.assertEqual(self.request('/api/episode/rate',{'id':row['id'],'grade':grade})[0],200)
+            saved=json.loads(metadata.read_text())
+            self.assertEqual((saved['grade'],saved['number'],saved['episode_uuid'],saved['annotation']),(grade,row['seq'],row['uuid'],'preserve'))
+            current=self.app.store.list()[0]
+            self.assertEqual((current['grade'],current['path'],current['seq']),(grade,row['path'],row['seq']))
+            self.assertEqual(json.loads(wrong.read_text())['grade'],'A')
+
+    def test_rate_archived_episode_persists_after_reopening_store(self):
+        from episodes import EpisodeStore
+        dataset,row,original=self.recording()
+        archive=self.root/'raw_data'/dataset.name;archive.parent.mkdir();dataset.rename(archive)
+        self.assertEqual(self.request('/api/episode/rate',{'id':row['id'],'grade':'F'})[0],200)
+        self.assertEqual(json.loads((archive/original.name/'review.json').read_text())['grade'],'F')
+        reopened=EpisodeStore(self.app.runtime,self.root)
+        try:self.assertEqual(reopened.list()[0]['grade'],'F')
+        finally:reopened.close()
+
+    def test_failed_rating_write_does_not_change_database_grade(self):
+        from unittest.mock import patch
+        _,row,_=self.recording()
+        with patch('episodes.atomic_json',side_effect=OSError('disk write failed')):
+            self.assertEqual(self.request('/api/episode/rate',{'id':row['id'],'grade':'F'})[0],500)
+        self.assertEqual(self.app.store.list()[0]['grade'],row['grade'])
 
     def test_ranges_head_cache_and_three_concurrent_downloads(self):
         _,row,original=self.recording();data=bytes(range(256))*1024

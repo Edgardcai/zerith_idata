@@ -74,7 +74,7 @@ const reviewPlayer=(()=>{
    }
    update();message(items.some(i=>i.error)?'部分录像不可用，见对应画面提示。':'正在加载三路录像，准备好后点击三路播放');
    timer=setInterval(tick,150);
-   deadline=setTimeout(()=>{if(gen!==generation)return;for(const i of items)if(!i.error&&i.video.readyState<2)fail(i,'录像加载超时，请重新加载');},30000);
+   deadline=setTimeout(()=>{if(gen!==generation)return;for(const i of items)if(!i.error&&!i.video.ended&&i.video.readyState<3)fail(i,'录像加载超时，请重新加载');},30000);
   }catch(error){if(gen===generation){items.forEach(i=>i.error=error.name==='AbortError'?'加载超时，请重新加载':error.message);update();message('录像加载失败，请重新加载');}}
   finally{clearTimeout(fetchTimeout);}
  }
