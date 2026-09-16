@@ -2,7 +2,7 @@
     let gradeSaving=false,reportFilter='all',reportDataset='';
     function qualityReportSummary(item){
       const p=item.qc_presentation||{},count=p.problem_count||0;
-      return `<span class="qc-row-summary">${escapeHtml(p.summary||item.quality_description||'尚无质检报告')}</span><button type="button" class="qc-report-launch" data-problems="${count>0}" data-qc-episode="${escapeHtml(item.episode_id)}">${count?`查看全部 ${count} 项问题`:'查看全部检查'}</button>${qualityNoteControl(item)}`;
+      return `<div class="qc-summary-line"><span class="qc-row-summary">${escapeHtml(p.summary||item.quality_description||'尚无质检报告')}</span><button type="button" class="qc-report-launch" data-problems="${count>0}" data-qc-episode="${escapeHtml(item.episode_id)}">${count?`查看全部 ${count} 项问题`:'查看全部检查'}</button></div>${qualityNoteSummary(item)}`;
     }
     async function openQcFrame(item,frame){
       try{
@@ -47,10 +47,10 @@
       const options=['','A','B','C','F'].map(g=>`<option value="${g}" ${g===grade?'selected':''}>${g||'请选择'}</option>`).join('');
       return `<div class="grade-editor"><select class="quality-grade-select" data-episode="${escapeHtml(id)}" data-root="${escapeHtml(key)}" aria-label="${escapeHtml(id)} 人工等级">${options}</select><button type="button" class="grade-save" data-episode="${escapeHtml(id)}" ${gradeSaving?'disabled':''}>保存</button><small role="status">${escapeHtml(gradeFeedback.get(key)||'')}</small></div>`;
     }
-    function qualityNoteControl(item){
-      const key=item.episode_dir||item.episode_id,draft=gradeDrafts.get(key),grade=draft?.grade||item.manual_quality_grade||item.quality_grade;
-      const note=draft?.note??item.manual_note??'',problem=draft?.problem??item.manual_problem??'';
-      return `<div class="manual-note-editor" ${!['B','F'].includes(grade)&&!note&&!problem?'hidden':''}><select class="manual-problem" aria-label="问题类型（可选）">${['','视觉异常','动作异常','时序异常','标注问题','其他'].map(v=>`<option value="${v}" ${v===problem?'selected':''}>${v||'问题类型（可选）'}</option>`).join('')}</select><textarea class="manual-note" maxlength="2000" rows="2" placeholder="原因备注（可选，空白也可保存）" aria-label="原因备注（可选）">${escapeHtml(note)}</textarea></div>`;
+    function qualityNoteSummary(item){
+      const note=String(item.manual_note||'').trim(),problem=String(item.manual_problem||'').trim();
+      if(!note&&!problem)return '';
+      return `<div class="manual-note-summary" aria-label="HDF5 人工问题记录">${problem?`<span class="manual-problem-tag">${escapeHtml(problem)}</span>`:''}${note?`<span class="manual-note-text" title="${escapeHtml(note)}">人工备注：${escapeHtml(note)}</span>`:''}</div>`;
     }
     function applyGradeUpdate(result){
       const updates=new Map(result.updated_rows.map(r=>[r.episode_dir,r]));
@@ -70,11 +70,11 @@
       gradeSaving=true;select.nextElementSibling.disabled=true;
       latestStatusRequestId++;statusAbortController?.abort();
       const key=select.dataset.root,previous=item.quality_grade||'未记录',dataset=fieldValue('hdf5Root'),grade=select.value;
-      const row=select.closest('tr'),draft=gradeDrafts.get(key);
-      const controls=[select,...row.querySelectorAll('.manual-note,.manual-problem')];controls.forEach(c=>c.disabled=true);
+      const draft=gradeDrafts.get(key);
+      const controls=[select];controls.forEach(c=>c.disabled=true);
       select.parentElement.querySelector('small').textContent='保存中…';
       try {
-        const result=await postJson('/api/grade-choices',payload({source:'manual',episodes:[{episode_name:item.episode_id,grade,revision:draft?.revision||item.grade_revision,note:row.querySelector('.manual-note')?.value||'',problem:row.querySelector('.manual-problem')?.value||''}]}));
+        const result=await postJson('/api/grade-choices',payload({source:'manual',episodes:[{episode_name:item.episode_id,grade,revision:draft?.revision||item.grade_revision}]}));
         gradeFeedback.set(key,`${previous} → ${grade}，已保存`);gradeDrafts.delete(key);
         gradeSaving=false;
         if(fieldValue('hdf5Root')===dataset)applyGradeUpdate(result);
@@ -94,9 +94,7 @@
         finally{button.disabled=false}
       });
       document.querySelectorAll('.quality-grade-select').forEach(select=>{
-        const row=select.closest('tr');
-        const changed=()=>{const item=latestEpisodes.find(r=>r.episode_id===select.dataset.episode),old=gradeDrafts.get(select.dataset.root);gradeDrafts.set(select.dataset.root,{grade:select.value,revision:old?.revision||item.grade_revision,note:row.querySelector('.manual-note')?.value||'',problem:row.querySelector('.manual-problem')?.value||''});select.parentElement.querySelector('small').textContent='未保存';row.querySelector('.manual-note-editor').hidden=!['B','F'].includes(select.value)&&!row.querySelector('.manual-note').value&&!row.querySelector('.manual-problem').value};
-        select.onchange=changed;row.querySelector('.manual-note').oninput=changed;row.querySelector('.manual-problem').onchange=changed;
+        select.onchange=()=>{const item=latestEpisodes.find(r=>r.episode_id===select.dataset.episode),old=gradeDrafts.get(select.dataset.root);gradeDrafts.set(select.dataset.root,{grade:select.value,revision:old?.revision||item.grade_revision});select.parentElement.querySelector('small').textContent='未保存'};
         select.nextElementSibling.onclick=()=>saveQualityGrade(select);
       });
     }

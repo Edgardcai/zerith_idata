@@ -55,7 +55,7 @@ def integrate_layout(app):
     html=html.replace('<td>${escapeHtml(item.episode_id || "")}</td>', '<td title="${escapeHtml(item.episode_dir || "")}">目录 ${escapeHtml(item.episode_id || "")}<small class="grade-source">采集 ${escapeHtml(item.collection_episode_name || "编号未记录")}</small><small class="grade-source">${escapeHtml(item.collection_status || "")}</small></td>')
     html=re.sub(r'          <td>\$\{escapeHtml\(formatChartValue\(item.fps.*?<td>\$\{badge\(item.collection_status\)\}</td>','',html,count=1,flags=re.S)
     html=re.sub(r'          <td>\$\{escapeHtml\(String\(item.quality_description.*?<td>\$\{escapeHtml\(item.longest_stationary_display \?\? ""\)\}</td>',
-        lambda m:'''          <td class="grade-metrics">FPS ${escapeHtml(formatChartValue(item.fps,"",2,true))} · 帧数 ${escapeHtml(item.frame_count ?? '—')} · 缺帧 ${escapeHtml(cameraMissing ?? '—')} · 最长静止 ${escapeHtml(item.longest_stationary_display || '—')} · 预警 ${escapeHtml(item.warning_count ?? '—')}</td>
+        lambda m:'''          <td class="grade-metrics"><span>FPS ${escapeHtml(formatChartValue(item.fps,"",2,true))} · 帧数 ${escapeHtml(item.frame_count ?? '—')}</span><span>缺帧 ${escapeHtml(cameraMissing ?? '—')} · 静止 ${escapeHtml(item.longest_stationary_display || '—')} · 预警 ${escapeHtml(item.warning_count ?? '—')}</span></td>
           <td class="grade-notes">${qualityReportSummary(item)}</td>''',html,count=1,flags=re.S)
     html=html.replace('colspan="15"','colspan="9"')
     html=html.replace('Array.from(document.querySelectorAll(".episode-check"))', 'Array.from(document.querySelectorAll(".episode-check")).filter(input=>!input.closest("tr").hidden)')

@@ -140,6 +140,28 @@ def test_replay_reads_custom_report_root_and_shared_choices(grades):
         app.save_replay_grade(dict(root=root,grade='A',revision=before['revision']))
 
 
+def test_report_grade_only_save_preserves_replay_problem_and_note(grades):
+    app,cfg,rows=grades
+    app.dataset_status(cfg)
+    root=rows[0]['episode_dir']
+    before=app.replay_grade_snapshot(root)
+    app.save_replay_grade(dict(root=root,grade='B',revision=before['revision'],
+                               note='右腕相机遮挡',problem='视觉异常'))
+    current=app.dataset_status(cfg)
+    row=current['episodes'][0]
+    assert (row['manual_note'],row['manual_problem'])==('右腕相机遮挡','视觉异常')
+    # The compact report edits only the grade, omitting both annotation fields.
+    app.apply_grade_choices(cfg,requests(current,'F')[:1])
+    after=app.replay_grade_snapshot(root)
+    assert (after['current_grade'],after['manual_note'],after['manual_problem'])==('F','右腕相机遮挡','视觉异常')
+    with pytest.raises(ValueError,match='已更新'):
+        app.apply_grade_choices(cfg,requests(current,'A')[:1])
+    # Only an explicit clear in replay removes the read-only report annotation.
+    app.save_replay_grade(dict(root=root,grade='F',revision=after['revision'],note='',problem=''))
+    row=app.dataset_status(cfg)['episodes'][0]
+    assert row['manual_note']==row['manual_problem']==''
+
+
 def test_historical_manual_grade_is_preserved_without_fabricating_qc(grades):
     app,cfg,rows=grades
     write_json(Path(rows[0]['qc_output'])/'qc_report.json',dict(quality_grade='F',manual_review=dict(grade='F')))
@@ -185,7 +207,7 @@ def test_all_grade_conflicts_keep_human_result_across_reports(grades):
             write_json(Path(rows[0]['qc_output'])/'qc_report.json',dict(quality_grade=model,accepted=model in ('A','B'),review_required=False))
             row=app.dataset_status(cfg)['episodes'][0]
             assert (row['quality_grade'],row['qc_grade'],row['collection_grade'])==(human,model,'A')
-            assert row['grade_source']=='manual'
+    assert row['grade_source']=='manual'
 
 
 def test_new_report_drops_old_export_approval_but_preserves_grade(grades):

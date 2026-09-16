@@ -32,26 +32,50 @@
     @media(max-width:1280px){header{flex-wrap:wrap}.workspace-switch{order:3;width:100%}.workspace-btn{flex:1}#collectionWorkspace{grid-template-columns:340px minmax(0,1fr);padding:14px;gap:12px}.pie-layout{grid-template-columns:1fr}.pie-legend{padding:0 8px}}
     @media(max-width:900px){#collectionWorkspace{grid-template-columns:1fr}.workspace-switch{flex-wrap:wrap}.workspace-btn{flex:1 1 42%}}
 
-.grade-comparison{background:#f8fafc;border:1px solid #dce5f0;border-radius:12px;padding:12px;margin:10px 0}.grade-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.grade-toolbar b{margin-right:auto}#gradeChanges{margin-top:8px;max-height:100px;overflow:auto;line-height:1.8;color:#475569}.grade-changed{color:#b45309;font-weight:700;white-space:nowrap}.grade-editor{display:flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:135px}.grade-editor select{width:64px!important;min-width:64px!important}.grade-editor small{flex-basis:100%;max-width:220px;overflow-wrap:anywhere}.grade-source{display:block;color:#64748b;font-size:11px}#episodeRows td{vertical-align:top}.grade-save{padding:7px 10px}
-
-.table-wrap:has(#episodeRows) table{table-layout:fixed;width:100%;min-width:950px}.table-wrap:has(#episodeRows) th,.table-wrap:has(#episodeRows) td{padding:10px 6px;overflow-wrap:break-word}.table-wrap:has(#episodeRows) th{word-break:keep-all}.grade-metrics{font-size:11px;line-height:1.8;white-space:nowrap}.grade-notes{font-size:12px;line-height:1.65;overflow-wrap:anywhere}.grade-notes small{display:block;color:#64748b;margin-top:5px}.grade-source{word-break:keep-all}.grade-comparison #gradeChanges{font-size:12px;max-height:75px}.grade-editor{min-width:0}
-
+/* Compact report: identity and grade controls stay on one line. */
+#collectionWorkspace>.grid,#collectionWorkspace>.grid>section{min-width:0}
+#collectionWorkspace .tabs{max-width:100%}
+@media(max-width:600px){#collectionWorkspace .tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}#collectionWorkspace .tab-btn{min-width:0}}
+.table-wrap:has(#episodeRows){max-width:100%;overflow-x:auto}
+.table-wrap:has(#episodeRows) table{table-layout:auto;width:100%;min-width:1080px}
+.table-wrap:has(#episodeRows) th,.table-wrap:has(#episodeRows) td{padding:6px 8px;white-space:nowrap;vertical-align:middle;line-height:1.4}
+.table-wrap:has(#episodeRows) th{font-size:12px;word-break:keep-all}
+.table-wrap:has(#episodeRows) th:first-child{width:28px}
+.table-wrap:has(#episodeRows) td:nth-child(2){min-width:150px}
+.table-wrap:has(#episodeRows) .grade-notes{white-space:normal;min-width:260px;width:100%;max-width:520px;font-size:12px}
+.grade-source{display:inline;margin-left:5px;font-size:10px;color:#64748b;word-break:keep-all}
+.table-wrap:has(#episodeRows) td:nth-child(2) .grade-source{display:block;margin-left:0;white-space:nowrap}
+.grade-changed{color:#b45309;font-weight:700;white-space:nowrap}
+.grade-editor{display:grid;grid-template-columns:60px max-content;align-items:center;gap:3px 5px}
+.grade-editor select{width:60px;min-height:28px;padding:4px 6px;margin:0;font-size:12px}
+.grade-save{padding:4px 8px;min-height:28px;font-size:12px}
+.grade-editor small{grid-column:1 / -1;font-size:11px;max-width:160px;white-space:normal;overflow-wrap:anywhere}
+.grade-editor small:empty{display:none}
+.grade-metrics{font-size:11px;color:#475569}
+.grade-metrics>span{display:block;white-space:nowrap}
+.grade-notes .qc-summary-line{display:flex;align-items:center;gap:8px}
+.grade-notes .qc-row-summary{flex:1;min-width:100px;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;line-height:1.4}
+.grade-notes .qc-report-launch{flex-shrink:0;margin:0;min-height:28px;padding:4px 7px;font-size:11px}
+.manual-note-summary{display:flex;align-items:baseline;gap:6px;margin-top:4px;font-size:11px;color:#64748b;max-width:520px}
+.manual-problem-tag{flex-shrink:0;white-space:nowrap;border-radius:4px;padding:1px 5px;background:#fff3df;color:#965d12}
+.manual-note-text{min-width:0;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:pre-wrap}
+#episodeRows tr[hidden]{display:none}
+.grade-comparison{background:#f8fafc;border:1px solid #dce5f0;padding:10px 12px;margin:8px 0;border-radius:9px}
+.grade-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:12px}
+.grade-toolbar b{margin-right:auto}.grade-toolbar button{padding:6px 10px;font-size:12px}
+#gradeChanges{margin-top:8px;max-height:75px;overflow:auto;line-height:1.8;color:#475569;font-size:12px}
+.report-filters{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:9px;border-top:1px solid #e4eaf2;padding-top:9px;font-size:12px}
+.report-filters>span{color:#64748b;margin-right:4px}
+.report-filters button{font-size:12px;padding:5px 9px;min-height:30px;border-radius:6px}
+.report-filters button[aria-pressed="true"]{background:#e8f0ff;border-color:#8cafe8;color:#205bb7}
+.report-filters label{display:flex;align-items:center;gap:5px;margin:0;font-size:12px;white-space:nowrap}
+.report-filters select{width:86px;min-height:30px;padding:4px 6px;font-size:12px}
+.report-filters #manualProblemFilter{width:102px}
+.report-filters input{width:155px;min-width:0;max-width:180px;min-height:30px;padding:5px 7px;font-size:12px}
+.report-filters small{margin-left:auto;color:#64748b;white-space:nowrap}
 #syncHdf5GradesBtn{display:none}
-
-/* Unavailable actions are not running tasks. Only an active split shows progress. */
 #collectionWorkspace button:disabled{cursor:not-allowed}
 #collectionWorkspace #splitLerobotStagesBtn[aria-busy="true"]{cursor:progress}
-
-/* Compact report: keep measurements together and reserve width for explanations. */
-.table-wrap:has(#episodeRows) table{table-layout:auto;min-width:100%;width:100%}
-.table-wrap:has(#episodeRows) th,.table-wrap:has(#episodeRows) td{padding:7px 8px;white-space:nowrap;vertical-align:middle;line-height:1.4}
-.table-wrap:has(#episodeRows) th{font-size:12px}.grade-editor{flex-wrap:nowrap;gap:5px}.grade-editor select{min-height:30px;padding:4px 7px;margin:0}.grade-save{padding:5px 9px;min-height:30px}
-.grade-editor small:empty,.grade-notes small:empty{display:none}.grade-editor small{flex-basis:auto;max-width:none}.grade-source{display:inline;margin-left:5px;font-size:10px}
-.grade-metrics{font-size:11px}.grade-notes{width:100%;font-size:12px}.grade-notes small{display:inline;margin:0 0 0 8px;font-size:11px}
-#episodeRows tr[hidden]{display:none}.grade-comparison{padding:10px 12px;margin:8px 0;border-radius:9px}.grade-toolbar{gap:8px;font-size:12px}.grade-toolbar button{padding:6px 10px;font-size:12px}
-.report-filters{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:10px;border-top:1px solid #e4eaf2;padding-top:9px;font-size:12px}.report-filters>span{color:#64748b;margin-right:6px}.report-filters button{font-size:12px;padding:5px 11px;border-radius:6px}.report-filters button[aria-pressed="true"]{background:#e8f0ff;border-color:#8cafe8;color:#205bb7}.report-filters small{margin-left:auto;color:#64748b}
-
-.table-wrap:has(#episodeRows) .grade-notes{white-space:normal;min-width:300px;overflow-wrap:anywhere}.table-wrap:has(#episodeRows) td:nth-child(2) .grade-source{display:block;margin-left:0}
 
 /* Fit the embedded player to the space below the actual workbench header. */
 @media(min-width:1000px){
@@ -78,14 +102,3 @@
 @media(min-width:1000px) and (max-width:1450px){body.replay-mode #collectionWorkspace{grid-template-columns:250px minmax(0,1fr)}}
 
 #collectionWorkspace .lerobot-actions [data-stage="lerobot_post_qc"]{grid-column:1 / -1}
-
-.manual-note-editor{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.manual-note-editor[hidden]{display:none}.manual-note{width:100%;min-width:160px;resize:vertical}.manual-problem{max-width:160px}.report-filters{flex-wrap:wrap}.report-filters input{max-width:180px}
-
-#collectionWorkspace>.grid,#collectionWorkspace>.grid>section{min-width:0}.table-wrap:has(#episodeRows){max-width:100%}
-.table-wrap:has(#episodeRows) table{table-layout:fixed;min-width:900px}
-.table-wrap:has(#episodeRows) th:nth-child(1){width:28px}.table-wrap:has(#episodeRows) th:nth-child(2){width:86px}
-.table-wrap:has(#episodeRows) th:nth-child(3){width:58px}.table-wrap:has(#episodeRows) th:nth-child(4){width:72px}
-.table-wrap:has(#episodeRows) th:nth-child(5){width:70px}.table-wrap:has(#episodeRows) th:nth-child(6){width:64px}
-.table-wrap:has(#episodeRows) th:nth-child(7){width:116px}.table-wrap:has(#episodeRows) th:nth-child(8){width:124px}
-.table-wrap:has(#episodeRows) td{white-space:normal;overflow-wrap:anywhere}.table-wrap:has(#episodeRows) .grade-notes{min-width:0;width:auto}
-.grade-editor{flex-wrap:wrap}.grade-editor small{flex-basis:100%;max-width:100%;white-space:normal}.manual-note{min-width:0;box-sizing:border-box}.manual-problem{width:100%}
