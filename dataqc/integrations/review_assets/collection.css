@@ -17,8 +17,12 @@
     .action-card button{font-size:12px;min-height:38px;border-radius:8px;padding:8px 6px;white-space:normal;line-height:1.5}
     button.primary{background:#2868c7;border-color:#2868c7;box-shadow:none}button.primary:hover{background:#205bad}
     .action-card button.danger{background:#fff;color:#b84646;border-color:#edd8d8}
-    .stationary-threshold-control{display:flex;justify-content:space-between;align-items:center;padding:10px 0 0;margin:12px 0 0;border:0;border-top:1px solid #edf0f5;border-radius:0}
-    .stationary-threshold-control label{margin:0;font-weight:500;color:#64748b}.stationary-threshold-control select{width:105px;min-height:32px}
+    .collection-qc-options{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #edf0f5}
+    .collection-qc-options .stationary-threshold-control{display:flex;align-items:center;gap:6px;padding:0;margin:0;border:0;border-radius:0;min-width:0}
+    .collection-qc-options label{margin:0;font-weight:500;color:#64748b;white-space:nowrap}
+    .collection-qc-options select{width:66px;min-height:30px;padding:4px;font-size:12px}
+    .collection-qc-options .qc-force-control{display:flex;align-items:center;gap:5px;margin:0;font-size:12px;cursor:pointer}
+    .collection-qc-options input[type="checkbox"]{width:14px;height:14px;min-height:0;padding:0;margin:0;flex-shrink:0;accent-color:#2868c7}
     .lerobot-stage-split-control{margin:0;padding:0;border:0;display:block;background:none}
     .job-controls{display:flex;justify-content:flex-end;margin-top:10px}.job-controls button{background:transparent;border:0;font-size:11px;padding:5px 0;color:#9a6470}
     .advanced-settings{margin-top:12px;border-color:#e7ebf1}.advanced-settings summary{font-size:12px;color:#64748b}
@@ -64,13 +68,18 @@
  body.replay-mode .control-panel .section-title{margin-bottom:9px}
  body.replay-mode .control-panel .action-card{margin-top:10px;padding:10px}
  body.replay-mode .control-panel .action-card h3{margin-bottom:8px}
- body.replay-mode .control-panel .action-card button{min-height:32px;padding:5px}
+    body.replay-mode .control-panel .action-card button{min-height:32px;padding:5px}
+    body.replay-mode .collection-qc-options{gap:4px}
+    body.replay-mode .collection-qc-options label{font-size:11px}
+    body.replay-mode .collection-qc-options .stationary-threshold-control,body.replay-mode .collection-qc-options .qc-force-control{gap:3px}
+    body.replay-mode .collection-qc-options select{width:56px;padding:4px 1px;font-size:11px}
+    body.replay-mode .collection-qc-options input[type="checkbox"]{width:13px;height:13px}
 }
 @media(min-width:1000px) and (max-width:1450px){body.replay-mode #collectionWorkspace{grid-template-columns:250px minmax(0,1fr)}}
 
 #collectionWorkspace .lerobot-actions [data-stage="lerobot_post_qc"]{grid-column:1 / -1}
 
-.manual-note-editor{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.manual-note-editor[hidden]{display:none}.manual-note{width:100%;min-width:160px;resize:vertical}.manual-problem{max-width:160px}.report-filters{flex-wrap:wrap}.report-filters input{max-width:180px}.qc-force-control{display:block;margin:12px 0;font-size:12px}
+.manual-note-editor{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.manual-note-editor[hidden]{display:none}.manual-note{width:100%;min-width:160px;resize:vertical}.manual-problem{max-width:160px}.report-filters{flex-wrap:wrap}.report-filters input{max-width:180px}
 
 #collectionWorkspace>.grid,#collectionWorkspace>.grid>section{min-width:0}.table-wrap:has(#episodeRows){max-width:100%}
 .table-wrap:has(#episodeRows) table{table-layout:fixed;min-width:900px}

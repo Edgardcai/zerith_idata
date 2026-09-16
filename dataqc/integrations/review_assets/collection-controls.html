@@ -6,15 +6,16 @@
           <button class="danger" data-stage="delete">选择 episode 删除</button>
           <button id="replayBtn">HDF5 数据可视化回放</button>
         </div>
-        <label class="qc-force-control"><input id="qcForce" type="checkbox"> 全部重新质检（保留人工结果，复用有效 VLM）</label>
-        <div id="stationaryThresholdControl" class="stationary-threshold-control hidden">
-          <label for="stationaryThreshold">静止帧上限</label>
-          <select id="stationaryThreshold"><option value="20">20 帧</option><option value="40" selected>40 帧</option><option value="60">60 帧</option></select>
+        <div class="collection-qc-options">
+          <div id="stationaryThresholdControl" class="stationary-threshold-control hidden">
+            <label for="stationaryThreshold">静止帧上限</label>
+            <select id="stationaryThreshold"><option value="20">20 帧</option><option value="40" selected>40 帧</option><option value="60">60 帧</option></select>
+          </div>
+          <label class="qc-force-control" title="保留人工结果，复用有效 VLM"><input id="qcForce" type="checkbox"> 全部重新质检</label>
         </div>
       </section>
       <section class="action-card lerobot-actions" aria-labelledby="lerobotActionsTitle">
         <h3 id="lerobotActionsTitle">LeRobot 转换</h3>
-        <p class="muted">转换和切分默认不质检，支持所有等级。单条异常会跳过并列出原因。</p>
         <div class="actions">
           <button class="primary" data-stage="lerobot">直接转换 LeRobot</button>
           <div id="lerobotStageSplitControl" class="lerobot-stage-split-control hidden">
