@@ -21,10 +21,10 @@ MODEL_PATH = Path(
     os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_MODEL")
     or DEFAULT_MODEL_DIR / "model_unified_products21_v34.pt"
 ).expanduser()
-THRESHOLDS_PATH = Path(
-    os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_THRESHOLDS")
-    or DEFAULT_MODEL_DIR / "thresholds_main_v34.json"
-).expanduser()
+_thresholds_setting = os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_THRESHOLDS")
+THRESHOLDS_PATH = (None if _thresholds_setting == "" else
+                   Path(_thresholds_setting or DEFAULT_MODEL_DIR / "thresholds_main_v34.json").expanduser())
+YOLO_CONFIDENCE = float(os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_CONFIDENCE") or .25)
 YOLO_DEVICE = str(os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_DEVICE") or "0").strip()
 YOLO_IMAGE_SIZE = int(os.environ.get("PIPELINE_MANUAL_SCREENING_YOLO_IMGSZ") or 640)
 REQUIRED_MATCHES = 2
@@ -58,7 +58,11 @@ def _normalise_name(value: Any) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
 
 
-def _threshold_payload(path: Path = THRESHOLDS_PATH) -> dict[str, Any]:
+def _threshold_payload(path: Path | None = THRESHOLDS_PATH) -> dict[str, Any]:
+    if path is None:
+        if not 0 < YOLO_CONFIDENCE <= 1:
+            raise RuntimeError("YOLO 默认置信度阈值必须在 (0,1] 内")
+        return {"per_class_conf": {}, "default_confidence": YOLO_CONFIDENCE}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -68,6 +72,12 @@ def _threshold_payload(path: Path = THRESHOLDS_PATH) -> dict[str, Any]:
     thresholds = payload.get("per_class_conf")
     if not isinstance(thresholds, dict) or not thresholds:
         raise RuntimeError(f"YOLO 阈值文件缺少 per_class_conf: {path}")
+    try:
+        valid = all(0 < float(value) <= 1 for value in thresholds.values())
+    except (TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise RuntimeError(f"YOLO 类别阈值必须在 (0,1] 内: {path}")
     return payload
 
 
@@ -98,7 +108,10 @@ class YoloRuntime:
         with self._lock:
             model, threshold_payload = self._load()
             thresholds = threshold_payload["per_class_conf"]
-            minimum_confidence = min(float(value) for value in thresholds.values())
+            fallback = float(threshold_payload.get("default_confidence", YOLO_CONFIDENCE))
+            if not 0 < fallback <= 1:
+                raise RuntimeError("YOLO 默认置信度阈值必须在 (0,1] 内")
+            minimum_confidence = min([fallback] + [float(value) for value in thresholds.values()])
             started = time.monotonic()
             results = model.predict(
                 source=[str(path) for path in image_paths],
@@ -125,7 +138,7 @@ class YoloRuntime:
                 ):
                     class_id = int(class_value)
                     confidence = float(confidence_value)
-                    threshold = float(thresholds.get(str(class_id), minimum_confidence))
+                    threshold = float(thresholds.get(str(class_id), fallback))
                     if confidence < threshold:
                         continue
                     class_name = str(result.names.get(class_id, class_id))

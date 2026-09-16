@@ -10,8 +10,8 @@ os.environ.setdefault('PIPELINE_H200_MCAP_SCAN_ROOT','/data')
 os.environ.setdefault('PIPELINE_MANUAL_SCREENING_DATA_ROOT',str(RUNTIME/'exports'))
 os.environ.setdefault('PIPELINE_MANUAL_SCREENING_STORAGE_ROOT',str(RUNTIME/'manual-screening'))
 from dataqc.config import settings
-os.environ.setdefault('PIPELINE_MANUAL_SCREENING_YOLO_MODEL',settings()['yolo_path'])
-os.environ.setdefault('PIPELINE_MANUAL_SCREENING_YOLO_THRESHOLDS',str(RUNTIME/'config/yolo-thresholds.json'))
+from integrations.yolo_settings import configure_yolo_environment
+configure_yolo_environment(settings(), RUNTIME)
 import sys, threading, importlib.util
 sys.path.insert(0,str(ROOT/'vendor'))
 from contextlib import asynccontextmanager
@@ -51,7 +51,7 @@ app.mount('/auto',automatic_app)
 @app.get('/healthz')
 def health():
     from dataqc.motion import RULE_VERSION
-    return dict(ok=True,release='20260916.3',manual_policy='portable_partial_all_grades',split_policy='direct_optional_post_qc',conversion_policy='direct_optional_post_qc',directory_policy='height_check_disabled',project=str(ROOT),framework='legacy',rules=RULE_VERSION,auto='/auto/hdf5',batch_policy='motion_batch_v1',grade_workflow='persistent_manual_notes_v2',incremental_qc='completed_reports_v1',split_layout='twohands_lefthand_v1',conversion_pool='episode_pool_v1',review_ui='review_filters_v1',replay_layout='viewport_fit_v1',grade_priority='manual_qc_collection_v1',episode_identity='collection_and_directory_v1')
+    return dict(ok=True,release='20260916.4',manual_policy='portable_partial_all_grades',split_policy='direct_optional_post_qc',conversion_policy='direct_optional_post_qc',directory_policy='height_check_disabled',project=str(ROOT),framework='legacy',rules=RULE_VERSION,auto='/auto/hdf5',batch_policy='motion_batch_v1',grade_workflow='persistent_manual_notes_v2',incremental_qc='completed_reports_v1',split_layout='twohands_lefthand_v1',conversion_pool='episode_pool_v1',review_ui='review_filters_v1',replay_layout='viewport_fit_v1',grade_priority='manual_qc_collection_v1',episode_identity='collection_and_directory_v1')
 
 @app.api_route('/{path:path}',methods=['GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS'])
 async def legacy_proxy(request:Request,path:str):

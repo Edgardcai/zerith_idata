@@ -49,6 +49,14 @@ curl http://127.0.0.1:8091/auto/api/health
 `api_file` 只从指定文件读取 API 地址与密钥，不读取其他应用的登录凭据。
 开启类别识别前配置 `yolo_path`；未启用时不会因此阻断动作指标复核。
 
+### 20260916.4：截帧 YOLO 配置
+
+截帧识别与自动质检共用 `yolo_path`、`yolo_confidence`（默认 0.25）和 `device`。
+类别阈值 JSON 是可选配置：优先使用 `yolo_thresholds_path`；未设置时兼容已有的
+`runtime/config/yolo-thresholds.json`。两者都没有时直接使用全局置信度，不需要手工创建阈值文件。
+已显式指定的文件如果缺失、JSON 损坏或类别阈值不在 `(0,1]`，仍会报配置错误，避免悄悄改变已有标定参数。
+`PIPELINE_MANUAL_SCREENING_YOLO_*` 环境覆盖仍优先；配置修改后需在任务空闲时重启 Web 服务。
+
 ## H200 部署
 
 项目目录 `/srv/projects/caizj/dataqc`，监听 `9990`。该机器通过 `gpu-shell`
