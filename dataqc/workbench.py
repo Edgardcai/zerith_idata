@@ -51,7 +51,7 @@ app.mount('/auto',automatic_app)
 @app.get('/healthz')
 def health():
     from dataqc.motion import RULE_VERSION
-    return dict(ok=True,release='20260916.4',manual_policy='portable_partial_all_grades',split_policy='direct_optional_post_qc',conversion_policy='direct_optional_post_qc',directory_policy='height_check_disabled',project=str(ROOT),framework='legacy',rules=RULE_VERSION,auto='/auto/hdf5',batch_policy='motion_batch_v1',grade_workflow='persistent_manual_notes_v2',incremental_qc='completed_reports_v1',split_layout='twohands_lefthand_v1',conversion_pool='episode_pool_v1',review_ui='review_filters_v1',replay_layout='viewport_fit_v1',grade_priority='manual_qc_collection_v1',episode_identity='collection_and_directory_v1')
+    return dict(ok=True,release='20260920.1',sku_visualization='cross_directory_dropdown_24_v1',manual_policy='portable_partial_all_grades',split_policy='direct_optional_post_qc',conversion_policy='direct_optional_post_qc',directory_policy='height_check_disabled',project=str(ROOT),framework='legacy',rules=RULE_VERSION,auto='/auto/hdf5',batch_policy='motion_batch_v1',grade_workflow='persistent_manual_notes_v2',incremental_qc='completed_reports_v1',split_layout='twohands_lefthand_v1',conversion_pool='episode_pool_v1',review_ui='review_filters_v1',replay_layout='viewport_fit_v1',grade_priority='manual_qc_collection_v1',episode_identity='collection_and_directory_v1')
 
 @app.api_route('/{path:path}',methods=['GET','POST','PUT','PATCH','DELETE','HEAD','OPTIONS'])
 async def legacy_proxy(request:Request,path:str):

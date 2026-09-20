@@ -164,3 +164,5 @@ def integrate(app):
     integrate_direct_controls(app)
     from .replay_grades import integrate_grades
     integrate_grades(app)
+    from .sku_visualization import integrate_sku
+    integrate_sku(app)

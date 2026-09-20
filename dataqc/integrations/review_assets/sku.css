@@ -1,0 +1,8 @@
+body .sku-toolbar{grid-template-columns:auto minmax(180px,1fr) auto minmax(180px,260px) auto auto}
+.sku-queue{grid-column:1/-1;display:flex;align-items:center;gap:7px;min-width:0}
+.sku-queue #skuEpisode{flex:1;min-width:100px}.sku-queue #datasetPicker{max-width:270px}
+#skuSummary,#skuWarnings{grid-column:1/-1;font-size:12px;color:#bdcddd;min-width:0;overflow-wrap:anywhere}
+#skuWarnings{color:#efc47d}#skuWarnings pre{white-space:pre-wrap;max-height:120px;overflow:auto;margin:5px 0;font-size:11px}
+.sku-toolbar [hidden]{display:none!important}.sku-toolbar button:disabled{opacity:.5;cursor:default}
+@media(max-width:1050px){body .sku-toolbar{grid-template-columns:auto minmax(0,1fr) auto}.sku-toolbar #rootPath{grid-column:2/-1}.sku-toolbar #skuSelect{grid-column:2}.sku-queue{flex-wrap:wrap}.sku-queue #skuEpisode{flex-basis:50%}.sku-queue #datasetPicker{flex:1;max-width:none}}
+@media(max-width:600px){.sku-queue #skuEpisode{order:-1;flex-basis:100%;width:100%}.sku-queue #datasetPicker{order:1;flex-basis:100%}.sku-queue button{flex:1}.sku-toolbar{padding:7px}}
