@@ -8,6 +8,8 @@ from pathlib import Path
 # The test suite must never initialize the production database.
 _test_runtime = tempfile.TemporaryDirectory(prefix="dataqc-tests-")
 os.environ["DATAQC_HOME"] = _test_runtime.name
+# CLI subprocesses must not contend with the production gateway queue.
+os.environ["DATAQC_GATEWAY_LOCK"] = str(Path(_test_runtime.name) / "gateway.lock")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "vendor"))
 import re
 import threading
@@ -48,6 +50,8 @@ def local_model_server():
 
 @pytest.fixture(autouse=True)
 def local_model_credentials(tmp_path,monkeypatch,local_model_server):
+    from dataqc import gateway_queue
+    monkeypatch.setattr(gateway_queue, 'LOCK_PATH', tmp_path / 'gateway.lock')
     path=tmp_path/'api.txt'
     path.write_text(f'base_url="http://127.0.0.1:{local_model_server}/v1"\nOPENAI_API_KEY="fixture"\n')
     monkeypatch.setattr(config,'CONFIG',tmp_path/'test-settings.json')

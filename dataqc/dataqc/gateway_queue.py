@@ -2,10 +2,11 @@
 from contextlib import contextmanager
 from pathlib import Path
 import fcntl
+import os
 import time
 
 
-LOCK_PATH = Path.home() / '.cache/dataqc/vlm-gateway.lock'
+LOCK_PATH = Path(os.environ.get('DATAQC_GATEWAY_LOCK', str(Path.home() / '.cache/dataqc/vlm-gateway.lock')))
 
 
 def wait_seconds(seconds, progress, message):
