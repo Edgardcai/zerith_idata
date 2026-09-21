@@ -56,7 +56,7 @@ def integrate_collection(app):
                  'pathRows.filter(([label]) => currentMachine !== "simulation" || !label.startsWith("MCAP")).map(([label, value]) =>')
     html=html.replace('MCAP 中未发现任务文本，当前显示已有 HDF5/LeRobot task；可人工修改。','任务文本来自当前数据，可编辑。')
     checked=' checked' if settings().get('vlm_enabled',False) else ''
-    html=replace(html,'      <label>运行机器</label>',f'''      <label style="display:flex;align-items:center;gap:8px"><input id="vlmEnabled" type="checkbox"{checked} style="width:auto">类别识别（YOLO + Terra）</label>
+    html=replace(html,'      <label>运行机器</label>',f'''      <label style="display:flex;align-items:center;gap:8px"><input id="vlmEnabled" type="checkbox"{checked} style="width:auto">类别识别（YOLO + VLM）</label>
       <label>数据来源</label>''')
     html=replace(html,'        robot_type: document.getElementById("robotType").value,','        robot_type: document.getElementById("robotType").value,\n        vlm_enabled: document.getElementById("vlmEnabled").checked,')
     html=replace(html,'    function payload(extra = {}) {','''    const categoryToggle=document.getElementById("vlmEnabled");
@@ -104,6 +104,7 @@ def integrate_collection(app):
         cfg.update(vlm_enabled=enabled,api_model=current['api_model'],
                    motion_batch_size=current.get('motion_batch_size',10),
                    motion_batch_concurrency=current.get('motion_batch_concurrency',2))
+        cfg.update({k:current.get(k) for k in ('reasoning_effort','max_output_tokens','api_rate_limit_retries')})
         return cfg
     app.derive_paths=build_config
     old_qc=app.qc_command
@@ -113,7 +114,7 @@ def integrate_collection(app):
             cmd[cmd.index('--num-workers')+1]=str(max(1,min(2,int(cfg.get('convert_jobs',2)))))
             env=dict(env)
             import uuid
-            policy={k:cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force')}
+            policy={k:cfg[k] for k in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force','reasoning_effort','max_output_tokens','api_rate_limit_retries')}
             policy['qc_refresh_token']=uuid.uuid4().hex
             env['DATAQC_CATEGORY_POLICY']=json.dumps(policy)
         return cmd,cwd,env

@@ -131,7 +131,7 @@ def _batch(items, cfg, cache, progress):
         'suspected必须有对应issue和证据，前4项not_observable也要说明。后4项物理风险not_observable无需重复解释。'
         '正常时issues为空数组。不输出A/B/F。')),
         dict(type='input_text', text=json.dumps(payload, ensure_ascii=False, separators=(',', ':')))]
-    branch_cfg = cfg | dict(api_attempts=1, max_output_tokens=min(14000, 650 * len(items) + 500),
+    branch_cfg = cfg | dict(evidence_ids=sorted({key for item in items for key in item['compact']['evidence']}), api_attempts=1, max_output_tokens=min(14000, 650 * len(items) + 500),
                            vlm_token_budget=cfg.get('vlm_token_budget', 250000) * len(items))
     progress(f'批量 VLM · 本批 {len(items)} 条')
     try:
@@ -240,4 +240,13 @@ def review_many(items, cfg, cache, progress=lambda _: None):
         if blocked:
             for batch in batches[index:]:
                 for item in batch: results[item['id']] = dict(blocked)
+    # Invalid/incomplete model answers get a bounded repair pass for only the
+    # failed episodes. Successful validated episodes are never resubmitted.
+    repair_left=max(0,min(3,int(cfg.get('motion_validation_retries',2))))
+    retry_items=[item for item in pending if results.get(item['id'],{}).get('error')
+                 and not results[item['id']].get('api_unavailable')
+                 and not results[item['id']].get('retry_after')]
+    if retry_items and repair_left and not blocked:
+        progress(f'模型结果校验未完成 · 自动补查 {len(retry_items)} 条，已完成结果保留')
+        results.update(review_many(retry_items,cfg|dict(motion_validation_retries=repair_left-1),cache,progress))
     return results

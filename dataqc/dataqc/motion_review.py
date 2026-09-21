@@ -1,4 +1,4 @@
-"""Text-only Terra review of measured QC and bounded trajectory evidence."""
+"""Text-only model review of measured QC and bounded trajectory evidence."""
 import hashlib
 import json
 import time
@@ -99,8 +99,8 @@ def inspect(root,report,cfg,cache,progress=lambda _:None):
         '输出简洁中文：summary不超过80字，每项reason不超过70字。不分 A/B/F，不修改任务、阶段或删帧。') ),
         dict(type='input_text',text=json.dumps(payload,ensure_ascii=False,separators=(',',':')))]
     write_json(cache/'motion_input.json',payload)
-    progress('Terra 动作指标分析 · 仅数值与轨迹，不发送图像或视频')
-    raw=vision.call_vlm(content,MotionReview,cfg|dict(api_attempts=1,max_output_tokens=2200),cache,progress)
+    progress(cfg['api_model']+' 动作指标分析 · 仅数值与轨迹，不发送图像或视频')
+    raw=vision.call_vlm(content,MotionReview,cfg|dict(api_attempts=1,max_output_tokens=2200,evidence_ids=list(payload['evidence'])),cache,progress)
     try:result=validated_result(raw,payload,signature,cfg,time.perf_counter()-started)
     except ValueError:
         from .batch_motion import invalidate_response_cache

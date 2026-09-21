@@ -3,7 +3,9 @@
 import base64
 import hashlib
 import json
+import math
 import time
+from email.utils import parsedate_to_datetime
 from typing import Literal
 
 import cv2
@@ -11,6 +13,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from .config import api_config
+from .gateway_queue import request_slot, wait_seconds
 from .io import (
     CAMS,
     Path,
@@ -41,7 +44,7 @@ CRITERIA = [
 class RateLimited(RuntimeError):
     def __init__(self, retry_after=60):
         self.retry_after = retry_after
-        super().__init__("VLM 请求限流，等待接口恢复后自动继续")
+        super().__init__("VLM 限流重试已达上限，本次复核未完成，请稍后重试")
 
 
 class APIUnavailable(RuntimeError):
@@ -123,6 +126,54 @@ def usage_records(cache):
     return records
 
 
+def _request_vlm(url, key, payload, cfg, progress):
+    # Hold one local slot throughout retries; a transient gateway failure is
+    # pending work, never an episode result. Progress callbacks can cancel.
+    with request_slot(progress):
+        limit = cfg.get('api_rate_limit_retries')  # None: wait until recovered/cancelled.
+        retries = None if limit is None else max(0, int(limit))
+        retry = 0
+        while True:
+            progress('正在请求模型' if not retry else f'恢复检查 · 第 {retry} 次自动重试')
+            raw_delay = None
+            try:
+                with httpx.Client(timeout=httpx.Timeout(cfg['api_timeout'], connect=10), trust_env=False) as client:
+                    headers = {'Authorization': 'Bearer ' + key}
+                    response = client.post(url + ('/responses' if url.endswith('/v1') else '/v1/responses'), headers=headers, json=payload)
+                    if response.status_code == 404 and not url.endswith('/v1'):
+                        response = client.post(url + '/responses', headers=headers, json=payload)
+                try:
+                    error = response.json().get('error', {}) or {}
+                    code = str(error.get('code') or error.get('type') or '') if isinstance(error, dict) else ''
+                except (ValueError, AttributeError):
+                    code = ''
+                if code in ('insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached', 'usage_limit_reached'):
+                    raise APIUnavailable('VLM 额度不足或用量上限已达，质检未完成，请处理额度后重试')
+                transient = response.status_code in (408, 429, 500, 502, 503, 504) or code in (
+                    'gateway_concurrency_limit', 'rate_limit_exceeded', 'server_error', 'overloaded', 'temporarily_unavailable')
+                if not transient:
+                    return response
+                raw_delay = response.headers.get('retry-after')
+                reason = '网关用户并发已满' if code == 'gateway_concurrency_limit' else f'模型接口暂不可用（HTTP {response.status_code}）'
+            except httpx.TransportError:
+                # Do not expose request headers or credentials in job logs.
+                reason = '模型连接中断或超时'
+            delay = min(120, 30 * 2 ** min(retry, 2))
+            if raw_delay:
+                try:
+                    delay = float(raw_delay)
+                except ValueError:
+                    try:
+                        delay = parsedate_to_datetime(raw_delay).timestamp() - time.time()
+                    except (ValueError, TypeError, OverflowError):
+                        pass
+            delay = max(30, min(delay, 3600)) if math.isfinite(delay) else 60
+            if retries is not None and retry >= retries:
+                raise RateLimited(delay)
+            retry += 1
+            wait_seconds(delay, progress, f'{reason}，等待后自动重试 {retry}，本批仍待质检')
+
+
 def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
     url, model, key = api_config(cfg)
     if cfg.get("api_model") and model != cfg["api_model"]:
@@ -148,6 +199,22 @@ def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
         max_output_tokens=min(cfg.get("max_output_tokens", 2500), 20000 if schema.__name__ == 'BatchMotionReview' else 1200 if schema is Verification else 2500),
         reasoning={"effort": cfg.get("reasoning_effort", "none")},
     )
+    if cfg.get('evidence_ids'):
+        # Constrain reference spelling at generation time as well as validating
+        # each episode/hand's evidence afterward.
+        allowed=sorted(set(cfg['evidence_ids']))
+        def constrain(node):
+            if isinstance(node,dict):
+                refs=node.get('properties',{}).get('evidence_ids')
+                if refs is not None:refs['items']={'type':'string','enum':allowed}
+                for value in node.values():constrain(value)
+            elif isinstance(node,list):
+                for value in node:constrain(value)
+        constrain(payload['text']['format']['schema'])
+    if model == 'gpt-6-astra':
+        if payload['reasoning']['effort'] == 'none':payload['reasoning']['effort'] = 'low'
+        payload['max_output_tokens'] = max(8192, payload['max_output_tokens'])
+    Path(cache).mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True).encode()
     ).hexdigest()
@@ -162,31 +229,12 @@ def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
     attempts = cfg.get("api_attempts", 2)
     for attempt in range(attempts):
         try:
-            with httpx.Client(
-                timeout=httpx.Timeout(cfg["api_timeout"], connect=10), trust_env=False
-            ) as client:
-                r = client.post(
-                    url + ("/responses" if url.endswith("/v1") else "/v1/responses"),
-                    headers={"Authorization": "Bearer " + key},
-                    json=payload,
-                )
-                if r.status_code == 404:
-                    r = client.post(
-                        url + "/responses",
-                        headers={"Authorization": "Bearer " + key},
-                        json=payload,
-                    )
-                if r.status_code in (400, 401, 403, 404):
-                    raise APIUnavailable(f"VLM HTTP {r.status_code}：模型或接口配置不可用，已停止自动调用")
-                if r.status_code == 429:
-                    try:
-                        delay = float(r.headers.get("retry-after", "60"))
-                    except ValueError:
-                        delay = 60
-                    raise RateLimited(max(30, min(delay, 3600)))
-                if r.status_code != 200:
-                    raise RuntimeError(f"VLM HTTP {r.status_code}")
-                data = r.json()
+            r = _request_vlm(url, key, payload, cfg, progress)
+            if r.status_code in (400, 401, 403, 404):
+                raise APIUnavailable(f"VLM HTTP {r.status_code}：模型或接口配置不可用，已停止自动调用")
+            if r.status_code != 200:
+                raise RuntimeError(f"VLM HTTP {r.status_code}")
+            data = r.json()
             if data.get("usage"):
                 with (Path(cache) / "usage-ledger.jsonl").open("a") as ledger:
                     ledger.write(json.dumps(dict(model=model, request_hash=digest, usage=data["usage"], status=data.get("status"), created=time.time()), ensure_ascii=False) + "\n")

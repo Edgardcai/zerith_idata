@@ -169,10 +169,10 @@ def process_run(run):
                 if visual.get('pipeline') == 'yolo_first':
                     data['yolo_report'] = visual['yolo']
                 decision = visual_decision(visual, report)
-                if visual.get('errors') and decision['grade'] != 'F':
+                if visual.get('errors'):
                     if visual.get('api_unavailable'):raise APIUnavailable(decision['reason'])
                     if visual.get('retry_after'):raise RateLimited(visual['retry_after'])
-                    db.update('episodes',eid,status='incomplete',grade='B',reason=decision['reason'],data=data)
+                    db.update('episodes',eid,status='incomplete',grade=manual_grade(data,None),reason=decision['reason'],data=data)
                     continue
                 if run["mode"] == "manual":
                     db.update(
@@ -302,15 +302,13 @@ def process_run(run):
             attempts = data.get("auto_retry_count", 0) + 1
             data.update(
                 auto_retry_count=attempts,
-                retry_at=time.time() + exc.retry_after * attempts,
+                retry_at=time.time() + min(3600, exc.retry_after * min(attempts, 10)),
             )
             db.update(
                 "episodes",
                 eid,
-                status="retry_wait" if attempts <= 3 else "incomplete",
-                reason=str(exc)
-                if attempts <= 3
-                else "接口持续限流，自动重试已达 3 次，可稍后手动重试",
+                status="retry_wait",
+                reason="接口限流，等待后自动继续，未完成质检",
                 data=data,
             )
         except Exception as exc:
@@ -319,6 +317,15 @@ def process_run(run):
             )
             with open(work / "errors.log", "a") as log:
                 log.write(traceback.format_exc() + "\n")
+    entries = db.episodes(rid)
+    pending = [e for e in entries if e['status'] not in ('ready', 'rejected')]
+    if pending:
+        waiting = sum(e['status'] == 'retry_wait' for e in pending)
+        db.update('runs', rid, status='retry_wait' if waiting else 'needs_review',
+                  phase=f"未完成 · 已完成 {len(entries)-len(pending)}/{len(entries)} 条，待处理 {len(pending)} 条；整组完成后才导出",
+                  exports=[], updated=time.time())
+        write_json(work/'report.json', dict(run=db.get_run(rid), episodes=entries))
+        return
     progress("汇总等级，转换已通过记录")
     entries = db.episodes(rid)
     exports = []

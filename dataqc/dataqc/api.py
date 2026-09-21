@@ -76,10 +76,10 @@ class Settings(Strict):
     yolo_frame_offset: int = Field(default=40, ge=1, le=120)
     yolo_confidence: float = Field(default=.25, ge=.01, le=1)
     yolo_thresholds_path: str = ''
-    api_model: Literal["gpt-5.6-terra"] = "gpt-5.6-terra"
+    api_model: Literal["gpt-6-astra", "gpt-5.6-terra"] = "gpt-6-astra"
     vlm_enabled: StrictBool = False
     vlm_token_budget: int = Field(default=250000, ge=10000, le=500000)
-    max_output_tokens: int = Field(default=2500, ge=500, le=5000)
+    max_output_tokens: int = Field(default=8192, ge=500, le=20000)
     stationary_frames: Literal[20, 40, 60] = 40
     yolo_path: str
     vlm_fps: float = Field(default=2, ge=1, le=10)

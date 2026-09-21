@@ -139,7 +139,7 @@ def main() -> int:
     )
     result = _apply_manual_failure_override(result, episode_inputs[0], out_path, manual)
     print(json.dumps(result, ensure_ascii=False))
-    return 0
+    return 0 if result.get("ok") else 1
 
 
 def _profile_with_cli_overrides(profile: Any, args: argparse.Namespace) -> Any:
@@ -209,7 +209,8 @@ def _process_episode(
     quality_issues = _quality_issue_summary(qc_report)
     delete_status = _delete_status_from_qc(qc_report)
     result = {
-        "ok": True,
+        "ok": qc_report.get("execution") != "incomplete",
+        "execution": qc_report.get("execution", "completed"),
         "episode_id": episode.episode_id,
         "profile_id": profile.profile_id,
         "input": str(episode_input),
@@ -226,6 +227,8 @@ def _process_episode(
         "artifacts": artifacts,
         "output": str(out_dir),
     }
+    if not result["ok"]:
+        result.update(delete_status="未完成",error="质检未完成："+qc_report.get("reason",quality_issues))
     remember_cli(episode_input,profile,args,result)
     return result
 

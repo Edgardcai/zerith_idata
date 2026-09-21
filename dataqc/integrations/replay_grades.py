@@ -66,7 +66,10 @@ def integrate_grades(app):
             if measured_fps is not None:row['fps']=measured_fps
             # Reports produced before this workflow may already contain an old manual edit.
             baseline=report.get('qc_original') or (report if not report.get('manual_review') else {})
+            incomplete=report.get('execution')=='incomplete'
             qc=baseline.get('quality_grade') or ('B' if baseline.get('review_required') else 'F' if row.get('qc_ok') is False else '')
+            if incomplete:qc=''
+            row['qc_execution']='incomplete' if incomplete else report.get('execution','completed' if report else '')
             token=hashlib.sha256(json.dumps([str(report_path),report_path.stat().st_mtime_ns if report_path and report_path.is_file() else 0,row.get('qc_ok')],sort_keys=True).encode()).hexdigest()
             choice=choices.get(key,{})
             # Migrate explicit legacy choices before comparing the report token;
@@ -88,7 +91,7 @@ def integrate_grades(app):
             effective=manual or qc or original['grade']
             revision=hashlib.sha256(json.dumps([key,token,original,choice],sort_keys=True).encode()).hexdigest()
             row.update(collection_grade=original['grade'],collection_grade_source=original['source'],
-                       qc_grade=qc,qc_reason=baseline.get('reason',''),qc_grade_label=qc or ('历史结论未保留' if report.get('manual_review') and not baseline else '待复核' if baseline.get('review_required') else '待质检'),quality_grade=effective,
+                       qc_grade=qc,qc_reason=baseline.get('reason',''),qc_grade_label='未完成' if incomplete else qc or ('历史结论未保留' if report.get('manual_review') and not baseline else '待复核' if baseline.get('review_required') else '待质检'),quality_grade=effective,
                        manual_quality_grade=choice.get('grade','') if choice.get('source')=='manual' else '',
                        manual_note=choice.get('note',''),manual_problem=choice.get('problem',''),
                        grade_source='manual' if manual else 'qc' if qc else 'collection',
@@ -112,7 +115,8 @@ def integrate_grades(app):
         if changed:write_json(path,saved)
         status.setdefault('qc_overview',{})['quality_grade_counts']=app.qc_overview_quality_grade_counts(status.get('episodes',[]))
         status['grade_comparison']=dict(changes=changes,changed_count=len(changes),missing_collection_count=missing,
-                                        reviewed_count=sum(bool(r.get('qc_output')) or r.get('qc_ok') is False for r in status.get('episodes',[])),
+                                        reviewed_count=sum((bool(r.get('qc_output')) or r.get('qc_ok') is False) and r.get('qc_execution')!='incomplete' for r in status.get('episodes',[])),
+                                        incomplete_count=sum(r.get('qc_execution')=='incomplete' for r in status.get('episodes',[])),
                                         pending_count=sum(bool(r.get('review_pending')) for r in status.get('episodes',[])))
         status['grade_busy']=busy(cfg)
         return status

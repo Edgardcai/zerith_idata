@@ -151,7 +151,7 @@ def test_terra_payload_and_403_does_not_retry(tmp_path,monkeypatch):
         calls.append(json.loads(request.content));return httpx.Response(403,json={'error':'forbidden'})
     original=httpx.Client
     monkeypatch.setattr(vision.httpx,'Client',lambda **kwargs:original(transport=httpx.MockTransport(handle)))
-    cfg=config.settings()
+    cfg=config.settings()|dict(api_model='gpt-5.6-terra',reasoning_effort='none')
     with pytest.raises(vision.APIUnavailable):vision.call_vlm([{'type':'input_text','text':'test'}],vision.Window,cfg,tmp_path)
     assert len(calls)==1 and calls[0]['model']=='gpt-5.6-terra'
     assert calls[0]['reasoning']['effort']=='none'
@@ -190,7 +190,7 @@ def test_offline_refresh_keeps_pause_and_never_calls_vlm(client,source,tmp_path,
     db.update('episodes',e['id'],grade='F',status='rejected',reason='old gaps rule')
     counts=maintenance.refresh_paused_run(rid)
     assert counts['B']==1 and counts['F']==0
-    assert db.get_run(rid)['status']=='paused' and db.get_run(rid)['config']['api_model']=='gpt-5.6-terra'
+    assert db.get_run(rid)['status']=='paused' and db.get_run(rid)['config']['api_model']==config.settings()['api_model']
     new=db.episode(e['id']);assert new['grade']=='B' and new['status']=='queued' and new['revision']==1
     assert new['data']['raw_report']['version']==maintenance.RULE_VERSION
     db.update('runs',rid,status='running')

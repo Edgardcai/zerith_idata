@@ -166,7 +166,7 @@ def review_warnings(root, gate, cfg, cache, evidence, progress, all_hands=False)
                     content.extend(vision.image_content(root, *key, evidence))
                     sent.add(key)
     progress(f"类别双检 · {cfg['api_model']} 定点复核 {len(warned)} 只手 / {len(sent)} 张图")
-    result = vision.call_vlm(content, MatchingReview, cfg | dict(api_attempts=1, max_output_tokens=1200), cache, progress)
+    result = vision.call_vlm(content, MatchingReview, cfg | dict(api_attempts=1, max_output_tokens=1200, evidence_ids=list(evidence)), cache, progress)
     result=MatchingReview.model_validate(result).model_dump()
     expected_hands = sorted(h['hand'] for h in warned)
     if sorted(h['hand'] for h in result['hands']) != expected_hands:

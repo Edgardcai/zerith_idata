@@ -20,6 +20,7 @@ def completed_report(cache,cfg):
     if cfg.get('qc_force'):return None
     report=read_json(Path(cache)/'manual_report.json')
     if not report or report.get('inspection_policy')!=policy(cfg):return None
+    if report.get('execution')=='incomplete':return None
     visual=report.get('visual') or {}
     if visual.get('errors') or visual.get('error'):return None
     if not report.get('raw_report'):return None

@@ -36,6 +36,12 @@ def display_report(report):
     out = copy.deepcopy(report)
     raw = out.get('raw_report')
     if not raw: return out
+    visual=out.get('visual') or {}
+    if out.get('execution')=='incomplete' or visual.get('errors') or visual.get('error'):
+        out['execution']='incomplete'
+        if not out.get('manual_review'):out.update(quality_grade='',accepted=False,review_required=True)
+        if out.get('qc_original'):out['qc_original'].update(quality_grade='',accepted=False,review_required=True)
+        return out
     current = normalize_raw(raw)
     out['raw_report'] = current
     keys = {c.get('key') for c in current['checks']}

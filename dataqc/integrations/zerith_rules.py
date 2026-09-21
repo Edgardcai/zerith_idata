@@ -49,7 +49,7 @@ def settings_for_profile(profile):
     cfg=config.settings()
     # Freeze each collection job's switch/model across all subprocess workers.
     policy=json.loads(os.environ.get('DATAQC_CATEGORY_POLICY','{}'))
-    for key in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force','qc_refresh_token'):
+    for key in ('vlm_enabled','api_model','motion_batch_size','motion_batch_concurrency','qc_force','qc_refresh_token','reasoning_effort','max_output_tokens','api_rate_limit_retries'):
         if key in policy:
             cfg[key]=policy[key]
     if type(cfg.get('vlm_enabled',True)) is not bool:
@@ -110,7 +110,9 @@ def run_manual_checks(episode,profile):
                 quality_grade=display_grade,review_required=grade=='REVIEW',reason=decision['reason'],rules_version=RULE_VERSION,
                 raw_report=raw,visual=visual,decision=decision,source_fingerprint=fingerprint(root),cache=str(cache))
     result['inspection_policy']=policy(cfg)
-    result['execution']='completed'
+    incomplete=bool(visual.get('errors') or visual.get('error')) or visual.get('motion_review',{}).get('status')=='incomplete' or visual.get('category_review',{}).get('status')=='incomplete'
+    result['execution']='incomplete' if incomplete else 'completed'
+    if incomplete:result.update(quality_grade='',accepted=False,review_required=True)
     result['qc_original']={key:result[key] for key in ('quality_grade','accepted','review_required','reason','decision')}
     from dataqc.reporting import presentation
     result['presentation']=presentation(result)

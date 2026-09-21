@@ -143,14 +143,14 @@ def presentation(report):
                 ch=next((c.get('detail',{}).get('channels',{}) for c in checks if c.get('key')=='gripper_sequence'),{})
                 reason='；'.join(f"{'左' if h=='left' else '右'}爪指令闭合{len(v.get('action_close_frames',[]))}次，要求{v.get('expected_closures')}次" for h,v in ch.items()) or reason
             elif criterion=='阶段完成情况':reason='已记录阶段覆盖完整、操作顺序符合任务；不代表实际物理任务成功'
-        add('motion_vlm',criterion,status,reason,frames,source='Terra · 数值与采样轨迹')
+        add('motion_vlm',criterion,status,reason,frames,source=(motion.get('model') or visual.get('model') or 'VLM')+' · 数值与采样轨迹')
     cat=visual.get('category_review') or {};gate=cat.get('yolo') or visual.get('yolo') or {}
     for hand in gate.get('hands',[]):
         add('yolo','YOLO · '+('左手' if hand.get('hand')=='left' else '右手'),'pass' if hand.get('status')=='pass' else 'review',hand.get('reason',''),
             [m['frame'] for m in hand.get('moments',[])],standard='每操作手≥2/3时刻匹配',source='YOLO')
     for hand in cat.get('hands',[]):
         refs=hand.get('evidence_ids',[]);frames=[int(e.rsplit(':',1)[1]) for e in refs if re.search(r':\d+$',e)]
-        add('category','类别复核 · '+('左手' if hand.get('hand')=='left' else '右手'),{'pass':'pass','fail':'review'}.get(hand.get('status'),'review'),hand.get('reason',''),frames,source='Terra · 定点图像')
+        add('category','类别复核 · '+('左手' if hand.get('hand')=='left' else '右手'),{'pass':'pass','fail':'review'}.get(hand.get('status'),'review'),hand.get('reason',''),frames,source=(visual.get('model') or 'VLM')+' · 定点图像')
     if cat.get('status')=='skipped':add('category','类别识别','na','未启用YOLO与图像类别复核；不影响独立动作指标复核')
     for branch,error in visual.get('errors',{}).items():add(branch,'动作复核' if branch=='motion' else '类别复核','review','执行未完成：'+str(error).replace('视觉检查未完成：','模型请求未完成：'),source='执行状态')
     if visual.get('error'):add('analysis','模型复核','review','执行未完成：'+str(visual['error']).replace('视觉检查未完成：','模型请求未完成：'),source='执行状态')

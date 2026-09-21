@@ -101,7 +101,7 @@
     function renderGradeComparison(data){
       applyReportFilter();
       const summary=data.grade_comparison||{},changes=summary.changes||[];
-      document.getElementById('gradeComparisonSummary').textContent=`已质检 ${summary.reviewed_count||0} 条 · 等级变化 ${changes.length} 条`+(summary.pending_count?` · 待复核 ${summary.pending_count} 条`:'')+(summary.missing_collection_count?` · 采集等级未记录 ${summary.missing_collection_count} 条`:'');
+      document.getElementById('gradeComparisonSummary').textContent=`已质检 ${summary.reviewed_count||0} 条 · 等级变化 ${changes.length} 条`+(summary.incomplete_count?` · 未完成 ${summary.incomplete_count} 条`:'')+(summary.pending_count?` · 待复核 ${summary.pending_count} 条`:'')+(summary.missing_collection_count?` · 采集等级未记录 ${summary.missing_collection_count} 条`:'');
       document.querySelectorAll('[data-grade-source]').forEach(b=>b.disabled=gradeSaving||data.grade_busy||!data.episodes?.length);
       document.querySelectorAll('.grade-save').forEach(b=>b.disabled=gradeSaving||data.grade_busy);
     }

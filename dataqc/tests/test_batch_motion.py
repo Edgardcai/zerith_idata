@@ -71,7 +71,7 @@ def test_21_episodes_three_calls_two_concurrent_after_all_numeric(moving_source,
     measured=set();calls=[];active=0;maximum=0;lock=threading.Lock()
     def measure(self,root,*args):
         measured.add(str(root));return copy.deepcopy(items[0]['report'])
-    monkeypatch.setattr(ZerithAdapter,'check',measure)
+    monkeypatch.setattr(worker.get_adapter(),'check',lambda root,*args:measure(None,root,*args))
     def call(content,schema,*args):
         nonlocal active,maximum
         assert schema.__name__=='BatchMotionReview'
@@ -112,7 +112,7 @@ def test_partial_failure_only_retries_failed_episode_and_caches_success(moving_s
         return r
     monkeypatch.setattr(vision,'call_vlm',call)
     first=batch_motion.review_many(items,cfg,tmp_path/'batch')
-    assert sum('result' in r for r in first.values())==2
+    assert all('result' in r for r in first.values()) and calls==[3,1]
     second=batch_motion.review_many(items,cfg,tmp_path/'batch')
     assert all('result' in r for r in second.values()) and calls==[3,1]
     progress=[]
