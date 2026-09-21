@@ -47,9 +47,23 @@ def display_report(report):
     keys = {c.get('key') for c in current['checks']}
     baseline = dict(out.get('qc_original') or (out if not out.get('manual_review') else {}))
     if baseline and {'state', 'action', 'finite'} <= keys and not current['hard_fail']:
-        if baseline.get('quality_grade') == 'F' or baseline.get('review_required'):
+        if baseline.get('quality_grade') == 'F':
+            # Only migrate an old F. A current B's reason is evidence, not a
+            # placeholder to overwrite just because it still needs review.
+            retired = []
+            current_by_key = {c.get('key'): c for c in current['checks']}
+            for check in raw.get('checks', []):
+                key = check.get('key')
+                now = current_by_key.get(key)
+                if check.get('status') == 'fail' and (not now or now.get('status') != 'fail'):
+                    retired.append(str(check.get('label') or key))
+            reason = '旧报告原判 F，按当前规则调整为 B 待复核'
+            if retired:
+                reason += '；不再作为硬失败的检查：' + '、'.join(dict.fromkeys(retired))
+            original_reason = baseline.get('reason') or (baseline.get('decision') or {}).get('reason')
+            reason += '；历史原因：' + str(original_reason) if original_reason else '；旧报告未保留具体判级原因'
             baseline.update(quality_grade='B', accepted=False, review_required=True,
-                            reason='按当前规则为 B，保留问题供人工复核；自动检查未发现保留的硬失败')
+                            reason=reason)
             if not out.get('manual_review'):
                 out.update({k: baseline[k] for k in ('quality_grade','accepted','review_required','reason')})
             if out.get('qc_original'):
