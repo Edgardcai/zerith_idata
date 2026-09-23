@@ -7,7 +7,8 @@
 
 ```text
 会话语言路由
-  → 中文：机器人独立讯飞麦克风 → Silero VAD → FunASR Paraformer
+  → 中文默认：机器人独立讯飞麦克风 → Silero VAD → 云端中文 ASR / TTS
+  → 网页点击“启动本地语音”且健康检查通过后：FunASR Paraformer
      → 句末 Qwen3-ASR-0.6B 复核 → 本地 Qwen3-TTS-0.6B Serena
   → English：原机器人麦克风、原远程 STT、原模型/声音/接口/整段 TTS（完全保留）
   → 明确的受支持动作：本地规则直接下发，不等待大模型
@@ -18,6 +19,10 @@
 ```
 
 中文服务的安装、协议、热词和降级说明见 `chinese_speech/README.md`。
+两个 GPU 服务默认不开机启动；网页可停止并释放显存，自动恢复云端语音。
+云端模式需要联网及已配置的语音 API。语音主服务只依赖 PipeWire，不拉起 GPU 服务。
+本地中文播报采用 codec 增量解码和独立音频预取，生成下一段与播放当前音频可以重叠。
+首段文本优先在较短的语义边界提交，后续保持较长段落；具体实测见 `chinese_speech/README.md`。
 
 小达说话期间暂停录音，回答结束后再开始下一轮倾听。这是为了在尚未标定声学回声消除
 之前避免扬声器声音回灌。它目前是流畅的半双工对话，不支持用户在播报中途插话。
@@ -164,3 +169,30 @@ cd /home/robot/control
 /home/robot/miniconda3/envs/xiaoda-voice/bin/python \
   -m unittest discover -s voice_assistant/tests -v
 ```
+
+### Provider key format and local-only Chinese speech
+
+`/home/robot/api.txt` may contain provider `model` / `base_url` assignments
+followed by an auth JSON object containing `OPENAI_API_KEY`. A quoted
+`OPENAI_API_KEY = "..."` assignment is also accepted. The old bare `sk-...`
+format remains supported. The new provider credential is bound only to its
+configured LLM endpoint and is not reused as an aihubmix audio credential.
+Environment overrides still take precedence. GPT-6 models default to `low`
+reasoning; `XIAODA_REASONING_EFFORT` can override it.
+
+When local Chinese speech is enabled, a cloud audio key is no longer required
+for startup. Without cloud audio credentials, both Chinese and English sessions use local
+ASR/TTS. English uses Qwen3-ASR directly (without Chinese Paraformer or hotword
+correction), and Qwen3-TTS with the Ryan voice. Chinese retains its existing
+Paraformer/Qwen3-ASR and Serena path. Cloud fallback requires a separate audio key.
+Missing cloud credentials fail locally without issuing an unauthenticated request.
+
+The deployed `zerith-xiaoda-voice.service.d/local-speech.conf` starts local
+ASR/TTS alongside the assistant. The existing web switch can still stop/start
+them to release GPU memory. This deployment uses `--web-only`: start a session
+from the web page; wake-word listening is not enabled by this change.
+
+Local speech HTTP APIs accept `language=zh/en` for `/v1/transcribe` and
+`language=Chinese/English` for `/v1/speech`. The existing ASR WebSocket partial
+recognition route remains Chinese; English uses whole-utterance HTTP recognition.
+Both languages use the new provider key for text responses.

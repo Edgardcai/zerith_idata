@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import math
+import json
 import os
 import threading
 import time
@@ -11,6 +12,8 @@ from typing import Any, Callable
 
 import h5py
 import numpy as np
+
+from .replay_timing import recorded_timeline, resample_recorded_frames
 
 from .robot_service import (
     MOTOR_SPEC_BY_ID,
@@ -103,8 +106,59 @@ def _episode_path(root: Path, relative_path: Any) -> Path:
     return path
 
 
+ALIGNED_FORMAT = "icra_wbc_aligned_joints"
+ALIGNED_FIELDS = (
+    [f"left.joint{i}" for i in range(1, 8)] + ["left.gripper"]
+    + [f"right.joint{i}" for i in range(1, 8)] + ["right.gripper"]
+    + ["lift.height", "waist.pitch", "waist.yaw", "head.yaw", "head.pitch",
+       "speed.linear", "speed.angular"]
+)
+
+
+def _is_aligned(file: h5py.File) -> bool:
+    return _json_scalar(file.attrs.get("format", "")) == ALIGNED_FORMAT
+
+
+def _load_aligned_source(file: h5py.File, source: str) -> np.ndarray:
+    fields = file.attrs.get("state_fields_json")
+    if fields is not None:
+        try:
+            valid_fields = json.loads(_json_scalar(fields)) == ALIGNED_FIELDS
+        except (TypeError, ValueError) as exc:
+            raise RobotCommandRejected("state_fields_json 无法解析") from exc
+        if not valid_fields:
+            raise RobotCommandRejected("aligned_joints 的 23 维字段顺序不匹配")
+    keys = sorted((key for key in file if key.isascii() and key.isdecimal()), key=int)
+    if not 1 <= len(keys) <= MAX_EPISODE_FRAMES:
+        raise RobotCommandRejected(f"HDF5 可回放帧数必须在 1..{MAX_EPISODE_FRAMES}")
+    if [int(key) for key in keys] != list(range(len(keys))):
+        raise RobotCommandRejected("aligned_joints 帧号必须从 0 开始且连续")
+    values = np.empty((len(keys), 23), dtype=np.float64)
+    for index, key in enumerate(keys):
+        dataset_path = f"{key}/{source}/vector"
+        if dataset_path not in file:
+            raise RobotCommandRejected(f"缺少 /{dataset_path}")
+        dataset = file[dataset_path]
+        if not isinstance(dataset, h5py.Dataset) or dataset.shape != (23,):
+            raise RobotCommandRejected(f"/{dataset_path} 形状应为 (23,)")
+        try:
+            values[index] = np.asarray(dataset[:], dtype=np.float64)
+        except (TypeError, ValueError, OSError) as exc:
+            raise RobotCommandRejected(f"无法读取 /{dataset_path} 数值字段") from exc
+    if not np.isfinite(values).all():
+        raise RobotCommandRejected(f"{source} 包含 NaN 或 Inf")
+    # Float32 export can represent the 0.8 m SDK endpoint as 0.8000000119.
+    # Snap only sub-1e-7 boundary roundoff; real limit violations stay rejected.
+    for column, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS):
+        spec = MOTOR_SPEC_BY_ID[motor_id]
+        for bound in (spec.minimum, spec.maximum):
+            near = np.abs(values[:, column] - bound) <= 1e-7
+            values[near, column] = bound
+    return values
+
+
 def _control_rate(file: h5py.File) -> float:
-    candidate = file.attrs.get("control_frequency")
+    candidate = file.attrs.get("fps") if _is_aligned(file) else file.attrs.get("control_frequency")
     if candidate is None and "timestamp" in file:
         candidate = file["timestamp"].attrs.get("rate_hz")
     rate = _finite_float(30.0 if candidate is None else candidate, "control_frequency")
@@ -139,6 +193,8 @@ def _source_shape(file: h5py.File, source: str) -> tuple[int, dict[str, tuple[in
 
 
 def _load_source(file: h5py.File, source: str) -> np.ndarray:
+    if _is_aligned(file):
+        return _load_aligned_source(file, source)
     frame_count, _ = _source_shape(file, source)
     paths = SOURCE_DATASETS[source]
     try:
@@ -176,11 +232,16 @@ def inspect_episode(path: Path, root: Path) -> dict[str, Any]:
         base_abs_max: dict[str, float | None] = {}
         for source in sorted(REPLAY_SOURCES):
             try:
-                frames, _ = _source_shape(file, source)
-                base = np.asarray(
-                    file[SOURCE_DATASETS[source]["base"]][:],
-                    dtype=np.float64,
-                )
+                if _is_aligned(file):
+                    values = _load_aligned_source(file, source)
+                    frames = len(values)
+                    base = values[:, 21:23]
+                else:
+                    frames, _ = _source_shape(file, source)
+                    base = np.asarray(
+                        file[SOURCE_DATASETS[source]["base"]][:],
+                        dtype=np.float64,
+                    )
                 if not np.isfinite(base).all():
                     raise RobotCommandRejected(f"{source} base 包含 NaN 或 Inf")
                 sources[source] = True
@@ -193,14 +254,24 @@ def inspect_episode(path: Path, root: Path) -> dict[str, Any]:
         rate_hz = _control_rate(file)
         frame_count = max(source_frames.values(), default=0)
         if not any(sources.values()):
-            raise RobotCommandRejected("state/action 均不符合回放格式")
+            raise RobotCommandRejected("state/action 均不符合回放格式: " + "; ".join(f"{key}: {error}" for key, error in source_errors.items()))
+        timing = {'basis': 'nominal_rate'}
+        duration_s = frame_count / rate_hz
+        if not _is_aligned(file) and 'timestamp/t' in file:
+            try:
+                _, timing = recorded_timeline(file['timestamp/t'][:], frame_count, rate_hz)
+            except ValueError as exc:
+                raise RobotCommandRejected(str(exc)) from exc
+            duration_s = timing['recorded_duration_s']
         return {
             "path": path.relative_to(root).as_posix(),
-            "episode_id": str(_json_scalar(file.attrs.get("episode_id", path.parent.name))),
+            "episode_id": str(_json_scalar(file.attrs.get("episode_id", file.attrs.get("source_demo", path.parent.name)))),
+            "format": ALIGNED_FORMAT if _is_aligned(file) else "episode",
             "task_name": str(_json_scalar(file.attrs.get("task_name", ""))),
             "frames": frame_count,
             "rate_hz": rate_hz,
-            "duration_s": frame_count / rate_hz,
+            "duration_s": duration_s,
+            "timing": timing,
             "action_mode": str(_json_scalar(file.attrs.get("action_mode", "unknown"))),
             "sources": sources,
             "source_errors": source_errors,
@@ -245,7 +316,8 @@ def discover_replay_dataset_directories(
 ) -> dict[str, Any]:
     """Find replay dataset roots below ``/data`` without exposing file entries.
 
-    The canonical recorder layout is ``dataset/episode-id/episode.hdf5``.  The
+    Supported layouts are ``dataset/episode-id/episode.hdf5`` and
+    ``dataset/demo-id/states/aligned_joints.h5``.  The
     UI therefore offers the directory above each episode directory, while the
     existing episode scanner remains responsible for listing individual files.
     Only files that pass the normal replay schema inspection contribute a
@@ -276,7 +348,7 @@ def discover_replay_dataset_directories(
             name for name in directory_names if not name.startswith(".")
         )
         for file_name in sorted(file_names):
-            if file_name.lower() not in ("episode.hdf5", "episode.h5"):
+            if file_name.lower() not in ("episode.hdf5", "episode.h5", "aligned_joints.h5"):
                 continue
             candidates.append(Path(current) / file_name)
             if len(candidates) >= MAX_DISCOVERY_EPISODE_FILES:
@@ -292,6 +364,8 @@ def discover_replay_dataset_directories(
             resolved = candidate.resolve(strict=True)
             resolved.relative_to(base)
             episode_directory = resolved.parent
+            if resolved.name.lower() == "aligned_joints.h5" and episode_directory.name == "states":
+                episode_directory = episode_directory.parent
             dataset_directory = (
                 episode_directory.parent
                 if episode_directory != base
@@ -341,13 +415,25 @@ def load_replay_episode(
         frames = _load_source(file, source_name)
         rate_hz = _control_rate(file)
         metadata = inspect_episode(path, root)
-    validate_replay_frames(frames, mode_name)
+        validate_replay_frames(frames, mode_name)
+        timing = {'basis': 'nominal_rate', 'source_frames': len(frames),
+                  'playback_frames': len(frames), 'resampled': False}
+        if not _is_aligned(file) and 'timestamp/t' in file:
+            try:
+                frames, rate_hz, timing = resample_recorded_frames(
+                    frames, file['timestamp/t'][:], rate_hz, MAX_EPISODE_FRAMES
+                )
+            except (ValueError, TypeError, OverflowError) as exc:
+                raise RobotCommandRejected(str(exc)) from exc
+            validate_replay_frames(frames, mode_name)
     metadata.update(
         {
             "dataset_dir": str(root),
             "source": source_name,
             "mode": mode_name,
             "speed": speed_value,
+            "frames": len(frames),
+            "timing": timing,
             "effective_rate_hz": rate_hz * speed_value,
             "effective_duration_s": len(frames) / (rate_hz * speed_value),
         }
@@ -376,7 +462,7 @@ def validate_replay_frames(frames: np.ndarray, mode: str) -> None:
         base_max = float(np.max(np.abs(values[:, 21:23])))
         if base_max > BASE_ZERO_TOLERANCE:
             raise RobotCommandRejected(
-                "全23维回放检测到底盘线/角速度非零；当前 LOW_LEVEL 只能下发左右轮 rad/s，"
+                "全23维回放检测到底盘线/角速度非零；当前低层接口只能下发左右轮 rad/s，"
                 "缺少可靠换算，已拒绝。请选择双臂模式或底盘为零的 action 数据"
             )
 

@@ -9,6 +9,7 @@ import time
 from typing import Any
 from urllib.parse import urlsplit
 
+from .control_mode import CONTROL_MODE_ID
 from .robot_service import (
     MOTOR_SPEC_BY_ID,
     RobotCommandRejected,
@@ -126,7 +127,7 @@ class VoiceMotionController:
             ready = bool(
                 robot_state.get("connected")
                 and robot_state.get("init_state") == 2
-                and robot_state.get("control_mode") == 1
+                and robot_state.get("control_mode") == CONTROL_MODE_ID
                 and not robot_state.get("busy")
             )
             return {

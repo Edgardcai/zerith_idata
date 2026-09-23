@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -135,7 +136,7 @@ class VoiceConfig:
             robot_name=_env("XIAODA_ROBOT_NAME", "小达"),
             api_file=path,
             llm_model=model,
-            reasoning_effort=_env("XIAODA_REASONING_EFFORT", "none"),
+            reasoning_effort=_env("XIAODA_REASONING_EFFORT", "low" if model.startswith("gpt-6") else "none"),
             llm_profiles=tuple(profiles),
             audio_api_base=audio_base,
             audio_api_key=audio_key,
@@ -174,7 +175,7 @@ class VoiceConfig:
         errors: list[str] = []
         if not self.llm_profiles:
             errors.append("没有可用的 LLM API 配置")
-        if not self.audio_api_base or not self.audio_api_key:
+        if not self.chinese_speech_enabled and (not self.audio_api_base or not self.audio_api_key):
             errors.append("没有可用的语音 API 配置")
         if not 0.25 <= self.tts_speed <= 4.0:
             errors.append("TTS 语速必须在 0.25 到 4.0 之间")
@@ -219,6 +220,20 @@ def _read_loose_api_config(path: Path) -> dict[str, str]:
     local_base = ""
     remote_base = "https://aihubmix.com"
     keys: list[str] = []
+    explicit_key = ""
+    # api.txt may combine a TOML-style provider section with an auth.json block.
+    # Bind this credential only to the explicitly configured provider, never to
+    # the legacy default cloud speech host.
+    text = "\n".join(lines)
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r"\{", text):
+        try:
+            auth, _ = decoder.raw_decode(text[match.start():])
+        except ValueError:
+            continue
+        if isinstance(auth, dict) and isinstance(auth.get("OPENAI_API_KEY"), str):
+            explicit_key = auth["OPENAI_API_KEY"].strip()
+            break
 
     assignment = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\'](.*)["\']\s*$')
     for raw in lines:
@@ -226,7 +241,9 @@ def _read_loose_api_config(path: Path) -> dict[str, str]:
         match = assignment.match(line)
         if match:
             name, value = match.groups()
-            if name == "model" and not model:
+            if name == "OPENAI_API_KEY":
+                explicit_key = value.strip()
+            elif name == "model" and not model:
                 model = value
             elif name == "base_url" and not local_base:
                 local_base = value
@@ -240,7 +257,7 @@ def _read_loose_api_config(path: Path) -> dict[str, str]:
     return {
         "model": model,
         "local_base": local_base,
-        "local_key": keys[0] if keys else "",
+        "local_key": explicit_key or (keys[0] if keys else ""),
         "remote_base": remote_base,
         "remote_key": keys[1] if len(keys) > 1 else (keys[0] if not local_base and keys else ""),
     }

@@ -36,6 +36,8 @@ from .camera_service import (
 )
 from .fake_camera import fake_camera_factory
 from .fake_sdk import FakeH1Robot, FakeSdk
+from .battery_monitor import BatteryMonitor
+from .pi05_action_modes import ChassisKinematics
 from .pi05_executor import (
     Pi05Executor,
     Pi05ExecutorError,
@@ -178,8 +180,10 @@ class WebControlApp:
         pi05_inference_timeout_s: float = 10.0,
         control_token: str | None = None,
         static_dir: Path = STATIC_DIR,
+        battery: BatteryMonitor | None = None,
     ) -> None:
         self.robot = robot or RobotService()
+        self.battery = battery
         self.camera = camera or CameraService()
         self.cameras = CameraConnectionManager(self.camera)
         self.voice = voice or VoiceGateway()
@@ -200,6 +204,8 @@ class WebControlApp:
     def close(self) -> None:
         # Stop policy/network/camera work before releasing the unique SDK
         # owner.  Pi05Executor.close() never calls robot_deinit().
+        if self.battery is not None:
+            self.battery.close()
         self.replay.close()
         self.pi05.close()
         self.voice_motion.close()
@@ -285,6 +291,7 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             if not self._require_authorized():
                 return
             state = self.app.robot.state()
+            state["battery"] = self.app.battery.snapshot() if self.app.battery else None
             state["camera"] = self.app.cameras.status()
             state["pi05"] = self.app.pi05.status()
             state["replay"] = self.app.replay.status()
@@ -304,6 +311,48 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             if not self._require_authorized():
                 return
             self._send_json(HTTPStatus.OK, self.app.pi05.status())
+            return
+        if path.startswith("/api/pi05/trace/"):
+            if not self._require_authorized():
+                return
+            trace = self.app.pi05.trace
+            query = parse_qs(parsed.query)
+            run_id = (query.get("run") or [None])[0]
+            try:
+                if path == "/api/pi05/trace/runs":
+                    self._send_json(HTTPStatus.OK, trace.runs())
+                elif path == "/api/pi05/trace/data":
+                    self._send_json(HTTPStatus.OK, trace.data(run_id))
+                elif path == "/api/pi05/trace/download":
+                    name = (query.get("file") or ["samples.csv"])[0]
+                    if name not in ("samples.csv", "events.jsonl", "metadata.json", "summary.json"):
+                        raise ValueError("invalid trace file")
+                    target = trace.folder(run_id) / name
+                    with target.open("rb") as stream:
+                        # Bound to the size at open; active runs may keep growing.
+                        remaining = os.fstat(stream.fileno()).st_size
+                        self.send_response(HTTPStatus.OK)
+                        self.send_header("Content-Type", "application/octet-stream")
+                        self.send_header("Content-Disposition", f'attachment; filename="{run_id}_{name}"')
+                        self.send_header("Content-Length", str(remaining))
+                        self.send_header("Cache-Control", "no-store")
+                        self._send_security_headers()
+                        self.end_headers()
+                        while remaining:
+                            block = stream.read(min(65536, remaining))
+                            if not block:
+                                break
+                            self.wfile.write(block)
+                            remaining -= len(block)
+                else:
+                    self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+            except (ValueError, FileNotFoundError):
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "记录不存在"})
+            return
+        if path == "/api/pi05/lift-diagnostics":
+            if not self._require_authorized():
+                return
+            self._send_json(HTTPStatus.OK, self.app.pi05.lift_diagnostics())
             return
         if path == "/api/cameras/status":
             if not self._require_authorized():
@@ -400,7 +449,10 @@ class H1RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/pi05/reconnect":
                 self._send_json(
                     HTTPStatus.OK,
-                    self.app.pi05.reconnect(body.get("host"), body.get("port")),
+                    self.app.pi05.reconnect(
+                        body.get("host"), body.get("port"),
+                        **({"request_format": body["request_format"]} if "request_format" in body else {}),
+                    ),
                 )
                 return
             if path == "/api/pi05/disconnect":
@@ -416,7 +468,17 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 self._require_replay_control_unlocked("推理 dry-run")
                 self._send_json(
                     HTTPStatus.OK,
-                    self.app.pi05.dry_run(body.get("prompt"), lease),
+                    self.app.pi05.dry_run(
+                        body.get("prompt"),
+                        lease,
+                        inference_mode=body.get("inference_mode", "custom"),
+                        execution_mode=body.get("execution_mode", "arms"),
+                        active_hand=body.get("active_hand"),
+                        right_prompt=body.get("right_prompt"),
+                        **({"phase_entry_action": body["phase_entry_action"]} if "phase_entry_action" in body else {}),
+                        **({"scheduling_mode": body["scheduling_mode"]} if "scheduling_mode" in body else {}),
+                        **({"rtc_options": body["rtc_options"]} if "rtc_options" in body else {}),
+                    ),
                 )
                 return
             if path == "/api/pi05/start":
@@ -436,6 +498,13 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                         steps_per_chunk=body.get("steps_per_chunk", 30),
                         control_rate_hz=body.get("control_rate_hz", 30),
                         joint_speed_deg_s=body.get("joint_speed_deg_s", 30),
+                        inference_mode=body.get("inference_mode", "custom"),
+                        execution_mode=body.get("execution_mode", "arms"),
+                        active_hand=body.get("active_hand"),
+                        right_prompt=body.get("right_prompt"),
+                        **({"phase_entry_action": body["phase_entry_action"]} if "phase_entry_action" in body else {}),
+                        **({"scheduling_mode": body["scheduling_mode"]} if "scheduling_mode" in body else {}),
+                        **({"rtc_options": body["rtc_options"]} if "rtc_options" in body else {}),
                     ),
                 )
                 return
@@ -447,6 +516,14 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/pi05/reset-fault":
                 self._send_json(HTTPStatus.OK, self.app.pi05.reset_fault())
+                return
+            if path == "/api/voice/local-speech":
+                enabled = body.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise RobotCommandRejected("enabled 必须是布尔值")
+                if enabled:
+                    self._require_pi05_control_unlocked("本地语音模型启动")
+                self._send_json(HTTPStatus.ACCEPTED, self.app.voice.set_local_speech(enabled))
                 return
             if path == "/api/voice/start":
                 self._require_pi05_control_unlocked("语音会话启动")
@@ -524,6 +601,17 @@ class H1RequestHandler(BaseHTTPRequestHandler):
                     lease,
                     body.get("left_speed"),
                     body.get("right_speed"),
+                )
+                self._send_json(HTTPStatus.OK, result)
+                return
+            if path == "/api/actions/recover-deinit":
+                self._require_pi05_control_unlocked("恢复反初始化")
+                voice = self.app.voice_motion.status()
+                if voice.get("enabled") is not False or "active_action" not in voice or voice["active_action"] is not None:
+                    raise RobotConflict("语音控制未明确空闲，拒绝恢复反初始化")
+                result = self.app.robot.recover_deinitialize(
+                    lease, confirmation=body.get("confirmation"),
+                    manual_control_released=body.get("manual_control_released"),
                 )
                 self._send_json(HTTPStatus.OK, result)
                 return
@@ -1187,6 +1275,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="serve synthetic 640x480 RGB-D frames instead of CameraClient",
     )
     parser.add_argument("--camera-target", default="localhost:50051")
+    parser.add_argument("--pi05-chassis-config", default=os.environ.get("PI05_CHASSIS_CONFIG"),
+                        help="JSON with wheel_radius_m, wheel_track_m, left_sign, right_sign for full policy chassis control")
     parser.add_argument(
         "--pi05-server-host",
         default=os.environ.get("PI05_POLICY_HOST", "192.168.1.154"),
@@ -1229,17 +1319,26 @@ def main(argv: list[str] | None = None) -> int:
         args.allow_unauthenticated_lan,
     )
 
+    chassis_kinematics = None
+    if args.pi05_chassis_config:
+        try:
+            chassis_kinematics = ChassisKinematics(**json.loads(Path(args.pi05_chassis_config).read_text()))
+        except (OSError, ValueError, TypeError) as exc:
+            raise SystemExit(f"Invalid chassis config: {exc}") from exc
+
     if args.simulate_robot:
         fake_sdk = FakeSdk()
         fake_robot = FakeH1Robot()
         robot_service = RobotService(
             sdk_loader=lambda: fake_sdk,
             robot_factory=lambda _sdk: fake_robot,
+            chassis_kinematics=chassis_kinematics,
         )
     else:
-        robot_service = RobotService()
+        robot_service = RobotService(chassis_kinematics=chassis_kinematics)
     camera_service = CameraService(
         grpc_target=args.camera_target,
+        enable_depth=os.environ.get('ZERITH_CAMERA_DEPTH', '1') != '0',
         client_factory=fake_camera_factory if args.simulate_cameras else None,
     )
     app = WebControlApp(
@@ -1249,6 +1348,7 @@ def main(argv: list[str] | None = None) -> int:
         pi05_port=args.pi05_server_port,
         pi05_inference_timeout_s=args.pi05_inference_timeout,
         control_token=args.token,
+        battery=None if args.simulate_robot else BatteryMonitor(),
     )
     server = H1WebServer((args.host, args.port), app)
     internal_server = VoiceMotionInternalServer(

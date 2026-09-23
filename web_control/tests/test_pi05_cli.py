@@ -50,7 +50,7 @@ class FakeWebApi:
                 }
             return {"takeover": False}
         if path == "/api/pi05/reconnect":
-            return {"health": "OK"}
+            return {"status": {"connected": True, "protocol_ok": False}}
         if path == "/api/pi05/disconnect":
             return {"phase": "idle"}
         if path == "/api/pi05/dry-run":
@@ -82,6 +82,22 @@ def run_args() -> argparse.Namespace:
 
 
 class Pi05CliSafetyTests(unittest.TestCase):
+    def test_optional_metadata_command_does_not_require_http_health(self) -> None:
+        args = argparse.Namespace(
+            policy_host="server", policy_port=9973, timeout=5.0,
+            inference_timeout=10.0,
+        )
+        with mock.patch.object(cli, "ZerithJsonPolicyClient") as factory, mock.patch.object(
+            cli, "_print"
+        ) as output, mock.patch(
+            "http.client.HTTPConnection", side_effect=AssertionError("HTTP is unsupported")
+        ):
+            client = factory.return_value.__enter__.return_value
+            client.metadata.return_value = {"state_dim": 23}
+            self.assertEqual(cli._metadata(args), 0)
+            client.metadata.assert_called_once_with(timeout=5.0)
+            output.assert_called_once_with({"metadata": {"state_dim": 23}})
+
     def test_missing_lease_without_explicit_auto_takeover_is_rejected(self) -> None:
         api = FakeWebApi()
         dry_args = run_args()
@@ -292,6 +308,7 @@ class Pi05CliSafetyTests(unittest.TestCase):
                 "/api/pi05/start",
                 {
                     "prompt": "把物体放进盒子",
+                    "execution_mode": "arms",
                     "steps_per_chunk": 30,
                     "control_rate_hz": 25.0,
                     "joint_speed_deg_s": 20.0,
@@ -300,6 +317,50 @@ class Pi05CliSafetyTests(unittest.TestCase):
                 "lease",
             ),
         )
+
+    def test_dual_separate_plan_is_forwarded_to_prepare_and_start(self) -> None:
+        api = FakeWebApi(phase="idle")
+        args = run_args()
+        args.prepare = True
+        args.inference_mode = "dual_separate"
+        args.active_hand = None
+        args.prompt = "Grasp Coca-Cola with the left hand"
+        args.right_prompt = "Grasp Vita Coconut with the right hand"
+        with mock.patch.object(cli, "_web_api", return_value=api), mock.patch.object(
+            cli, "_print"
+        ):
+            self.assertEqual(cli._run(args), 0)
+
+        task = {
+            "execution_mode": "arms",            "prompt": args.prompt,
+            "inference_mode": "dual_separate",
+            "active_hand": None,
+            "right_prompt": args.right_prompt,
+        }
+        dry_run_call = next(call for call in api.calls if call[1] == "/api/pi05/dry-run")
+        start_call = next(call for call in api.calls if call[1] == "/api/pi05/start")
+        self.assertEqual(dry_run_call[2], task)
+        self.assertEqual(
+            {key: start_call[2][key] for key in task},
+            task,
+        )
+
+    def test_task_payload_rejects_incomplete_or_conflicting_modes(self) -> None:
+        args = run_args()
+        args.inference_mode = "single"
+        args.active_hand = None
+        args.right_prompt = None
+        with self.assertRaisesRegex(cli.CliError, "active-hand"):
+            cli._task_payload(args, args.prompt)
+
+        args.inference_mode = "dual_separate"
+        with self.assertRaisesRegex(cli.CliError, "right-prompt"):
+            cli._task_payload(args, args.prompt)
+
+        args.inference_mode = "dual_continuous"
+        args.right_prompt = "not allowed"
+        with self.assertRaisesRegex(cli.CliError, "only valid"):
+            cli._task_payload(args, args.prompt)
 
     def test_execution_value_ranges_fail_before_handler(self) -> None:
         common = [

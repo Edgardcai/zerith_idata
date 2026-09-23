@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+from importlib.metadata import version
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -9,9 +11,10 @@ import os
 from pathlib import Path
 import threading
 import time
-from typing import Any, Iterator
+from typing import Any
 
-from .text import float_audio_to_pcm, resample_audio, split_chinese_text
+from .qwen_streaming import QwenCodecStreamer, SynthesisCancelled
+from .text import float_audio_to_pcm, normalize_tts_text, resample_audio, split_chinese_text
 
 
 LOG = logging.getLogger("chinese-tts-service")
@@ -39,6 +42,8 @@ class QwenTTSBackend:
         self.model: Any = None
         self.attention = "unloaded"
         self.load_seconds = 0.0
+        self.streamer: QwenCodecStreamer | None = None
+        self.warmup_seconds = 0.0
 
     def load(self) -> None:
         import torch
@@ -67,17 +72,38 @@ class QwenTTSBackend:
             kwargs.pop("attn_implementation")
             self.model = Qwen3TTSModel.from_pretrained(source, **kwargs)
             self.attention = "sdpa"
+        if _env_bool("CHINESE_TTS_STREAMING", True):
+            if version("qwen-tts") == "0.1.1":
+                self.streamer = QwenCodecStreamer(
+                    self.model, int(os.environ.get("CHINESE_TTS_CHUNK_FRAMES", "8"))
+                )
+            else:
+                LOG.warning("Incremental decoding requires tested qwen-tts 0.1.1; using full-segment generation")
+        if _env_bool("CHINESE_TTS_WARMUP", True):
+            warmup_started = time.monotonic()
+            self.synthesize_stream("你好。", self.default_speaker, lambda *_: None, lambda: False)
+            self.warmup_seconds = time.monotonic() - warmup_started
         self.load_seconds = time.monotonic() - started
 
-    def synthesize(self, text: str, speaker: str) -> tuple[object, int]:
+    def synthesize(self, text: str, speaker: str, language: str = "Chinese") -> tuple[object, int]:
+        import torch
+
         if self.model is None:
             raise RuntimeError("model is not loaded")
-        waveforms, sample_rate = self.model.generate_custom_voice(
-            text=text,
-            language="Chinese",
-            speaker=speaker,
-        )
+        with torch.inference_mode():
+            waveforms, sample_rate = self.model.generate_custom_voice(
+                text=text, language=language, speaker=speaker,
+            )
         return waveforms[0], int(sample_rate)
+
+    def synthesize_stream(self, text: str, speaker: str,
+                          emit: Callable[[Any, int], None], cancelled: Callable[[], bool], language: str = "Chinese") -> None:
+        if self.streamer is not None:
+            self.streamer.synthesize(text, speaker, emit, cancelled, language=language)
+        elif not cancelled():
+            audio, rate = self.synthesize(text, speaker, language=language)
+            if not cancelled():
+                emit(audio, rate)
 
 
 class ChineseTTSApplication:
@@ -100,34 +126,61 @@ class ChineseTTSApplication:
         with self.cancel_lock:
             self.cancelled.discard(request_id)
 
-    def pcm_chunks(self, request_id: str, text: str, speaker: str) -> Iterator[bytes]:
+    def stream_pcm(self, request_id: str, text: str, speaker: str,
+                   emit: Callable[[bytes], None], *, presegmented: bool = False, language: str = "Chinese") -> None:
         started = time.monotonic()
         first_audio_ms: float | None = None
         segment_count = 0
+        audio_bytes = 0
+
+        def emit_audio(audio: Any, sample_rate: int) -> None:
+            nonlocal first_audio_ms, audio_bytes
+            if sample_rate != self.backend.output_sample_rate:
+                audio = resample_audio(audio, sample_rate, self.backend.output_sample_rate)
+            # These are contiguous codec chunks, not independent utterances.
+            pcm = float_audio_to_pcm(audio, fade_ms=0, sample_rate=self.backend.output_sample_rate)
+            for offset in range(0, len(pcm), 8192):
+                if self.is_cancelled(request_id):
+                    raise SynthesisCancelled()
+                if first_audio_ms is None:
+                    first_audio_ms = (time.monotonic() - started) * 1000
+                chunk = pcm[offset:offset + 8192]
+                emit(chunk)
+                audio_bytes += len(chunk)
+
+        segments = ([normalize_tts_text(text)] if presegmented and len(text) <= 120
+                    else split_chinese_text(text, 15, 80))
+        if language == "English":
+            segments = [text.strip()]
         try:
-            for segment in split_chinese_text(text, 15, 80):
+            for segment in segments:
+                if not segment:
+                    continue
                 if self.is_cancelled(request_id):
                     return
                 with self.model_lock:
                     if self.is_cancelled(request_id):
                         return
-                    audio, sample_rate = self.backend.synthesize(segment, speaker)
-                if sample_rate != self.backend.output_sample_rate:
-                    audio = resample_audio(audio, sample_rate, self.backend.output_sample_rate)
-                pcm = float_audio_to_pcm(audio, sample_rate=self.backend.output_sample_rate)
-                segment_count += 1
-                for offset in range(0, len(pcm), 8192):
-                    if self.is_cancelled(request_id):
-                        return
-                    if first_audio_ms is None:
-                        first_audio_ms = (time.monotonic() - started) * 1000
-                    yield pcm[offset : offset + 8192]
+                    if hasattr(self.backend, "synthesize_stream"):
+                        self.backend.synthesize_stream(
+                            segment, speaker, emit_audio, lambda: self.is_cancelled(request_id),
+                            **({"language": language} if language != "Chinese" else {}),
+                        )
+                    else:
+                        emit_audio(*self.backend.synthesize(segment, speaker, **({"language": language} if language != "Chinese" else {})))
+                    segment_count += 1
+        except SynthesisCancelled:
+            return
+        except (BrokenPipeError, ConnectionResetError):
+            self.cancel(request_id)
+            raise
         finally:
             self.last_metrics = {
                 "request_id": request_id,
                 "first_audio_ms": first_audio_ms,
                 "total_ms": (time.monotonic() - started) * 1000,
                 "segments": segment_count,
+                "audio_ms": audio_bytes / (self.backend.output_sample_rate * 2) * 1000,
                 "cancelled": self.is_cancelled(request_id),
             }
             self.clear(request_id)
@@ -175,6 +228,9 @@ class ChineseTTSHandler(BaseHTTPRequestHandler):
             "attention": self.app.backend.attention,
             "sample_rate": self.app.backend.output_sample_rate,
             "load_seconds": self.app.backend.load_seconds,
+            "streaming": self.app.backend.streamer is not None,
+            "chunk_frames": self.app.backend.streamer.frames_per_chunk if self.app.backend.streamer else None,
+            "warmup_seconds": self.app.backend.warmup_seconds,
             "last_metrics": self.app.last_metrics,
         }
         try:
@@ -203,12 +259,16 @@ class ChineseTTSHandler(BaseHTTPRequestHandler):
             text = str(payload.get("text", "")).strip()
             language = str(payload.get("language", "Chinese"))
             speaker = str(payload.get("speaker") or self.app.backend.default_speaker)
+            presegmented = payload.get("presegmented", False)
+            if not isinstance(presegmented, bool):
+                raise ValueError("presegmented must be a boolean")
             if not request_id or not text:
                 self._json(HTTPStatus.BAD_REQUEST, {"error": "request_id and text are required"})
                 return
-            if language.lower() != "chinese":
-                self._json(HTTPStatus.BAD_REQUEST, {"error": "Chinese language is required"})
+            if language.lower() not in {"chinese", "english"}:
+                self._json(HTTPStatus.BAD_REQUEST, {"error": "language must be Chinese or English"})
                 return
+            language = language.capitalize()
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "audio/L16")
             self.send_header("Transfer-Encoding", "chunked")
@@ -217,14 +277,16 @@ class ChineseTTSHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self._response_started = True
             try:
-                for chunk in self.app.pcm_chunks(request_id, text, speaker):
+                def emit(chunk: bytes) -> None:
                     self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
                     self.wfile.write(chunk + b"\r\n")
                     self.wfile.flush()
+                self.app.stream_pcm(request_id, text, speaker, emit, presegmented=presegmented, language=language)
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                self.app.cancel(request_id)
+                # The write exception has already unwound generation and removed its hook.
+                self.close_connection = True
         except (ValueError, json.JSONDecodeError) as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except Exception as exc:

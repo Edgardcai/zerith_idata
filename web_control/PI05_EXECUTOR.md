@@ -11,7 +11,7 @@ WebSocket 和安全状态机，不导入交接包原生 SDK，也不构造 `Real
 正式代码：
 
 ```text
-web_control/pi05_protocol.py   WebSocket JSON、JPEG、metadata/action 严格校验
+web_control/pi05_protocol.py   WebSocket JSON、JPEG、action 严格校验、可选 metadata 诊断
 web_control/pi05_executor.py   probe/dry-run/连续 chunk 执行/fault 状态机
 web_control/pi05_cli.py        metadata、dry-run、连续真机执行和停止 CLI
 inference_executor.py          无需浏览器的正式代码入口（复用 8080）
@@ -55,8 +55,8 @@ cd /home/robot/control
 
 ## 网页和代码双入口
 
-网页页签标题为“推理”。左侧集中设置推理服务器 host/port、prompt、关节速度、
-发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、机械臂归位、断开
+网页页签标题为“推理”。左侧集中设置推理服务器 host/port、任务模式、商品、prompt、
+关节速度、发送频率和每个 Chunk 执行步数；右侧是状态与安全区，提供急停、机械臂归位、断开
 推理连接和显式重新连接。“机械臂归位”保持按键时的升降柱实测高度和底盘零速，
 将双臂、腰、头归零并完全张开夹爪；推理运行期间禁止使用。参数语义为：
 
@@ -70,7 +70,48 @@ cd /home/robot/control
 图片，再同步请求并执行下一包；推理期间保持上一条位置目标，不提前预取旧状态对应的
 下一包。
 N 不是总步数，也不限制 Chunk 数量。启动后会连续执行，直到操作员显式停止、发生
-故障或控制 lease 失效。
+故障、控制 lease 失效，或服务端返回严格布尔值 `is_success=true`。
+
+执行模式（网页顶部选择，CLI 为 `--execution-mode`）：
+
+| 值 | 模型控制 | 固定保持 | 双臂速度限幅 |
+|---|---|---|---|
+| `arms`（默认） | 双臂和夹爪，前16维 | 启动时升降、腰、头位置；底盘零速 | 开启 |
+| `arms_lift` | 双臂、夹爪、升降，前17维 | 启动时腰、头位置；底盘零速 | 开启 |
+| `full` | 全23维，包括腰、头、底盘 | 无位置覆盖 | 关闭 |
+
+按下启动后，由 SDK owner 在建立 session 时采集一次完整位置快照；它不同于先前
+的 dry-run 观测，也不会在后续 chunk 中重新取值。模式属于 dry-run 的验证条件，
+切换后必须重新 dry-run；运行中不能切换。
+
+全23维模式保留有限数、SDK软限位、租约、STOP和故障检查，但不修改合法动作目标。
+底盘线/角速度需转换为轮速：使用 `--pi05-chassis-config PATH` 或环境变量
+`PI05_CHASSIS_CONFIG` 指向 JSON，包含有来源依据的 `wheel_radius_m`、`wheel_track_m`、
+`left_sign`、`right_sign`。轮方向为正转使机器人前进时的 SDK 速度符号，必须为 ±1。
+采用左轮 `(v - w*track/2)/radius`、右轮 `(v + w*track/2)/radius` 再乘对应符号。
+没有配置时，零底盘输出可执行；非零底盘输出在 dry-run 或下发前明确拒绝，绝不猜参数
+或静默归零。底盘仍受命令超时停止保护。
+
+本机 8080 已配置 `config/pi05_chassis_h1pro_v4_10.json`：轮半径 0.0835 m、
+轮距 0.379 m、左右轮前进符号均为 +1。尺寸来自用户提供的 V4.10 URDF/轮网格，
+方向同时与 SDK V4.0 文档及低层前进示例核对。来源和换算例子见
+`config/pi05_chassis_h1pro_v4_10.md`；这些是模型名义尺寸，尚未做实机滚动标定。
+
+任务模式：
+
+- 单手：`Grasp {item} with the {left|right} hand`；该选项生成任务提示词，普通单手任务不屏蔽另一只手的模型动作。
+- 双手：`Grasp {left_item} with the left hand and then grasp {right_item} with the right hand.`
+- 双手分开：先发送左手模板，再发送右手模板。只有实际成功下发的动作中左夹爪
+  `action[7] > 0.2` 连续达到 150 步才切换；中间任一步不满足都会把计数清零。
+  该本地分阶段流程仅适用于16/17维模式；全23维模式使用单条连续任务提示词。
+  切换时在同一个 policy session 内按当前关节速度把双臂目标逐步归零，左夹爪每步
+  固定发送 `1.5`、右夹爪发送 `0`，升降柱在16维模式保持session启动高度，17维模式保持切换时高度；右手阶段继续锁定左臂
+  关节为零、左夹爪为 `1.5`。零位命令发出后仍持续发送并检查实测反馈：14 个关节
+  需在 `0.05 rad` 内连续稳定 5 个控制周期才进入右手阶段；20 秒未收敛会锁存停止。
+
+自定义 Prompt 输入框留空时使用模板；单手和双手模式可直接输入自定义内容覆盖
+模板。单手自定义内容必须只含一个 `left` 或 `right` 且与下拉
+选择一致。双手分开需要两个明确的阶段提示词，因此网页固定使用左右商品生成两条模板。
 
 状态接口中的 `chunk_request_mode=after_chunk_sync` 表示包尾同步请求；
 `last_chunk_first_arm_delta_from_observation_rad` 和
@@ -86,7 +127,7 @@ N 不是总步数，也不限制 Chunk 数量。启动后会连续执行，直�
 关节限幅的单周期上限为
 `radians(joint_speed_deg_s) / control_rate_hz`。限幅基准是上一条**成功下发**的目标，
 并在后续周期持续向模型目标推进；绝不使用可能滞后的实时反馈重新建立基准，避免
-机械臂因目标被反馈反复拉回而下垂或不动。该限幅只作用于双臂 14 个关节，不作用于
+机械臂因目标被反馈反复拉回而下垂或不动。该限幅只在16/17维模式作用于双臂 14 个关节；全23维模式不启用。不作用于
 夹爪、升降柱、腰、头或底盘。
 
 [/home/robot/control/inference_executor.py](/home/robot/control/inference_executor.py) 是与网页等价的
@@ -102,13 +143,13 @@ N 不是总步数，也不限制 Chunk 数量。启动后会连续执行，直�
 PY310=/home/robot/miniconda3/envs/zerith/bin/python
 EXECUTOR=/home/robot/control/inference_executor.py
 
-# 只读 health + metadata，不访问 8080/机器人/相机
+# 可选 metadata 诊断（服务端支持时），不访问 8080/机器人/相机
 $PY310 $EXECUTOR metadata --policy-host 192.168.1.154 --policy-port 9973
 
 # 查看 8080 内唯一执行器的状态
 $PY310 $EXECUTOR status --web-url http://172.16.18.43:8080
 
-# 选择新的远端地址并显式执行 health + metadata 后建立连接
+# 选择新的远端地址并建立 WebSocket 连接
 $PY310 $EXECUTOR reconnect --web-url http://172.16.18.43:8080 \
   --host 192.168.1.154 --port 9973
 
@@ -121,7 +162,7 @@ $PY310 $EXECUTOR disconnect --web-url http://172.16.18.43:8080
 
 ## 检查顺序与命令
 
-### 1. healthz
+### 可选诊断：healthz
 
 本机设置了 HTTP/HTTPS/ALL proxy，而该局域网地址不在 `NO_PROXY` 中。必须直连：
 
@@ -130,9 +171,9 @@ curl --noproxy '*' --connect-timeout 3 \
   http://192.168.1.154:9973/healthz
 ```
 
-预期输出：`OK`。
+支持该接口的服务预期输出 `OK`；此接口不属于必需协议，不影响连接和 dry-run。
 
-### 2. metadata（不访问机器人）
+### 可选诊断：metadata（不访问机器人）
 
 ```bash
 cd /home/robot/control
@@ -141,10 +182,19 @@ cd /home/robot/control
   --policy-host 192.168.1.154 --policy-port 9973
 ```
 
-客户端显式使用 `proxy=None`，只发送 `{"type":"metadata"}`，严格验证完整的 23 维
-state/action order、模型维度 17、连续输入夹爪、二值输出夹爪和 `status_mode=none`。
+该命令仅用于支持 metadata 的服务，显式使用 `proxy=None`，发送 `{"type":"metadata"}`，
+原样展示返回对象。它不检查 `wire_state_dim`、模型内部维度、夹爪模式或字段顺序，
+也不授予执行就绪状态；不支持此请求的服务可跳过此诊断。
 
-也可在网页“推理”页签点击“重新连接”（显式检查 healthz + metadata），
+### 连接与推理验证
+
+必需协议仅为 WebSocket JSON observation/action_chunk。连接时不请求 `/healthz`
+或 metadata；发送 23 维 state 数组、prompt 和三路 Base64 JPEG，接收 50 个结构化
+23 维动作及可选的布尔值 `is_success`。连接只证明 WebSocket 已建立，必须通过实际
+observation 的 dry-run 才能启动执行。状态接口的 `connected` 表示连接可用，
+`protocol_ok` 表示当前连接已通过 dry-run；重连、停止或故障会清除验证状态。
+
+在网页“推理”页签点击“重新连接”（只建立 WebSocket），
 或执行：
 
 ```bash
@@ -188,7 +238,7 @@ H1_CONTROL_LEASE='LEASE_ID' \
 让重连、dry-run 和 start 保持在同一 lease 中。
 
 dry-run 必须返回：state 23 维且有限、三路 BGR 图存在、chunk `50×23` 且有限、夹爪
-只含 `0/1.5`、17～20 保持、21～22 为零，并通过
+数值原样保留、17～20 保持、21～22 为零，并通过
 `first_arm_delta_from_observation_rad` 报告首步双臂目标相对观测的最大差值。该值只诊断、
 不改写动作。start 的 prompt 必须与当前成功 dry-run
 验证过的 prompt 完全一致；重新连接、故障复位或更换 prompt 后需要重新 dry-run。
@@ -196,7 +246,7 @@ dry-run 必须返回：state 23 维且有限、三路 BGR 图存在、chunk `50�
 ### 4. 真机执行
 
 网页是首选入口。必须先由现场操作员确认实体急停可达、清空工作区，再显式接管和执行
-厂商“初始化”。真机按钮还要求 `Init_Complete(2)`、`LOW_LEVEL`、当前同一 prompt 的
+厂商“初始化”。真机按钮还要求 `Init_Complete(2)`、`GRAVITY_COMPENSATION_LEVEL`、当前同一 prompt 的
 dry-run，并显示第二次危险确认。
 
 CLI 命令同样有独立 `--confirm-motion` 门禁，并在运行期间每 800 ms 续租；Ctrl+C
@@ -215,10 +265,11 @@ H1_CONTROL_LEASE='LEASE_ID' \
   --confirm-motion
 ```
 
-必须与刚才 dry-run 的 prompt 完全相同。`--steps-per-chunk 30`
+必须与刚才 dry-run 的完整任务计划完全相同。`--steps-per-chunk 30`
 表示每包执行前 30 步，再请求下一包继续执行；它不是总执行步数。服务端没有
-`is_success`，也不设置总 Chunk 或总执行步数上限，因此必须由操作员使用网页停止、
-下面的 `stop` 命令或 Ctrl+C 结束；故障和 lease 失效也会终止执行。`--prompt` 可换成
+`is_success` 时按 false 处理；若响应提供严格布尔值且变为 true，则收到该包后、下发
+其中任何动作前正常结束。仍不设置总 Chunk 或总执行步数上限；操作员可随时使用网页停止、
+下面的 `stop` 命令或 Ctrl+C 结束。故障和 lease 失效也会终止执行。`--prompt` 可换成
 `--prompt-file /path/to/prompt.txt`；两种方式都会去除首尾空白并限制在 1000 字符内。
 也可随时执行：
 
@@ -231,7 +282,7 @@ H1_CONTROL_LEASE='LEASE_ID' \
 ### 无浏览器的完整代码流程
 
 机器人必须由现场操作员**事先人工完成厂商初始化**，并已确认实体急停、
-清场、`Init_Complete(2)` 和 `LOW_LEVEL`。之后可用一条命令在同一 lease 内执行
+清场、`Init_Complete(2)` 和 `GRAVITY_COMPENSATION_LEVEL`。之后可用一条命令在同一 lease 内执行
 `reconnect → dry-run → start`：
 
 ```bash
@@ -251,10 +302,42 @@ H1_CONTROL_LEASE='LEASE_ID' \
 
 `--auto-takeover` 是操作员在本次命令中的显式授权：CLI 申请 lease、在阻塞请求和
 执行期间持续 heartbeat，并在结束或异常清理时释放 lease。`--prepare` 使它先对
-选定 host/port 执行 health + metadata，再用同一 prompt dry-run，通过后才提交真机
+选定 host/port 建立 WebSocket，再用同一 prompt dry-run，通过后才提交真机
 start。任一环节失败都请求软件停止；它永远不自动调用 `robot_init()` 或
 `robot_deinit()`。机器人仍在反初始化状态时，dry-run 可安全完成，但 start 会被后端
 拒绝，不会自行初始化。
+
+CLI 默认 `--inference-mode custom`，因此旧的单 Prompt 命令保持兼容。代码入口也可
+显式使用网页相同的编排模式，例如：
+
+```bash
+# 单手：非活动侧保持启动姿态
+$PY310 $EXECUTOR run --web-url http://172.16.18.43:8080 \
+  --auto-takeover --prepare --confirm-motion \
+  --inference-mode single --active-hand left \
+  --prompt 'Grasp Coca-Cola with the left hand'
+
+# 双手分开：左手 -> 连续150个已执行闭合动作 -> 双臂归零 -> 右手
+$PY310 $EXECUTOR run --web-url http://172.16.18.43:8080 \
+  --auto-takeover --prepare --confirm-motion \
+  --inference-mode dual_separate \
+  --prompt 'Grasp Coca-Cola with the left hand' \
+  --right-prompt 'Grasp NEVER Coconut Latte with the right hand'
+```
+
+完成判定直接读取响应中的布尔值 `is_success`，不依赖 metadata 或 `status_mode`。
+单手任务的 Prompt 仍须匹配所选手，双手分开任务的两条 Prompt 须分别匹配左、右手。
+任何模式收到 `is_success=true` 都表示任务已经完成，立即结束整个推理任务，
+不执行同一响应中的动作；它不是“执行完本 chunk 才完成”，也不是双手分开的阶段切换信号。
+该字段可以省略，缺失时按 false 继续推理；如果提供，则必须是布尔值。
+
+## 升降诊断
+
+升降诊断可通过只读 `GET /api/pi05/lift-diagnostics` 获取，沿用状态接口的访问认证。
+保留最近 20 个 chunk 的完整升降高度序列和最近 600 个成功下发步骤的
+服务端目标、SDK 请求目标、实际发送目标、发送前反馈及时间戳，单位均为米。
+记录复用已有反馈，不额外读取 SDK，不改变动作；停止后保留，新任务启动时清空。
+`feedback_height` 是对应命令下发前的反馈，不是该命令执行后的到位结果。
 
 ## 相机映射
 
@@ -277,28 +360,25 @@ wire 8..14  -> motor 15..21  右臂 7 关节
 wire 15     -> motor 22      右夹爪
 wire 16     -> motor 2       升降柱
 wire 17..20 -> motor 3..6    腰 pitch/yaw、头 yaw/pitch（只保持）
-wire 21..22 -> 不下发        底盘线/角速度（强制零）
+wire 21..22 -> SDK 0、1     全维模式换算为左右轮速度，其他模式零速
 ```
 
-policy session 建立时，唯一 SDK owner 线程一次性读取并锁定腰/头
-`state[17:21]`。每个动作步仍重新读取真实反馈用于状态上传、错误检查和诊断，但最终
-始终用该 session 启动快照覆盖 `action[17:21]`，清零 `action[21:23]`，并只向位置
-电机发送 `action[:21]`。这样真实反馈即使因重力短暂偏离，也不会被追认为下一步目标。
+policy session 建立时，唯一 SDK owner 保存启动状态。16维模式固定 `action[16:21]`，
+17维模式固定 `action[17:21]`，两者均将底盘速度置零；23维模式保留全部返回目标。
+执行器和 SDK owner 共用同一模式变换，实际下发前再次套用同一启动快照，防止随反馈漂移。
 
 ## 协议与硬件边界
 
 - state 必须恰好 23 维且全部有限；action chunk 必须恰好 `50×23` 且全部有限。
 - 三路输入图片必须存在并是 `HxWx3 uint8 BGR`；直接编码成 JPEG，不做 BGR→RGB 交换。
-- 双夹爪动作只接受张开 `0` 或闭合 `1.5`。
-- 每步执行前重新读取最新反馈；腰和头 `action[17:21]` 覆盖为 policy session 启动时
-  一次性采集的位置，底盘 `action[21:23]` 强制为零，最终只向 SDK 发送
-  `action[:21]`。
-- 模型控制的前 17 维目标仍遵守厂商 SDK 软限位；所有位置反馈只要求为有限数，不再
-  对反馈设置范围或零点容差阈值。腰和头的 session 启动快照按原始反馈保持，因此
-  编码器在标称零点附近出现微小负值不会阻止执行，也不会在运行中逐步追随漂移。
+- 双夹爪观测值原样上传；服务端返回的夹爪动作也不做阈值化、取整或重映射。执行端仅做
+  有限值和厂商 SDK `[0, 1.5]` 物理范围检查。
+- 每步执行前重新读取最新反馈；16/17维模式按启动快照保持未启用轴，23维不覆盖目标。
+- 模型控制的轴遵守厂商 SDK 软限位；固定保持轴使用原始有限反馈，避免编码器零点漂移
+  触发范围故障。所有模式都不把随后反馈当作新的固定目标。
 - 仍检查 SDK 返回的电机 error flag 和厂商明确的供电前置条件（未充电时 SOC 不低于
   10%）。非有限数、维度、SDK 范围或硬件错误仍会故障停止。
-- 双臂关节速度默认 30 deg/s，只接受大于 0 的有限数；每周期按
+- 16/17维模式的双臂关节速度默认 30 deg/s，只接受大于 0 的有限数；每周期按
   `radians(速度)/发送频率` 限制 14 个双臂关节相对上一条成功下发目标的变化。没有额外
   0.2 rad 锁存阈值，夹爪和升降柱不经过该速度限幅。
 - 控制频率默认 30 Hz，只接受大于 0 的有限数；它同时决定发送节拍和关节速度换算出的
@@ -306,11 +386,11 @@ policy session 建立时，唯一 SDK owner 线程一次性读取并锁定腰/�
 - 服务端固定返回 50 步；`steps_per_chunk` 默认 30，只接受 `1..50`，每包执行 N 步后
   继续下一包，不设总 Chunk 或累计执行步数上限。
 - 使用一条 WebSocket、最多一个未完成请求；显式禁用代理，不发送 `rtc.enabled`。
-- 网络超时、JSON 错误、metadata 不匹配、动作/图片/状态缺失或非法、SDK 错误、lease
+- 网络超时、JSON 错误、动作/图片/状态缺失或非法、SDK 错误、lease
   失效等异常都会停止发送新动作并锁存 `fault`，关闭当前连接；不会静默自动重连、恢复
   或继续运动。
-- 真机 start 必须具备当前控制 lease、成功的 metadata 与同 prompt dry-run、机器人
-  `Init_Complete(2)`、`LOW_LEVEL` 和操作员明确确认。CLI 运行期间持续维持 lease。
+- 真机 start 必须具备当前控制 lease、可用的 WebSocket 连接与同 prompt、同执行模式的 dry-run、机器人
+  `Init_Complete(2)`、`GRAVITY_COMPENSATION_LEVEL` 和操作员明确确认。CLI 运行期间持续维持 lease。
 - 推理运行期间由唯一 SDK owner 排除手动、语音及生命周期动作，避免两个控制来源同时
   下发；STOP、heartbeat、状态读取和故障复位路径保留。
 - 停止或故障时请求停止推理并结束 policy session；任何路径都不自动调用

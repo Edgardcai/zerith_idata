@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 import logging
 import threading
 import uuid
@@ -43,9 +43,11 @@ class ChineseSpeechClient:
         speaker: str = "Serena",
         final_timeout_ms: int = 1500,
         sample_rate: int = 24000,
+        language: str = "zh",
     ) -> None:
         self.asr_base_url = asr_base_url.rstrip("/")
         self.tts_base_url = tts_base_url.rstrip("/")
+        self.language = normalize_session_language(language)
         self.speaker = speaker
         self.final_timeout_ms = int(final_timeout_ms)
         self.sample_rate = int(sample_rate)
@@ -56,15 +58,16 @@ class ChineseSpeechClient:
         self._active_lock = threading.Lock()
         self._active_request_id: str | None = None
 
-    def transcribe(self, samples: np.ndarray, sample_rate: int = 16000) -> str:
+    def transcribe(self, samples: np.ndarray, sample_rate: int = 16000, language: str | None = None) -> str:
         if samples.size == 0:
             return ""
+        selected_language = normalize_session_language(language or self.language)
         try:
             response = self._client.post(
                 f"{self.asr_base_url}/v1/transcribe",
                 files={"file": ("utterance.wav", float32_to_wav(samples, sample_rate), "audio/wav")},
-                data={"language": "zh", "timeout_ms": str(self.final_timeout_ms)},
-                timeout=httpx.Timeout(max(5.0, self.final_timeout_ms / 1000 + 3.0), connect=1.0),
+                data={"language": selected_language, "timeout_ms": str(self.final_timeout_ms)},
+                timeout=httpx.Timeout(60.0 if selected_language == "en" else max(5.0, self.final_timeout_ms / 1000 + 3.0), connect=1.0),
             )
             response.raise_for_status()
             payload = response.json()
@@ -87,6 +90,8 @@ class ChineseSpeechClient:
         *,
         cancel_event: threading.Event | None = None,
     ) -> Iterator[bytes]:
+        if cancel_event is not None and cancel_event.is_set():
+            return
         request_id = uuid.uuid4().hex
         with self._active_lock:
             self._active_request_id = request_id
@@ -97,9 +102,10 @@ class ChineseSpeechClient:
                 json={
                     "request_id": request_id,
                     "text": text,
-                    "language": "Chinese",
+                    "language": "English" if self.language == "en" else "Chinese",
                     "speaker": self.speaker,
                     "format": "pcm_s16le",
+                    "presegmented": True,
                 },
                 timeout=httpx.Timeout(120.0, connect=1.0, read=120.0),
             ) as response:
@@ -109,9 +115,9 @@ class ChineseSpeechClient:
                     raise ChineseSpeechError(
                         f"中文 TTS 采样率不匹配：期望 {self.sample_rate}，收到 {returned_rate}"
                     )
-                for chunk in response.iter_bytes(16384):
+                for chunk in response.iter_bytes(8192):
                     if cancel_event is not None and cancel_event.is_set():
-                        self.cancel()
+                        self.cancel(request_id)
                         return
                     if chunk:
                         yield chunk
@@ -124,9 +130,10 @@ class ChineseSpeechClient:
                 if self._active_request_id == request_id:
                     self._active_request_id = None
 
-    def cancel(self) -> None:
-        with self._active_lock:
-            request_id = self._active_request_id
+    def cancel(self, request_id: str | None = None) -> None:
+        if request_id is None:
+            with self._active_lock:
+                request_id = self._active_request_id
         if not request_id:
             return
         try:
@@ -144,9 +151,11 @@ class ChineseSpeechClient:
 
 
 class LanguageRoutedASR:
-    def __init__(self, english_asr: object, chinese: ChineseSpeechClient | None) -> None:
+    def __init__(self, english_asr: object, chinese: ChineseSpeechClient | None,
+                 local_ready: Callable[[], bool] | None = None) -> None:
         self.english_asr = english_asr
         self.chinese = chinese
+        self.local_ready = local_ready or (lambda: chinese is not None)
 
     def transcribe(
         self,
@@ -155,9 +164,12 @@ class LanguageRoutedASR:
         language: str = "zh",
     ) -> str:
         if is_chinese_language(language):
-            if self.chinese is None:
-                raise ChineseSpeechError("中文本地语音链路未启用")
-            return self.chinese.transcribe(samples, sample_rate)
+            if self.chinese is not None and self.local_ready():
+                try:
+                    return self.chinese.transcribe(samples, sample_rate)
+                except ChineseSpeechError:
+                    LOG.warning("本地中文识别失败，切换云端识别", exc_info=True)
+            return self.english_asr.transcribe(samples, sample_rate, language="zh")
         # Frozen English path: same object, models, payload, config and fallback order.
         return self.english_asr.transcribe(samples, sample_rate, language="en")
 

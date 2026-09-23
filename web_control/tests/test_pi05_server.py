@@ -18,9 +18,11 @@ class _FakePi05:
         self.phase = "idle"
         self.probe_calls = 0
         self.dry_runs: list[tuple[str, str]] = []
+        self.dry_run_plans: list[dict[str, object]] = []
         self.reconnects: list[tuple[str, int]] = []
         self.disconnect_reasons: list[str] = []
         self.starts: list[tuple[str, str, str, int, float, float]] = []
+        self.start_plans: list[dict[str, object]] = []
         self.stop_reasons: list[str] = []
         self.closed = False
 
@@ -30,29 +32,53 @@ class _FakePi05:
             "phase": self.phase,
             "active": self.phase in ("running", "stopping"),
             "fault": None,
-            "metadata_ok": self.probe_calls > 0,
+            "connected": self.probe_calls > 0,
+            "protocol_ok": bool(self.dry_runs),
             "dry_run_ok": bool(self.dry_runs),
         }
 
+    def lift_diagnostics(self):
+        return {"unit": "m", "chunks": [], "steps": []}
+
     def probe(self):
         self.probe_calls += 1
-        return {"health": "OK", "metadata": {"robot": "zerith_h1_pro"}, "status": self.status()}
+        return {"status": self.status()}
 
-    def reconnect(self, host, port):
+    def reconnect(self, host, port, *, request_format="legacy"):
+        self.request_format = request_format
         self.reconnects.append((host, port))
         self.probe_calls += 1
-        return {"health": "OK", "metadata": {"robot": "zerith_h1_pro"}, "status": self.status()}
+        return {"status": self.status()}
 
     def disconnect(self, *, reason="operator_disconnect", **_kwargs):
         self.disconnect_reasons.append(reason)
         self.phase = "idle"
         return self.status()
 
-    def dry_run(self, prompt, lease):
+    def dry_run(
+        self,
+        prompt,
+        lease,
+        *,
+        inference_mode="custom",
+        execution_mode="arms",
+        active_hand=None,
+        right_prompt=None,
+        phase_entry_action=None,
+    ):
+        self.phase_entry_action = phase_entry_action
         if not lease:
             raise ValueError("lease required")
         self.phase = "dry_run_ready"
         self.dry_runs.append((prompt, lease))
+        self.dry_run_plans.append(
+            {
+                "inference_mode": inference_mode,
+                "execution_mode": execution_mode,
+                "active_hand": active_hand,
+                "right_prompt": right_prompt,
+            }
+        )
         return {"ok": True, "chunk_length": 50, "action_dim": 23}
 
     def start(
@@ -64,6 +90,11 @@ class _FakePi05:
         steps_per_chunk=30,
         control_rate_hz=30,
         joint_speed_deg_s=30,
+        inference_mode="custom",
+        execution_mode="arms",
+        active_hand=None,
+        right_prompt=None,
+        phase_entry_action=None,
     ):
         if confirmation != REQUIRED_CONFIRMATION:
             raise ValueError("confirmation required")
@@ -77,6 +108,14 @@ class _FakePi05:
                 control_rate_hz,
                 joint_speed_deg_s,
             )
+        )
+        self.start_plans.append(
+            {
+                "inference_mode": inference_mode,
+                "execution_mode": execution_mode,
+                "active_hand": active_hand,
+                "right_prompt": right_prompt,
+            }
         )
         return self.status()
 
@@ -192,6 +231,22 @@ class Pi05ServerTests(unittest.TestCase):
         connection.close()
         return status, value
 
+    def test_optional_request_format_forwarded(self) -> None:
+        status, _ = self.request("POST", "/api/pi05/reconnect", {
+            "host": "192.168.6.47", "port": 9977, "request_format": "task_mode",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(self.pi05.request_format, "task_mode")
+
+    def test_phase_entry_action_forwarded_to_dry_run(self) -> None:
+        status, takeover = self.request("POST", "/api/takeover", {"enabled": True, "client_id": "entry-test"})
+        self.assertEqual(status, 200)
+        status, _ = self.request("POST", "/api/pi05/dry-run", {
+            "prompt": "left task", "phase_entry_action": [0.2] * 23,
+        }, takeover["lease_id"])
+        self.assertEqual(status, 200)
+        self.assertEqual(self.pi05.phase_entry_action, [0.2] * 23)
+
     def test_state_and_explicit_status_expose_pi05(self) -> None:
         status, value = self.request("GET", "/api/pi05/status")
         self.assertEqual(status, 200)
@@ -206,11 +261,11 @@ class Pi05ServerTests(unittest.TestCase):
             "/api/pi05/reconnect",
             {"host": "192.168.1.155", "port": 9988},
         )
-        self.assertEqual((status, value["health"]), (200, "OK"))
+        self.assertEqual((status, value["status"]["connected"]), (200, True))
         self.assertEqual(self.pi05.reconnects, [("192.168.1.155", 9988)])
 
         status, value = self.request("POST", "/api/pi05/probe", {})
-        self.assertEqual((status, value["health"]), (200, "OK"))
+        self.assertEqual((status, value["status"]["connected"]), (200, True))
 
         status, takeover = self.request(
             "POST",
@@ -242,6 +297,56 @@ class Pi05ServerTests(unittest.TestCase):
         self.assertEqual(status, 202)
         self.assertEqual(value["phase"], "running")
         self.assertEqual(self.pi05.starts[-1][3:], (30, 25, 20))
+        self.assertEqual(
+            self.pi05.start_plans[-1],
+            {
+                "inference_mode": "custom",
+                "execution_mode": "arms",
+                "active_hand": None,
+                "right_prompt": None,
+            },
+        )
+
+    def test_prompt_plan_fields_are_forwarded_to_dry_run_and_start(self) -> None:
+        status, takeover = self.request(
+            "POST",
+            "/api/takeover",
+            {"enabled": True, "client_id": "pi05-plan-test"},
+        )
+        self.assertEqual(status, 200)
+        lease = takeover["lease_id"]
+
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        task = {
+            "prompt": left_prompt,
+            "inference_mode": "dual_separate",
+            "active_hand": None,
+            "right_prompt": right_prompt,
+        }
+        status, _ = self.request("POST", "/api/pi05/dry-run", task, lease)
+        self.assertEqual(status, 200)
+        self.assertEqual(
+            self.pi05.dry_run_plans[-1],
+            {
+                "inference_mode": "dual_separate",
+                "execution_mode": "arms",
+                "active_hand": None,
+                "right_prompt": right_prompt,
+            },
+        )
+
+        status, _ = self.request(
+            "POST",
+            "/api/pi05/start",
+            {
+                **task,
+                "confirmation": REQUIRED_CONFIRMATION,
+            },
+            lease,
+        )
+        self.assertEqual(status, 202)
+        self.assertEqual(self.pi05.start_plans[-1], self.pi05.dry_run_plans[-1])
 
         # Pi STOP is deliberately available to any authenticated console,
         # even if the page that started the run disappeared with its lease.
@@ -330,6 +435,7 @@ class Pi05ServerTests(unittest.TestCase):
             "/api/config",
             "/api/state",
             "/api/pi05/status",
+            "/api/pi05/lift-diagnostics",
             "/api/cameras/status",
             "/api/voice/status",
         ):
@@ -351,7 +457,7 @@ class Pi05ServerTests(unittest.TestCase):
         # the HTTP gate must never prevent them from reaching the executor.
         self.pi05.phase = "running"
         status, value = self.request("POST", "/api/pi05/probe", {})
-        self.assertEqual((status, value["health"]), (200, "OK"))
+        self.assertEqual((status, value["status"]["connected"]), (200, True))
         status, value = self.request("POST", "/api/pi05/stop", {})
         self.assertEqual((status, value["phase"]), (200, "idle"))
         self.pi05.phase = "fault"

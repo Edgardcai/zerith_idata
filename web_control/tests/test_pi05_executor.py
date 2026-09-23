@@ -19,29 +19,14 @@ from control.web_control.pi05_executor import (
     REQUIRED_CONFIRMATION,
     _slew_limit_arm_action,
 )
-from control.web_control.pi05_protocol import ACTION_ORDER, STATE_ORDER
-
-
-def valid_metadata() -> dict:
-    return {
-        "robot": "zerith_h1_pro",
-        "wire_state_dim": 23,
-        "wire_action_dim": 23,
-        "model_policy_dim": 17,
-        "input_gripper_binary": False,
-        "output_gripper_binary": True,
-        "status_mode": "none",
-        "state_order": list(STATE_ORDER),
-        "action_order": list(ACTION_ORDER),
-    }
 
 
 def valid_chunk() -> np.ndarray:
     actions = np.zeros((50, 23), dtype=np.float64)
     actions[:, :7] = 0.01
-    actions[:, 7] = 0.0
+    actions[:, 7] = 0.4
     actions[:, 8:15] = -0.01
-    actions[:, 15] = 1.5
+    actions[:, 15] = 0.8
     actions[:, 16] = 0.25
     actions[:, 17:21] = np.asarray((9.0, 8.0, 7.0, 6.0))
     actions[:, 21:23] = np.asarray((4.0, -4.0))
@@ -56,8 +41,10 @@ class FakePolicyClient:
         self.infer_calls = 0
         self.infer_inputs: list[tuple[np.ndarray, dict[str, np.ndarray], str]] = []
         self.mode = "valid"
+        self.raw_factory = None
         self.delay_s = 0.0
         self.block = False
+        self.block_on_infer_call: int | None = None
         self.fail_on_infer_call: int | None = None
         self.chunk_factory = None
         self.on_infer = None
@@ -70,7 +57,7 @@ class FakePolicyClient:
     def metadata(self, *, timeout: float = 5.0) -> dict:
         del timeout
         self.metadata_calls += 1
-        return valid_metadata()
+        raise AssertionError("observation-only server does not support metadata")
 
     def infer(self, state, images, prompt, *, jpeg_quality=90, timeout=None):
         del jpeg_quality, timeout
@@ -90,7 +77,7 @@ class FakePolicyClient:
                     prompt,
                 )
             )
-            if self.block:
+            if self.block or call_number == self.block_on_infer_call:
                 self._closed_event.wait(5.0)
                 raise RuntimeError("policy connection closed while blocked")
             if call_number == self.fail_on_infer_call:
@@ -106,9 +93,12 @@ class FakePolicyClient:
                 actions[0, 0] = np.nan
             elif self.mode == "wrong_shape":
                 actions = actions[:-1]
-            elif self.mode == "bad_gripper":
-                actions[0, 7] = 0.4
-            return actions, {"type": "action_chunk", "actions": [object()] * 50}
+            raw = (
+                self.raw_factory(call_number)
+                if self.raw_factory is not None
+                else {"type": "action_chunk", "actions": [object()] * 50, "is_success": False}
+            )
+            return actions, raw
         finally:
             with self._lock:
                 self._active -= 1
@@ -134,6 +124,8 @@ class FakeRobot:
         self.stop_calls = 0
         self.deinit_calls = 0
         self.lose_lease_after_steps: int | None = None
+        self.fail_on_step: int | None = None
+        self.track_feedback = False
         self.session_body_hold: np.ndarray | None = None
 
     def has_live_lease(self, lease_id: str) -> bool:
@@ -146,10 +138,15 @@ class FakeRobot:
         self.read_calls += 1
         return {"state": self.state.tolist(), "state_monotonic": time.monotonic()}
 
-    def begin_policy_session(self, lease_id: str) -> dict:
+    def validate_policy_chassis(self, actions):
+        pass
+
+    def begin_policy_session(self, lease_id: str, *, execution_mode="arms") -> dict:
         if not self.has_live_lease(lease_id):
             raise RuntimeError("lease expired")
         self.begin_calls += 1
+        self.execution_mode = execution_mode
+        self.session_initial_state = self.state.copy()
         self.session_body_hold = self.state[17:21].copy()
         return {
             "session_id": "policy-session",
@@ -167,16 +164,20 @@ class FakeRobot:
     ) -> dict:
         if not self.has_live_lease(lease_id) or session_id != "policy-session":
             raise RuntimeError("invalid policy session")
+        if self.fail_on_step is not None and len(self.steps) + 1 == self.fail_on_step:
+            raise RuntimeError("policy step failed deterministically")
         value = np.asarray(action, dtype=np.float64)
         self.steps.append(value.copy())
         effective = value.copy()
-        if self.session_body_hold is not None:
-            effective[17:21] = self.session_body_hold
-        effective[21:23] = 0.0
+        if self.session_body_hold is not None and self.execution_mode != "full":
+            first_held = 16 if self.execution_mode == "arms" else 17
+            effective[first_held:21] = self.session_initial_state[first_held:21]
+            effective[21:23] = 0.0
+        latest_state = self.state.copy()
         if self.lose_lease_after_steps is not None and len(self.steps) >= self.lose_lease_after_steps:
             self.live = False
-        return {
-            "latest_state": self.state.tolist(),
+        result = {
+            "latest_state": latest_state.tolist(),
             "requested_action": value.tolist(),
             "effective_action": effective.tolist(),
             "sent_action": effective[:21].tolist(),
@@ -184,6 +185,9 @@ class FakeRobot:
             "body_hold_target": effective[17:21].tolist(),
             "state_monotonic": time.monotonic(),
         }
+        if self.track_feedback:
+            self.state[:21] = effective[:21]
+        return result
 
     def policy_hold_and_zero(self, lease_id: str, *, session_id=None, reason="operator_stop") -> dict:
         del lease_id
@@ -322,12 +326,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.camera = FakeCamera()
         self.policy = FakePolicyClient()
         self.camera_lease = CameraLease()
-        self.health_calls: list[tuple[str, int]] = []
         self.factory_calls: list[tuple[str, int]] = []
-
-        def health(host: str, port: int) -> str:
-            self.health_calls.append((host, port))
-            return "OK"
 
         def factory(host: str, port: int) -> FakePolicyClient:
             self.factory_calls.append((host, port))
@@ -337,7 +336,6 @@ class Pi05ExecutorTests(unittest.TestCase):
             self.robot,
             self.camera,
             policy_factory=factory,
-            health_probe=health,
             camera_acquire=self.camera_lease.acquire,
             camera_release=self.camera_lease.release,
             stop_timeout_s=1.0,
@@ -370,13 +368,23 @@ class Pi05ExecutorTests(unittest.TestCase):
             time.sleep(0.002)
         self.fail(f"execution did not reach step {minimum}: {self.executor.status()}")
 
-    def test_probe_only_health_and_metadata(self) -> None:
-        result = self.executor.probe()
-        self.assertEqual(result["health"], "OK")
-        self.assertTrue(result["status"]["metadata_ok"])
-        self.assertEqual(self.health_calls, [("192.168.1.154", 9973)])
+    def wait_for_task_stage(self, stage: str, timeout: float = 3.0) -> dict:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self.executor.status()
+            if status["task_stage"] == stage:
+                return status
+            if status["phase"] == PHASE_FAULT:
+                self.fail(f"execution faulted before task stage {stage}: {status}")
+            time.sleep(0.002)
+        self.fail(f"task stage did not become {stage}: {self.executor.status()}")
+
+    def test_probe_connects_without_metadata_health_or_robot_access(self) -> None:
+        with mock.patch("control.web_control.pi05_protocol.probe_healthz", side_effect=AssertionError("unsupported")):
+            result = self.executor.probe()
+        self.assertFalse(result["status"]["protocol_ok"])
         self.assertEqual(self.factory_calls, [("192.168.1.154", 9973)])
-        self.assertEqual(self.policy.metadata_calls, 1)
+        self.assertEqual(self.policy.metadata_calls, 0)
         self.assertEqual(self.policy.infer_calls, 0)
         self.assertEqual(self.robot.read_calls, 0)
         self.assertEqual(self.robot.begin_calls, 0)
@@ -391,15 +399,10 @@ class Pi05ExecutorTests(unittest.TestCase):
         replacement = FakePolicyClient()
         events: list[tuple[str, str, int, bool]] = []
 
-        def health(host: str, port: int) -> str:
-            events.append(("health", host, port, old_policy.closed))
-            return "OK"
-
         def factory(host: str, port: int) -> FakePolicyClient:
             events.append(("factory", host, port, old_policy.closed))
             return replacement
 
-        self.executor._health_probe = health
         self.executor._policy_factory = factory
         result = self.executor.reconnect("10.1.1.135", 9988)
 
@@ -407,7 +410,6 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(
             events,
             [
-                ("health", "10.1.1.135", 9988, True),
                 ("factory", "10.1.1.135", 9988, True),
             ],
         )
@@ -415,7 +417,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(result["status"]["host"], "10.1.1.135")
         self.assertEqual(result["status"]["port"], 9988)
         self.assertTrue(result["status"]["connected"])
-        self.assertTrue(result["status"]["metadata_ok"])
+        self.assertFalse(result["status"]["protocol_ok"])
         self.assertFalse(result["status"]["dry_run_ok"])
         self.assertIsNone(result["status"]["dry_run_age_ms"])
 
@@ -442,12 +444,12 @@ class Pi05ExecutorTests(unittest.TestCase):
         old_policy = self.policy
         attempts: list[tuple[str, int]] = []
 
-        def failing_health(host: str, port: int) -> str:
+        def failing_factory(host: str, port: int) -> str:
             attempts.append((host, port))
-            raise RuntimeError("health unavailable")
+            raise RuntimeError("WebSocket unavailable")
 
-        self.executor._health_probe = failing_health
-        with self.assertRaisesRegex(RuntimeError, "health unavailable"):
+        self.executor._policy_factory = failing_factory
+        with self.assertRaisesRegex(RuntimeError, "WebSocket unavailable"):
             self.executor.reconnect("10.1.1.135", 9973)
 
         self.assertTrue(old_policy.closed)
@@ -463,15 +465,10 @@ class Pi05ExecutorTests(unittest.TestCase):
         clients = [FakePolicyClient(), FakePolicyClient()]
         calls: list[tuple[str, str, int]] = []
 
-        def health(host: str, port: int) -> str:
-            calls.append(("health", host, port))
-            return "OK"
-
         def factory(host: str, port: int) -> FakePolicyClient:
             calls.append(("factory", host, port))
             return clients.pop(0)
 
-        self.executor._health_probe = health
         self.executor._policy_factory = factory
         self.executor.reconnect("100.93.20.55", 9974)
         self.executor.probe()
@@ -479,9 +476,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
-                ("health", "100.93.20.55", 9974),
                 ("factory", "100.93.20.55", 9974),
-                ("health", "100.93.20.55", 9974),
                 ("factory", "100.93.20.55", 9974),
             ],
         )
@@ -509,7 +504,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         status = self.executor.disconnect()
         self.assertEqual(status["phase"], PHASE_IDLE)
         self.assertFalse(status["connected"])
-        self.assertFalse(status["metadata_ok"])
+        self.assertFalse(status["protocol_ok"])
         self.assertFalse(status["dry_run_ok"])
         self.assertTrue(self.policy.closed)
         self.assertEqual(self.robot.deinit_calls, 0)
@@ -554,7 +549,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual((result["chunk_length"], result["action_dim"]), (50, 23))
         self.assertTrue(result["hold_verified"])
         self.assertTrue(result["base_zero_verified"])
-        self.assertEqual(result["gripper_values"], {"7": [0.0], "15": [1.5]})
+        self.assertEqual(result["gripper_values"], {"7": [0.4], "15": [0.8]})
         effective = np.asarray(result["first_effective_action"])
         np.testing.assert_array_equal(effective[17:21], self.robot.state[17:21])
         np.testing.assert_array_equal(effective[21:23], np.zeros(2))
@@ -563,6 +558,8 @@ class Pi05ExecutorTests(unittest.TestCase):
             0.01,
         )
         self.assertEqual(set(self.policy.infer_inputs[0][1]), {"cam_high", "cam_left_wrist", "cam_right_wrist"})
+        self.assertEqual(float(self.policy.infer_inputs[0][0][7]), 0.4)
+        self.assertEqual(float(self.policy.infer_inputs[0][0][15]), 0.8)
         self.assertEqual(
             self.camera.calls,
             ["head", "left_wrist", "right_wrist"],
@@ -740,7 +737,7 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertFalse(before["active"])
         stopped = self.executor.stop()
         self.assertEqual(stopped["phase"], PHASE_IDLE)
-        self.assertFalse(stopped["metadata_ok"])
+        self.assertFalse(stopped["protocol_ok"])
         self.assertFalse(stopped["dry_run_ok"])
         self.assertIsNone(stopped["dry_run_age_ms"])
         self.assertNotIn("dry_run_ttl_ms", stopped)
@@ -835,7 +832,7 @@ class Pi05ExecutorTests(unittest.TestCase):
     def test_default_executes_first_30_actions_of_every_50_step_chunk(self) -> None:
         def indexed_chunk(call_number: int) -> np.ndarray:
             actions = valid_chunk()
-            actions[:, 16] = float(call_number)
+            actions[:, 7] = float(call_number) / 10
             return actions
 
         self.policy.chunk_factory = indexed_chunk
@@ -853,8 +850,8 @@ class Pi05ExecutorTests(unittest.TestCase):
 
         self.assertGreaterEqual(len(self.robot.steps), 31)
         self.assertAlmostEqual(self.robot.steps[0][0], math.radians(30) / 120)
-        self.assertTrue(all(action[16] == 2.0 for action in self.robot.steps[:30]))
-        self.assertEqual(self.robot.steps[30][16], 3.0)
+        self.assertTrue(all(action[7] == 0.2 for action in self.robot.steps[:30]))
+        self.assertEqual(self.robot.steps[30][7], 0.3)
         status = self.executor.status()
         self.assertEqual(status["chunk_request_mode"], "after_chunk_sync")
         self.assertGreaterEqual(status["chunk_sequence"], 2)
@@ -972,7 +969,7 @@ class Pi05ExecutorTests(unittest.TestCase):
             )
         reset = self.executor.reset_fault()
         self.assertEqual(reset["phase"], PHASE_IDLE)
-        self.assertFalse(reset["metadata_ok"])
+        self.assertFalse(reset["protocol_ok"])
 
     def test_camera_age_is_reported_but_not_rejected_by_an_executor_threshold(self) -> None:
         self.executor.probe()
@@ -1025,6 +1022,300 @@ class Pi05ExecutorTests(unittest.TestCase):
         self.assertEqual(self.robot.deinit_calls, 0)
         self.executor.close()
         self.assertEqual(self.robot.deinit_calls, 0)
+
+    def test_dual_separate_dry_run_validates_both_prompts_and_gates_full_plan(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.executor.probe()
+        result = self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+
+        self.assertEqual(result["inference_mode"], "dual_separate")
+        self.assertEqual(result["right_prompt"], right_prompt)
+        self.assertEqual(len(result["prompt_results"]), 2)
+        left_preview = np.asarray(
+            result["prompt_results"][0]["first_effective_action"]
+        )
+        right_preview = np.asarray(
+            result["prompt_results"][1]["first_effective_action"]
+        )
+        np.testing.assert_array_equal(left_preview[8:16], self.robot.state[8:16])
+        np.testing.assert_array_equal(right_preview[:7], np.zeros(7))
+        self.assertEqual(right_preview[7], 1.5)
+        self.assertAlmostEqual(
+            result["prompt_results"][1]["server_first_action"][0],
+            0.01,
+        )
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs],
+            [left_prompt, right_prompt],
+        )
+        status = self.executor.status()
+        self.assertEqual(status["task_stage"], "ready")
+        self.assertEqual(status["active_prompt"], left_prompt)
+        self.assertEqual(status["right_prompt"], right_prompt)
+
+        with self.assertRaisesRegex(Pi05SafetyError, "exactly match"):
+            self.executor.start(
+                left_prompt,
+                "lease",
+                confirmation=REQUIRED_CONFIRMATION,
+                inference_mode="dual_separate",
+                right_prompt="Grasp Pepsi with the right hand",
+            )
+        self.assertEqual(self.robot.begin_calls, 0)
+
+    def test_custom_and_dual_prompts_do_not_require_metadata_status_modes(self) -> None:
+        self.executor.probe()
+        for prompt, mode in (
+            ("Grasp Coca-Cola", "custom"),
+            ("Grasp Coca-Cola with the left hand and Pepsi with the right hand", "dual_continuous"),
+        ):
+            with self.subTest(mode=mode):
+                self.executor.dry_run(prompt, "lease", inference_mode=mode)
+                self.assertTrue(self.executor.status()["protocol_ok"])
+        self.assertEqual(self.policy.metadata_calls, 0)
+        self.assertEqual(self.robot.steps, [])
+
+    def test_missing_success_allows_dry_run_and_execution(self) -> None:
+        self.policy.raw_factory = lambda call: {"type": "action_chunk", "actions": [object()] * 50}
+        self.probe_and_dry_run("task without success")
+        self.assertTrue(self.executor.status()["protocol_ok"])
+        self.executor.start("task without success", "lease", confirmation=REQUIRED_CONFIRMATION)
+        self.wait_for_executed_steps(3)
+        self.assertIsNone(self.executor.status()["fault"])
+        self.assertFalse(self.executor.status()["last_is_success"])
+        self.executor.stop()
+
+    def test_lift_diagnostics_record_successful_commands_without_rewriting_them(self) -> None:
+        def chunk_factory(call):
+            actions = valid_chunk()
+            actions[:, 16] = 0.25 + np.arange(50) * 0.001
+            return actions
+
+        self.policy.chunk_factory = chunk_factory
+        self.executor.probe()
+        self.executor.dry_run("lift observation", "lease", execution_mode="arms_lift")
+        self.executor.start("lift observation", "lease", confirmation=REQUIRED_CONFIRMATION, execution_mode="arms_lift")
+        self.wait_for_executed_steps(4)
+        self.executor.stop()
+        diagnostics = self.executor.lift_diagnostics()
+        self.assertEqual(len(diagnostics["steps"]), len(self.robot.steps))
+        self.assertEqual(diagnostics["chunks"][0]["server_heights"], chunk_factory(0)[:, 16].tolist())
+        for sample, action in zip(diagnostics["steps"], self.robot.steps):
+            expected = 0.25 + sample["index"] * 0.001
+            self.assertEqual(sample["server_height"], expected)
+            self.assertEqual(sample["requested_height"], expected)
+            self.assertEqual(sample["sent_height"], expected)
+            self.assertEqual(action[16], expected)
+            self.assertEqual(sample["feedback_height"], self.robot.state[16])
+        # Callers cannot edit the retained diagnostic history.
+        diagnostics["chunks"][0]["server_heights"][0] = -999
+        diagnostics["steps"][0]["sent_height"] = -999
+        self.assertEqual(self.executor.lift_diagnostics()["chunks"][0]["server_heights"][0], 0.25)
+        self.assertEqual(self.executor.lift_diagnostics()["steps"][0]["sent_height"], 0.25)
+
+    def test_true_success_stops_before_chunk(self) -> None:
+        self.policy.raw_factory = lambda call: {
+            "type": "action_chunk",
+            "actions": [object()] * 50,
+            "is_success": call >= 2,
+        }
+        prompt = "custom task"
+        self.probe_and_dry_run(prompt)
+        self.executor.start(
+            prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+        )
+        status = self.wait_for_phase(PHASE_IDLE)
+        self.assertEqual(self.robot.steps, [])
+        self.assertTrue(status["last_is_success"])
+        self.assertEqual(status["completion_reason"], "server_success")
+        self.assertEqual(status["task_stage"], "completed")
+        self.assertEqual(self.robot.hold_calls[-1][1], "server_success")
+
+    def test_single_prompt_does_not_override_both_arm_execution_range(self) -> None:
+        self.robot.state[8:15] = np.linspace(0.11, 0.17, 7)
+        self.robot.state[15] = 0.63
+        prompt = "Grasp Coca-Cola with the left hand"
+        self.executor.probe()
+        self.executor.dry_run(
+            prompt,
+            "lease",
+            inference_mode="single",
+            active_hand="left",
+        )
+        self.executor.start(
+            prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="single",
+            active_hand="left",
+            steps_per_chunk=50,
+            control_rate_hz=120,
+        )
+        self.wait_for_executed_steps(2)
+        status = self.executor.stop(timeout=1.0)
+
+        self.assertGreaterEqual(len(self.robot.steps), 2)
+        for action in self.robot.steps:
+            self.assertLess(action[8], self.robot.state[8])
+            self.assertEqual(action[15], valid_chunk()[0, 15])
+        self.assertEqual(status["inference_mode"], "single")
+        self.assertEqual(status["active_hand"], "left")
+
+    def test_dual_separate_counts_executed_left_gripper_homes_and_stops_on_right_success(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.state[8:15] = np.linspace(0.11, 0.17, 7)
+        self.robot.state[15] = 0.63
+        self.robot.state[16] = 0.41
+        initial_right = self.robot.state[8:16].copy()
+        self.robot.track_feedback = True
+        self.policy.raw_factory = lambda call: {
+            "type": "action_chunk",
+            "actions": [object()] * 50,
+            "is_success": call == 7,
+        }
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        self.executor.start(
+            left_prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+            steps_per_chunk=50,
+            control_rate_hz=1000,
+            joint_speed_deg_s=100000,
+        )
+        status = self.wait_for_phase(PHASE_IDLE, timeout=3.0)
+
+        self.assertEqual(status["completion_reason"], "server_success")
+        self.assertTrue(status["last_is_success"])
+        self.assertEqual(status["task_stage"], "completed")
+        self.assertEqual(status["active_prompt"], right_prompt)
+        self.assertEqual(status["left_gripper_consecutive"], 150)
+        self.assertEqual(status["executed_steps"], 200)
+        self.assertGreaterEqual(len(self.robot.steps), 206)
+        for action in self.robot.steps[:150]:
+            np.testing.assert_array_equal(action[8:16], initial_right)
+        home = self.robot.steps[150]
+        np.testing.assert_array_equal(home[list(range(0, 7))], np.zeros(7))
+        np.testing.assert_array_equal(home[list(range(8, 15))], np.zeros(7))
+        self.assertEqual(home[7], 1.5)
+        self.assertEqual(home[15], 0.0)
+        self.assertEqual(home[16], 0.41)
+        for action in self.robot.steps[150:]:
+            np.testing.assert_array_equal(action[:7], np.zeros(7))
+            self.assertEqual(action[7], 1.5)
+        self.assertLessEqual(
+            status["home_feedback_error_rad"],
+            status["home_feedback_tolerance_rad"],
+        )
+        self.assertGreaterEqual(
+            status["home_feedback_stable_steps"],
+            status["home_feedback_required_stable_steps"],
+        )
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs],
+            [
+                left_prompt,
+                right_prompt,
+                left_prompt,
+                left_prompt,
+                left_prompt,
+                right_prompt,
+                right_prompt,
+            ],
+        )
+
+    def test_dual_separate_counter_advances_only_after_successful_policy_step(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.fail_on_step = 150
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        self.executor.start(
+            left_prompt,
+            "lease",
+            confirmation=REQUIRED_CONFIRMATION,
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+            steps_per_chunk=50,
+            control_rate_hz=1000,
+        )
+        status = self.wait_for_phase(PHASE_FAULT, timeout=3.0)
+        self.assertIn("policy step failed deterministically", status["fault"])
+        self.assertEqual(status["executed_steps"], 149)
+        self.assertEqual(status["left_gripper_consecutive"], 149)
+        self.assertEqual(len(self.robot.steps), 149)
+
+    def test_direction_semantics_are_checked_without_metadata(self) -> None:
+        self.executor.probe()
+        with self.assertRaisesRegex(Pi05SafetyError, "match active_hand"):
+            self.executor.dry_run(
+                "Grasp Coca-Cola with the left hand",
+                "lease",
+                inference_mode="single",
+                active_hand="right",
+            )
+        self.assertEqual(self.policy.infer_calls, 0)
+        self.assertEqual(self.policy.metadata_calls, 0)
+
+    def test_dual_separate_never_starts_right_stage_before_home_feedback_converges(self) -> None:
+        left_prompt = "Grasp Coca-Cola with the left hand"
+        right_prompt = "Grasp Vita Coconut with the right hand"
+        self.robot.state[0] = 0.5
+        self.executor.probe()
+        self.executor.dry_run(
+            left_prompt,
+            "lease",
+            inference_mode="dual_separate",
+            right_prompt=right_prompt,
+        )
+        with mock.patch(
+            "control.web_control.pi05_executor.DUAL_SEPARATE_HOME_TIMEOUT_S",
+            0.03,
+        ):
+            self.executor.start(
+                left_prompt,
+                "lease",
+                confirmation=REQUIRED_CONFIRMATION,
+                inference_mode="dual_separate",
+                right_prompt=right_prompt,
+                steps_per_chunk=50,
+                control_rate_hz=1000,
+                joint_speed_deg_s=100000,
+            )
+            status = self.wait_for_phase(PHASE_FAULT, timeout=3.0)
+
+        self.assertIn("home feedback did not converge", status["fault"])
+        # The only right prompt was the read-only second dry-run validation;
+        # execution itself never requested a right-stage chunk.
+        self.assertEqual(
+            [entry[2] for entry in self.policy.infer_inputs].count(right_prompt),
+            1,
+        )
+        self.assertGreaterEqual(len(self.robot.steps), 151)
+        for action in self.robot.steps[150:]:
+            np.testing.assert_array_equal(action[list(range(0, 7))], np.zeros(7))
+            self.assertEqual(action[7], 1.5)
 
 
 if __name__ == "__main__":

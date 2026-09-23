@@ -36,6 +36,16 @@ class VoiceGateway:
             raise VoiceGatewayError(str(value.get("message") or value.get("error") or f"HTTP {status}"))
         return value
 
+    def set_local_speech(self, enabled: bool) -> dict[str, Any]:
+        status, _headers, payload = self._request(
+            "POST", "/v1/local-speech",
+            body=json.dumps({"enabled": enabled}).encode(), timeout=5.0,
+        )
+        value = self._decode_json(payload)
+        if status not in (200, 202):
+            raise VoiceGatewayError(str(value.get("message") or value.get("error") or f"HTTP {status}"))
+        return value
+
     def finish_input(self) -> dict[str, Any]:
         status, _headers, payload = self._request(
             "POST",

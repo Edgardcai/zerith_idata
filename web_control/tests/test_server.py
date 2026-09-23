@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import h5py
@@ -38,6 +38,7 @@ class FakeVoiceGateway:
         self.language = None
         self.audio_payload = b"RIFF-test-audio"
         self.cancelled = 0
+        self.local_speech_requests = []
 
     def status(self):
         return {
@@ -70,6 +71,10 @@ class FakeVoiceGateway:
         if audio_id != 7:
             raise AssertionError(audio_id)
         return self.audio_payload
+
+    def set_local_speech(self, enabled):
+        self.local_speech_requests.append(enabled)
+        return {"accepted": True, "message": "正在切换"}
 
 
 class ServerTests(unittest.TestCase):
@@ -135,6 +140,16 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200, value)
         return value
 
+    def test_battery_is_available_without_takeover(self) -> None:
+        self.app.battery = Mock()
+        self.app.battery.snapshot.return_value = {"percent": 62, "charging": False}
+        status, _, raw = self.request("GET", "/api/state")
+        self.assertEqual(status, 200)
+        data = json.loads(raw)
+        self.assertEqual(data["battery"], {"percent": 62, "charging": False})
+        self.assertFalse(data["sdk_loaded"])
+        self.assertFalse(data["takeover"])
+
     def test_static_config_and_complete_fake_robot_lifecycle(self) -> None:
         status, _, html = self.request("GET", "/")
         self.assertEqual(status, 200)
@@ -199,6 +214,20 @@ class ServerTests(unittest.TestCase):
         self.assertIn("机器人独立麦克风".encode(), html)
         self.assertIn(b'id="pi05ArmHomeButton"', html)
         self.assertIn("机械臂归位".encode(), html)
+        for element_id in (
+            b"pi05TaskSingle",
+            b"pi05TaskDual",
+            b"pi05SingleItem",
+            b"pi05SingleHand",
+            b"pi05DualLeftItem",
+            b"pi05DualRightItem",
+            b"pi05DualContinuous",
+            b"pi05DualSeparate",
+            b"pi05PromptPreview",
+            b"pi05TaskStage",
+            b"pi05LeftGripperProgress",
+        ):
+            self.assertIn(b'id="' + element_id + b'"', html)
         self.assertIn(b'id="replayPage"', html)
         self.assertIn("真机回放".encode(), html)
         self.assertIn(b'id="replayDirectoryOptions"', html)
@@ -211,6 +240,16 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"await startRobotMicrophoneSession(language);", javascript)
         self.assertIn(b'"arm-home"', javascript)
         self.assertIn(b'"/api/replay/start"', javascript)
+        self.assertIn(b'inference_mode: "dual_separate"', javascript)
+        self.assertIn(b'right_prompt:', javascript)
+        for product in (
+            "AD Calcium Milk",
+            "Coca-Cola",
+            "NEVER Coconut Latte",
+            "If coconut",
+            "Pocky Chocolate",
+        ):
+            self.assertIn(product.encode(), javascript)
 
     def test_hdf5_replay_scan_start_and_status_routes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -323,6 +362,17 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(dict(headers)["Content-Type"], "audio/wav")
         self.assertEqual(raw, self.voice.audio_payload)
+
+    def test_local_speech_requires_boolean_and_proxies_explicit_requests(self) -> None:
+        for enabled in (True, False):
+            status, _, raw = self.request("POST", "/api/voice/local-speech", {"enabled": enabled})
+            self.assertEqual(status, 202)
+            self.assertTrue(json.loads(raw)["accepted"])
+        self.assertEqual(self.voice.local_speech_requests, [True, False])
+        for body in ({}, {"enabled": "true"}, {"enabled": 1}, {"enabled": None}):
+            status, _, _ = self.request("POST", "/api/voice/local-speech", body)
+            self.assertEqual(status, 400)
+        self.assertEqual(self.voice.local_speech_requests, [True, False])
 
     def test_voice_text_rejects_invalid_input(self) -> None:
         for body in (

@@ -171,6 +171,7 @@ class CameraService:
         poll_interval_s: float = 0.03,
         stale_after_s: float = 1.0,
         depth_visual_scale: float = 0.03,
+        enable_depth: bool = True,
         jpeg_quality: int = 85,
         stop_timeout_s: float = 3.0,
         client_factory: Optional[ClientFactory] = None,
@@ -196,6 +197,7 @@ class CameraService:
         self.poll_interval_s = float(poll_interval_s)
         self.stale_after_s = float(stale_after_s)
         self.depth_visual_scale = float(depth_visual_scale)
+        self.enable_depth = bool(enable_depth)
         self.jpeg_quality = int(jpeg_quality)
         self.stop_timeout_s = float(stop_timeout_s)
         self._client_factory = client_factory or _default_client_factory
@@ -268,7 +270,7 @@ class CameraService:
                 client = self._client_factory(
                     grpc_target=self.grpc_target,
                     connect_timeout=self.connect_timeout,
-                    enable_depth=True,
+                    enable_depth=self.enable_depth,
                 )
                 client.start()
                 state = client.get_state(timeout=self.state_timeout)
@@ -416,6 +418,8 @@ class CameraService:
             for stream in getattr(config, "streams", ()):
                 sdk_type = str(getattr(stream, "type", "")).strip().lower()
                 kind = STREAM_RGB if sdk_type in ("color", "rgb") else sdk_type
+                if kind == STREAM_DEPTH and not self.enable_depth:
+                    continue
                 if kind not in VALID_STREAMS:
                     continue
                 metadata = self._stream_metadata(stream)
@@ -879,7 +883,7 @@ class CameraService:
             f"{logical}/{stream}"
             for logical in EXPECTED_CAMERAS
             if logical in discovered_by_logical
-            for stream in (STREAM_RGB, STREAM_DEPTH)
+            for stream in ((STREAM_RGB, STREAM_DEPTH) if self.enable_depth else (STREAM_RGB,))
             if (discovered_by_logical[logical], stream) not in self._streams
         ]
 
@@ -979,7 +983,7 @@ class CameraService:
             "healthy": healthy,
             "thread_alive": thread_alive,
             "grpc_target": self.grpc_target,
-            "depth_enabled": True,
+            "depth_enabled": self.enable_depth,
             "poll_interval_s": self.poll_interval_s,
             "stale_after_s": self.stale_after_s,
             "generation": self._generation,

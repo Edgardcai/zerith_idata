@@ -27,12 +27,10 @@ ARM_AND_GRIPPER_KEYS = (*JOINT_KEYS, "gripper")
 STATE_DIM = 23
 ACTION_DIM = 23
 ACTION_HORIZON = 50
-MODEL_POLICY_DIM = 17
 
 GRIPPER_INDICES = (7, 15)
 GRIPPER_OPEN_VALUE = 0.0
 GRIPPER_CLOSED_VALUE = 1.5
-GRIPPER_VALUE_TOLERANCE = 1e-6
 
 STATE_ORDER = (
     *(f"left.{key}" for key in ARM_AND_GRIPPER_KEYS),
@@ -42,19 +40,19 @@ STATE_ORDER = (
     "waist.yaw",
     "head.yaw",
     "head.pitch",
-    "base.linear_velocity",
-    "base.angular_velocity",
+    "speed.linear",
+    "speed.angular",
 )
 ACTION_ORDER = (
     *(f"left.{key}" for key in ARM_AND_GRIPPER_KEYS),
     *(f"right.{key}" for key in ARM_AND_GRIPPER_KEYS),
-    "lift.target_height",
+    "lift.height",
     "waist.pitch",
     "waist.yaw",
     "head.yaw",
     "head.pitch",
-    "base.linear_velocity",
-    "base.angular_velocity",
+    "speed.linear",
+    "speed.angular",
 )
 
 _ACTION_TOP_LEVEL_KEYS = frozenset(("left", "right", "lift", "waist", "head", "speed"))
@@ -171,6 +169,8 @@ def build_observation_request(
     prompt: str,
     *,
     jpeg_quality: int = 90,
+    task_mode: str | None = None,
+    phase_entry_action: Any = None,
 ) -> dict[str, Any]:
     """Build the canonical non-RTC observation request."""
     state_array = _state_array(state)
@@ -182,7 +182,20 @@ def build_observation_request(
     if missing:
         raise ProtocolValidationError(f"Missing camera frames: {missing}")
 
+    if task_mode is not None and task_mode not in ("lefthand", "righthand", "twohands"):
+        raise ProtocolValidationError("task_mode must be lefthand, righthand or twohands")
+    entry_fields = {}
+    if phase_entry_action is not None:
+        try:
+            entry = np.asarray(phase_entry_action, dtype=np.float64)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ProtocolValidationError("phase_entry_action must be a finite 23-D vector") from exc
+        if entry.shape != (ACTION_DIM,) or not np.isfinite(entry).all():
+            raise ProtocolValidationError("phase_entry_action must be a finite 23-D vector")
+        entry_fields["phase_entry_action"] = entry.tolist()
     return {
+        **entry_fields,
+        **({"task_mode": task_mode} if task_mode is not None else {}),
         "type": "observation",
         "prompt": prompt,
         "observation": {
@@ -221,19 +234,8 @@ def _finite_number(source: Mapping[str, Any], key: str, path: str) -> float:
     return result
 
 
-def _canonical_gripper(value: float, path: str) -> float:
-    if math.isclose(value, GRIPPER_OPEN_VALUE, rel_tol=0.0, abs_tol=GRIPPER_VALUE_TOLERANCE):
-        return GRIPPER_OPEN_VALUE
-    if math.isclose(value, GRIPPER_CLOSED_VALUE, rel_tol=0.0, abs_tol=GRIPPER_VALUE_TOLERANCE):
-        return GRIPPER_CLOSED_VALUE
-    raise ProtocolValidationError(
-        f"{path} must be {GRIPPER_OPEN_VALUE} or {GRIPPER_CLOSED_VALUE} "
-        f"within {GRIPPER_VALUE_TOLERANCE}, got {value}"
-    )
-
-
 def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
-    """Validate and flatten one binary-gripper structured 23-D action."""
+    """Validate and flatten one structured 23-D action without value remapping."""
     action = _require_object(action, "action")
     _require_exact_keys(action, _ACTION_TOP_LEVEL_KEYS, "action")
 
@@ -263,8 +265,6 @@ def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
         _finite_number(speed, "linear", "action.speed"),
         _finite_number(speed, "angular", "action.speed"),
     ]
-    values[7] = _canonical_gripper(values[7], "action.left.gripper")
-    values[15] = _canonical_gripper(values[15], "action.right.gripper")
     result = np.asarray(values, dtype=np.float32)
     if result.shape != (ACTION_DIM,) or not np.isfinite(result).all():
         raise ProtocolValidationError(f"Invalid Zerith action: shape={result.shape}")
@@ -272,14 +272,16 @@ def structured_action_to_array(action: Mapping[str, Any]) -> np.ndarray:
 
 
 def parse_action_chunk(response: Mapping[str, Any]) -> np.ndarray:
-    """Validate an exact 50x23 no-status action response."""
+    """Validate an exact 50x23 action response with optional boolean success status."""
     response = _require_object(response, "response")
     if response.get("type") == "error":
         raise PolicyServerError(f"Policy server error: {response.get('error', response)!s}")
     if response.get("type") != "action_chunk":
         raise ProtocolValidationError(f"Expected action_chunk response, got {response.get('type')!r}")
-    if "is_success" in response:
-        raise ProtocolValidationError("The configured no-status policy unexpectedly returned is_success")
+    if "is_success" in response and type(response["is_success"]) is not bool:
+        raise ProtocolValidationError(
+            "Policy response is_success must be a JSON boolean"
+        )
     actions = response.get("actions")
     if not isinstance(actions, list):
         raise ProtocolValidationError("Policy response actions must be a JSON array")
@@ -296,35 +298,13 @@ def parse_action_chunk(response: Mapping[str, Any]) -> np.ndarray:
 
 
 def validate_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate the fixed robot layout while allowing unrelated policy metadata."""
-    metadata = _require_object(metadata, "metadata")
-    scalar_expected: dict[str, Any] = {
-        "robot": "zerith_h1_pro",
-        "wire_state_dim": STATE_DIM,
-        "wire_action_dim": ACTION_DIM,
-        "model_policy_dim": MODEL_POLICY_DIM,
-        "input_gripper_binary": False,
-        "output_gripper_binary": True,
-        "status_mode": "none",
-    }
-    for key, expected in scalar_expected.items():
-        if key not in metadata:
-            raise ProtocolValidationError(f"Metadata is missing {key!r}")
-        actual = metadata[key]
-        if isinstance(expected, bool):
-            matches = actual is expected
-        elif isinstance(expected, int):
-            matches = type(actual) is int and actual == expected
-        else:
-            matches = type(actual) is type(expected) and actual == expected
-        if not matches:
-            raise ProtocolValidationError(f"Metadata mismatch for {key!r}: got {actual!r}, expected {expected!r}")
+    """Read optional diagnostic metadata without imposing a model schema.
 
-    for key, expected in (("state_order", STATE_ORDER), ("action_order", ACTION_ORDER)):
-        actual = metadata.get(key)
-        if not isinstance(actual, list) or actual != list(expected):
-            raise ProtocolValidationError(f"Metadata mismatch for {key!r}: got {actual!r}, expected {list(expected)!r}")
-    return dict(metadata)
+    Metadata is not part of the required observation/action protocol. Its
+    contents never establish execution readiness; a dry-run validates the
+    actual action response instead.
+    """
+    return dict(_require_object(metadata, "metadata"))
 
 
 def parse_metadata_response(response: Mapping[str, Any]) -> dict[str, Any]:
@@ -458,6 +438,8 @@ class ZerithJsonPolicyClient:
         prompt: str,
         *,
         jpeg_quality: int = 90,
+        task_mode: str | None = None,
+        phase_entry_action: Any = None,
         timeout: float | None = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         request = build_observation_request(
@@ -465,6 +447,8 @@ class ZerithJsonPolicyClient:
             images,
             prompt,
             jpeg_quality=jpeg_quality,
+            task_mode=task_mode,
+            phase_entry_action=phase_entry_action,
         )
         response = self._request(
             request,
@@ -477,6 +461,22 @@ class ZerithJsonPolicyClient:
             raise
 
 
+    def infer_rtc(self, state, images, prompt, *, identifiers, metadata, timeout=None, **observation_options):
+        """RTC uses the same JSON text transport and its single outstanding-request lock."""
+        from .pi05_rtc import validate_response
+        request = build_observation_request(state, images, prompt, **observation_options)
+        request.update(identifiers)
+        response = self._request(request, timeout=self.inference_timeout if timeout is None else timeout)
+        try:
+            actions = parse_action_chunk(response)
+            model = validate_response(response, identifiers, metadata)
+            if metadata['output_gripper_binary'] and not np.all(np.isclose(actions[:, (7,15)], 0) | np.isclose(actions[:, (7,15)], 1.5)):
+                raise ProtocolValidationError('Binary RTC output grippers must be 0 or 1.5')
+            return actions, model, response
+        except Exception:
+            self._invalidate()
+            raise
+
 __all__ = [
     "ACTION_DIM",
     "ACTION_HORIZON",
@@ -486,9 +486,7 @@ __all__ = [
     "GRIPPER_CLOSED_VALUE",
     "GRIPPER_INDICES",
     "GRIPPER_OPEN_VALUE",
-    "GRIPPER_VALUE_TOLERANCE",
     "JOINT_KEYS",
-    "MODEL_POLICY_DIM",
     "Pi05ProtocolError",
     "PolicyServerError",
     "ProtocolClientStateError",

@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>推理 Action / SDK 曲线</title><link rel="stylesheet" href="/static/inference-trace.css"></head>
+<body><main>
+<header><div><a href="/">← 控制台</a><h1>Action / SDK 状态曲线</h1><p>真机执行自动记录，停止后保留。关节按 SDK 原始单位对齐，完整数据可下载。</p></div><span id="status" role="status">正在读取记录…</span></header>
+<section class="toolbar"><label>执行记录<select id="runs"><option value="">最新记录（自动跟随）</option></select></label><label>查看轴<select id="axis"></select></label><a id="csv" class="download" hidden>下载 CSV</a><a id="jsonl" class="download" hidden>完整 JSONL</a></section>
+<p id="details"></p><p id="warning" role="alert"></p>
+<section class="metrics"><div>跟踪误差 RMSE<strong id="rmse">--</strong></div><div>最大绝对跟踪误差<strong id="peak">--</strong></div><div>当前目标 − 实测<strong id="latest">--</strong></div><div>本窗口最长命令刷新间隔<strong id="gap">--</strong></div></section>
+<section class="chart"><h2 id="chartTitle">位置 / 状态</h2><div class="legend"><span>▧ 灰底：等待推理返回</span><span class="raw">● 服务端原始 action（执行步）</span><span class="sent">● 实际下发 / 保持目标</span><span class="measured">● SDK 实测 state</span></div><canvas id="chart" aria-label="服务端 action、实际下发目标和 SDK 实测曲线"></canvas></section>
+<section class="chart"><h2>跟踪误差：当时保持的目标 − SDK 实测</h2><canvas id="errorChart" aria-label="跟踪误差曲线"></canvas></section>
+<p class="note">曲线显示最近 4000 条诊断事件，每秒刷新；上方统计也仅对应这个窗口。CSV / JSONL 保存整次执行。SDK 在每次执行前读取，等待服务端时仍以约 30 Hz 读取；横轴为本次执行开始后的实际秒数。不同电机顺序读取，时间戳是主机读取时刻。服务端原始 action 仅在对应步被执行时显示，未执行的完整预测包保存在 JSONL。</p>
+<p class="note">排查下沉：原始 action 先变化，检查模型输出；实际下发与原始值不同，检查模式屏蔽/速度限幅；下发稳定但实测持续变化，结合力矩、KP/KD、错误码和命令刷新间隔检查执行跟随。关节角度曲线不能直接等同于末端高度。</p>
+</main><script src="/static/inference-trace.js" defer></script></body></html>

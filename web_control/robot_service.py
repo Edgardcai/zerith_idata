@@ -25,6 +25,13 @@ import time
 from typing import Any, Callable
 
 
+from .control_mode import CONTROL_MODE_ID, CONTROL_MODE_NAME, CONTROL_MODE_LABEL, sdk_control_mode
+
+from .pi05_action_modes import (
+    ChassisKinematics, DEFAULT_EXECUTION_MODE, apply_execution_mode,
+    model_dimensions, validate_execution_mode,
+)
+
 try:
     from h1_sdk_common import enum_int, load_sdk, make_robot, motor_index
 except ImportError:  # pragma: no cover - allows package execution from control/
@@ -110,7 +117,6 @@ POLICY_WIRE_MOTOR_IDS = (
 )
 POLICY_STATE_DIM = 23
 POLICY_POSITION_DIM = len(POLICY_WIRE_MOTOR_IDS)
-POLICY_GRIPPER_WIRE_INDICES = (7, 15)
 POLICY_BODY_HOLD_SLICE = slice(17, 21)
 POLICY_GRIPPER_VALUES = (0.0, 1.5)
 
@@ -191,6 +197,7 @@ class RobotService:
         state_rate_hz: float = 5.0,
         home_duration_s: float = 8.0,
         home_lift_timeout_s: float = 10.0,
+        chassis_kinematics: ChassisKinematics | None = None,
     ) -> None:
         self._sdk_loader = sdk_loader
         self._robot_factory = robot_factory or (lambda sdk: make_robot(sdk))
@@ -200,6 +207,13 @@ class RobotService:
         self._state_period = 1.0 / float(state_rate_hz)
         self._home_duration_s = float(home_duration_s)
         self._home_lift_timeout_s = float(home_lift_timeout_s)
+        self._chassis_kinematics = chassis_kinematics
+        self._policy_execution_mode = DEFAULT_EXECUTION_MODE
+        self._policy_initial_state: tuple[float, ...] | None = None
+        self.inference_trace = None
+        self._trace_next_sample = 0.0
+        self._position_sent_at: dict[int, float] = {}
+        self._position_gap_max: dict[int, float] = {}
 
         self._queue: queue.Queue[_WorkItem] = queue.Queue()
         self._stop_event = threading.Event()
@@ -272,7 +286,9 @@ class RobotService:
     def config() -> dict[str, Any]:
         return {
             "sdk_version": "1.3.9",
-            "control_mode": "LOW_LEVEL",
+            "control_mode": CONTROL_MODE_NAME,
+            "control_mode_id": CONTROL_MODE_ID,
+            "control_mode_label": CONTROL_MODE_LABEL,
             "limits_source": "ZERITH H1 PRO SDK V4.0 soft limits; no extra margin",
             "motors": [
                 {
@@ -320,7 +336,9 @@ class RobotService:
                 "position_dim": POLICY_POSITION_DIM,
                 "wire_motor_ids": list(POLICY_WIRE_MOTOR_IDS),
                 "gripper_values": list(POLICY_GRIPPER_VALUES),
-                "base_motion": "forced_zero_not_forwarded",
+                "base_motion": "full_mode_with_configured_kinematics",
+                "execution_modes": ["arms", "arms_lift", "full"],
+                "default_execution_mode": DEFAULT_EXECUTION_MODE,
             },
         }
 
@@ -335,6 +353,8 @@ class RobotService:
         result["takeover"] = lease_valid
         result["takeover_client_id"] = lease_client_id
         with self._policy_lock:
+            policy_execution_mode = self._policy_execution_mode
+            policy_initial_state = list(self._policy_initial_state) if self._policy_initial_state is not None else None
             policy_active = self._policy_session_id is not None
             policy_started = self._policy_session_started_monotonic
             policy_last_end_reason = self._policy_last_end_reason
@@ -354,6 +374,9 @@ class RobotService:
         now = time.monotonic()
         result["policy_session"] = {
             "active": policy_active,
+            "execution_mode": policy_execution_mode,
+            "chassis_kinematics_configured": self._chassis_kinematics is not None,
+            "initial_state": policy_initial_state,
             "age_ms": (
                 max(0.0, (now - policy_started) * 1000.0)
                 if policy_active
@@ -361,9 +384,9 @@ class RobotService:
             ),
             "last_end_reason": policy_last_end_reason,
             "body_hold_reference": (
-                "session_start_feedback" if policy_active else None
+                "session_start_feedback" if policy_active and policy_execution_mode != "full" else None
             ),
-            "body_hold_target": policy_body_hold_target,
+            "body_hold_target": policy_body_hold_target if policy_execution_mode != "full" else None,
             "last_body_diagnostics": policy_last_body_diagnostics,
         }
         with self._events_lock:
@@ -377,7 +400,6 @@ class RobotService:
         return result
 
     def acquire(self, client_id: Any = None) -> dict[str, Any]:
-        now = time.monotonic()
         lease_id = secrets.token_urlsafe(24)
         owner_id = str(client_id or "").strip()
         if not owner_id:
@@ -385,6 +407,7 @@ class RobotService:
         if len(owner_id) > 128:
             raise RobotCommandRejected("client_id 过长")
         with self._lease_lock:
+            now = time.monotonic()
             if self._lease_id is not None and now < self._lease_deadline:
                 raise RobotConflict("已有其他页面持有控制权，请先在原页面释放")
             self._lease_id = lease_id
@@ -419,8 +442,8 @@ class RobotService:
 
     def has_live_lease(self, lease_id: str) -> bool:
         """Read-only lease check used by bounded auxiliary controllers."""
-        now = time.monotonic()
         with self._lease_lock:
+            now = time.monotonic()
             return bool(
                 lease_id
                 and lease_id == self._lease_id
@@ -467,13 +490,14 @@ class RobotService:
             exclusive=session_id is None,
         )
 
-    def begin_policy_session(self, lease_id: str) -> dict[str, Any]:
+    def begin_policy_session(self, lease_id: str, *, execution_mode: str = DEFAULT_EXECUTION_MODE) -> dict[str, Any]:
         """Exclusively hand normal motion admission to a Pi0.5 executor."""
 
         self._require_lease(lease_id, renew=False)
         return self._call(
             "policy_begin",
             lease_id,
+            validate_execution_mode(execution_mode),
             timeout=10.0,
             exclusive=True,
         )
@@ -592,6 +616,12 @@ class RobotService:
     def deinitialize(self, lease_id: str) -> dict[str, Any]:
         self._require_lease(lease_id, renew=True)
         return self._call("deinit", lease_id, timeout=180.0, exclusive=True)
+
+    def recover_deinitialize(self, lease_id: str, *, confirmation: Any, manual_control_released: Any) -> dict[str, Any]:
+        if confirmation != "deinitialize_orphaned_initialized_session" or manual_control_released is not True:
+            raise RobotCommandRejected("必须明确授权反初始化恢复，并确认手柄/VR已退出")
+        self._require_lease(lease_id, renew=True)
+        return self._call("recover_deinit", lease_id, timeout=180.0, exclusive=True)
 
     def move_joint(
         self,
@@ -896,7 +926,12 @@ class RobotService:
     def _worker(self) -> None:
         while not self._stop_event.is_set():
             try:
-                item = self._queue.get(timeout=0.005)
+                # Wake at the hold deadline even when no policy commands arrive.
+                # A fixed 5 ms queue wait can push each 10 ms hold cycle late.
+                timeout = 0.005
+                if self._robot is not None and self._hold_targets:
+                    timeout = min(timeout, max(0.0, self._next_hold_tick - time.monotonic()))
+                item = self._queue.get(timeout=timeout)
             except queue.Empty:
                 item = None
             if item is not None:
@@ -932,6 +967,7 @@ class RobotService:
             "release": self._release_impl,
             "init": self._init_impl,
             "deinit": self._deinit_impl,
+            "recover_deinit": self._recover_deinit_impl,
             "joint": self._joint_impl,
             "joints": self._joints_impl,
             "home": self._home_impl,
@@ -1002,7 +1038,8 @@ class RobotService:
             "session_id": active_session_id,
         }
 
-    def _policy_begin_impl(self, lease_id: str) -> dict[str, Any]:
+    def _policy_begin_impl(self, lease_id: str, execution_mode: str = DEFAULT_EXECUTION_MODE) -> dict[str, Any]:
+        validate_execution_mode(execution_mode)
         self._require_ready(lease_id)
         self._check_power_for_motion(chassis=False)
         with self._policy_lock:
@@ -1020,6 +1057,8 @@ class RobotService:
         body_hold_target = tuple(float(value) for value in state[17:21])
         self._cancel_event.clear()
         self._policy_abort_event.clear()
+        self._position_gap_max.clear()
+        self._position_sent_at.clear()
         self._hold_targets = {
             motor_id: state[index]
             for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS)
@@ -1038,6 +1077,8 @@ class RobotService:
             self._policy_session_started_monotonic = now
             self._policy_last_end_reason = None
             self._policy_body_hold_target = body_hold_target
+            self._policy_execution_mode = execution_mode
+            self._policy_initial_state = tuple(state)
             self._policy_last_body_diagnostics = {
                 "feedback": list(body_hold_target),
                 "requested": list(body_hold_target),
@@ -1052,8 +1093,9 @@ class RobotService:
             "session_id": session_id,
             "state": state,
             "state_monotonic": sampled_at,
-            "body_hold_reference": "session_start_feedback",
-            "body_hold_target": list(body_hold_target),
+            "execution_mode": execution_mode,
+            "body_hold_reference": "session_start_feedback" if execution_mode != "full" else None,
+            "body_hold_target": list(body_hold_target) if execution_mode != "full" else None,
         }
 
     def _policy_end_impl(
@@ -1088,17 +1130,22 @@ class RobotService:
             parsed_action = self._parse_policy_action(action)
             latest_state, sampled_at = self._sample_policy_state()
             requested_action = list(parsed_action)
-            effective_action = list(requested_action)
             with self._policy_lock:
+                initial_state = self._policy_initial_state
+                execution_mode = self._policy_execution_mode
                 body_hold_target = self._policy_body_hold_target
-            if body_hold_target is None or len(body_hold_target) != 4:
-                raise RobotCommandRejected(
-                    "Pi0.5 session 缺少启动时腰/头保持目标，拒绝下发"
-                )
-            effective_action[POLICY_BODY_HOLD_SLICE] = body_hold_target
-            effective_action[21] = 0.0
-            effective_action[22] = 0.0
-            self._validate_policy_targets(effective_action, latest_state)
+            if initial_state is None:
+                raise RobotCommandRejected("Pi0.5 session 缺少启动位置快照，拒绝下发")
+            effective_action = apply_execution_mode(requested_action, initial_state, execution_mode)
+            self._validate_policy_targets(effective_action, latest_state, execution_mode)
+            wheels = self._policy_wheel_speeds(effective_action[21], effective_action[22])
+            if execution_mode == "full":
+                self._check_power_for_motion(chassis=bool(wheels[0] or wheels[1]))
+                for motor_id in (0, 1):
+                    if int(self._read_motor(motor_id).Error_flag) != 0:
+                        raise RobotCommandRejected(f"底盘电机 {motor_id} 异常")
+                if self._chassis_stop_pending and any(wheels):
+                    raise RobotConflict("底盘零速尚未确认，拒绝新的非零轮速")
 
             sent_action = list(effective_action[:POLICY_POSITION_DIM])
             for index, (motor_id, target) in enumerate(
@@ -1111,6 +1158,19 @@ class RobotService:
                         f"Pi0.5 action 在 motor index {index} 前被停止"
                     )
                 self._send_position(motor_id, target)
+
+            if execution_mode == "full":
+                self._require_live_lease(lease_id)
+                self._require_policy_session(lease_id, active_session_id)
+                if self._cancel_event.is_set() or self._policy_abort_event.is_set():
+                    raise RobotCommandRejected("Pi0.5 底盘命令下发前被停止")
+                self._send_chassis(*wheels)
+                self._chassis_target = wheels
+                self._chassis_deadline = time.monotonic() + self._chassis_watchdog_seconds
+                self._chassis_was_moving = bool(wheels[0] or wheels[1])
+                with self._snapshot_lock:
+                    self._snapshot["chassis"]["command_left_rad_s"] = wheels[0]
+                    self._snapshot["chassis"]["command_right_rad_s"] = wheels[1]
 
             self._hold_targets = {
                 motor_id: sent_action[index]
@@ -1142,9 +1202,12 @@ class RobotService:
                 "requested_action": requested_action,
                 "effective_action": effective_action,
                 "sent_action": sent_action,
+                "command_monotonic": time.monotonic(),
                 "sent_motor_ids": list(POLICY_WIRE_MOTOR_IDS),
-                "body_hold_reference": "session_start_feedback",
-                "body_hold_target": list(body_hold_target),
+                "execution_mode": execution_mode,
+                "sent_chassis_wheel_rad_s": list(wheels),
+                "body_hold_reference": "session_start_feedback" if execution_mode != "full" else None,
+                "body_hold_target": list(body_hold_target) if execution_mode != "full" else None,
             }
         except BaseException as exc:
             self._terminate_policy_session(
@@ -1168,6 +1231,7 @@ class RobotService:
         if self._robot is None:
             try:
                 sdk = self._sdk_loader()
+                sdk_control_mode(sdk)
                 robot = self._robot_factory(sdk)
             except BaseException as exc:
                 raise RobotUnavailable(f"加载/构造 H1 SDK 失败: {exc}") from exc
@@ -1227,16 +1291,30 @@ class RobotService:
             )
         return self.state()
 
+    def _sdk_lifecycle_call(self, lease_id: str, operation: Callable[[], Any]) -> Any:
+        # Vendor init/deinit may retain the GIL for longer than the browser
+        # lease. These exclusive, non-interruptible SDK calls cannot process
+        # heartbeats then. Keep ownership stable until the call returns and
+        # give the same owner one normal heartbeat window, including failure.
+        # Motion/policy commands never receive this lifecycle-only grace.
+        with self._lease_lock:
+            self._require_live_lease(lease_id)
+            try:
+                return operation()
+            finally:
+                if self._lease_id == lease_id:
+                    self._lease_deadline = time.monotonic() + self._lease_seconds
+
     def _init_impl(self, lease_id: str) -> dict[str, Any]:
         self._require_live_lease(lease_id)
         robot, sdk = self._require_robot()
         init_state = enum_int(robot.getInitState())
         mode = enum_int(robot.getCurrentMode())
-        low_mode = enum_int(sdk.MotorControlMode.LOW_LEVEL)
+        required_mode = sdk_control_mode(sdk)
         if init_state == 2:
-            if mode != low_mode:
+            if mode != enum_int(required_mode):
                 raise RobotConflict(
-                    "机器人已由其他模式初始化，不能在该状态切到 LOW_LEVEL"
+                    f"机器人已由其他模式初始化，不能在该状态切到 {CONTROL_MODE_NAME}"
                 )
             self._poll_state(force=True)
             return {"ok": True, "already_initialized": True, "state": self.state()}
@@ -1254,13 +1332,14 @@ class RobotService:
             raise RobotCommandRejected(
                 "存在电机错误，初始化已拒绝: " + ", ".join(motor_errors)
             )
-        if mode != low_mode:
-            if not robot.switchControlMode(sdk.MotorControlMode.LOW_LEVEL):
-                raise RobotCommandRejected("switchControlMode(LOW_LEVEL) 返回 false")
-            if enum_int(robot.getCurrentMode()) != low_mode:
-                raise RobotCommandRejected("控制模式未稳定到 LOW_LEVEL")
+        # Refresh SDK control ownership in the configured mode before initialization.
+        # The initialized-state early return above must remain action-free.
+        if not robot.switchControlMode(required_mode):
+            raise RobotCommandRejected(f"switchControlMode({CONTROL_MODE_NAME}) 返回 false")
+        if enum_int(robot.getCurrentMode()) != enum_int(required_mode):
+            raise RobotCommandRejected(f"控制模式未稳定到 {CONTROL_MODE_NAME}")
         self._record_event("robot_init_started")
-        if not robot.robot_init():
+        if not self._sdk_lifecycle_call(lease_id, robot.robot_init):
             raise RobotCommandRejected("robot_init() 返回 false")
         if enum_int(robot.getInitState()) != 2:
             raise RobotCommandRejected("robot_init() 返回后状态不是 Init_Complete")
@@ -1273,6 +1352,45 @@ class RobotService:
         self._record_event("robot_init_completed")
         return {"ok": True, "state": self.state()}
 
+    def _recover_deinit_impl(self, lease_id: str) -> dict[str, Any]:
+        """Explicit orphan-session recovery; one deinit, no switch/init/wheel calls."""
+        self._require_live_lease(lease_id)
+        self._assert_operation_allowed_during_policy("recover_deinit")
+        robot, _ = self._require_robot()
+        if not robot.isRobotConnected() or enum_int(robot.getInitState()) != 2 or enum_int(robot.getCurrentMode()) != 0:
+            raise RobotConflict("恢复反初始化仅允许 connected / Init_Complete / UNINITIALIZED(0)")
+        self._poll_state(force=True)
+        state = self.state()
+        if state.get("busy") is not True or state.get("active_operation") != "recover_deinit":
+            raise RobotConflict("恢复反初始化必须独占原 SDK worker")
+        if state.get("last_error") or state.get("policy_session", {}).get("active") is not False:
+            raise RobotConflict("错误或策略会话未解除")
+        sampled = state.get("state_monotonic")
+        if not isinstance(sampled, (int, float)) or not math.isfinite(sampled) or not 0 <= time.monotonic() - sampled <= .5:
+            raise RobotUnavailable("恢复反初始化需要新鲜状态")
+        motors = state.get("motors", {})
+        if set(motors) != {str(i) for i in range(23)} or not all(m.get("ok") is True and m.get("error") == 0 and all(isinstance(m.get(k), (int, float)) and math.isfinite(m[k]) for k in ("position", "speed")) for m in motors.values()):
+            raise RobotCommandRejected("恢复反初始化需要23个健康电机")
+        chassis = state.get("chassis", {})
+        if chassis.get("stop_pending") is not False or any(chassis.get(k) != 0 for k in ("left_wheel_rad_s", "right_wheel_rad_s", "linear_m_s", "angular_rad_s", "command_left_rad_s", "command_right_rad_s")):
+            raise RobotConflict("底盘非零或停止未确认")
+        self._check_power_for_motion(chassis=True)
+        self._cancel_event.set()
+        self._hold_targets.clear()
+        self._support_targets.clear()
+        with self._policy_lock:
+            self._policy_body_hold_target = None
+        self._record_event("recovery_deinit_started")
+        if not self._sdk_lifecycle_call(lease_id, robot.robot_deinit):
+            raise RobotCommandRejected("robot_deinit() 返回 false；恢复终止，不切模式/初始化")
+        final_state = enum_int(robot.getInitState())
+        if final_state not in (0, 4):
+            raise RobotCommandRejected(f"恢复反初始化返回后状态={final_state}，不是0/4；不继续")
+        self._reset_chassis_command_state()
+        self._poll_state(force=True)
+        self._record_event("recovery_deinit_completed")
+        return {"ok": True, "recovery_deinitialized": True, "init_state": final_state, "state": self.state()}
+
     def _deinit_impl(self, lease_id: str) -> dict[str, Any]:
         self._require_live_lease(lease_id)
         robot, sdk = self._require_robot()
@@ -1284,8 +1402,8 @@ class RobotService:
             raise RobotConflict(
                 f"当前初始化状态 {INIT_STATE_NAMES.get(init_state, init_state)} 不允许反初始化"
             )
-        if enum_int(robot.getCurrentMode()) != enum_int(sdk.MotorControlMode.LOW_LEVEL):
-            raise RobotConflict("网页只能反初始化自身 LOW_LEVEL 会话，不能接管 VR/其他模式")
+        if enum_int(robot.getCurrentMode()) != CONTROL_MODE_ID:
+            raise RobotConflict(f"网页只能反初始化自身 {CONTROL_MODE_NAME} 会话，不能接管 VR/其他模式")
         self._cancel_event.set()
         self._send_chassis(0.0, 0.0, require_success=False)
         self._hold_targets.clear()
@@ -1293,7 +1411,7 @@ class RobotService:
         with self._policy_lock:
             self._policy_body_hold_target = None
         self._record_event("robot_deinit_started")
-        if not robot.robot_deinit():
+        if not self._sdk_lifecycle_call(lease_id, robot.robot_deinit):
             raise RobotCommandRejected("robot_deinit() 返回 false")
         final_state = enum_int(robot.getInitState())
         if final_state not in (0, 4):
@@ -1682,7 +1800,7 @@ class RobotService:
                 abs(frame[21]) > 1e-9 or abs(frame[22]) > 1e-9
             ):
                 raise RobotCommandRejected(
-                    "全23维回放的底盘速度不为零；LOW_LEVEL 下缺少经标定的 "
+                    "全23维回放的底盘速度不为零；低层接口缺少经标定的 "
                     "(linear, angular) 到左右轮 rad/s 换算，拒绝运动"
                 )
 
@@ -1865,6 +1983,10 @@ class RobotService:
         if self._robot is None:
             return
         now = time.monotonic()
+        if not self._ready_without_lease():
+            self._hold_targets.clear()
+            self._support_targets.clear()
+            self._reset_chassis_command_state()
         lease_valid = self._lease_is_valid()
         with self._policy_lock:
             active_session_id = self._policy_session_id
@@ -1900,7 +2022,13 @@ class RobotService:
                 self._record_event("chassis_zero_retry_succeeded")
 
         if now >= self._next_hold_tick:
-            self._next_hold_tick = now + 1.0 / self._trajectory_rate_hz
+            period = 1.0 / self._trajectory_rate_hz
+            # Advance the original clock, skipping missed periods without a burst.
+            # Re-basing on "now" each cycle accumulates scheduler/SDK latency.
+            if self._next_hold_tick <= 0.0:
+                self._next_hold_tick = now + period
+            else:
+                self._next_hold_tick += (math.floor((now - self._next_hold_tick) / period) + 1) * period
             if self._ready_without_lease():
                 for motor_id, target in tuple(self._hold_targets.items()):
                     self._send_position(motor_id, target)
@@ -1909,6 +2037,9 @@ class RobotService:
             if self._ready_without_lease():
                 for motor_id, target in tuple(self._support_targets.items()):
                     self._send_position(motor_id, target)
+        if (active_session_id is not None and self.inference_trace is not None
+                and self.inference_trace.active and now >= self._trace_next_sample):
+            self._sample_policy_state()
         if now >= self._next_state_poll:
             self._poll_state(force=True)
 
@@ -1992,8 +2123,18 @@ class RobotService:
                         pass
             raise
 
+    def _require_command_mode(self) -> None:
+        """Check at the final SDK boundary, including holds and stop commands."""
+        robot, _ = self._require_robot()
+        if enum_int(robot.getCurrentMode()) != CONTROL_MODE_ID:
+            self._hold_targets.clear()
+            self._support_targets.clear()
+            self._reset_chassis_command_state()
+            raise RobotConflict(f"控制模式已改变，停止下发；需要 {CONTROL_MODE_NAME}")
+
     def _send_position(self, motor_id: int, position: float) -> None:
         robot, sdk = self._require_robot()
+        self._require_command_mode()
         control = sdk.Motor_Control()
         control.Position = float(position)
         control.Speed = 0.0
@@ -2014,6 +2155,12 @@ class RobotService:
             raise RobotCommandRejected(f"未知控制种类: {spec.command_kind}")
         if not ok:
             raise RobotCommandRejected(f"{spec.command_kind} setter({motor_id}) 返回 false")
+        sent_at = time.monotonic()
+        if motor_id in self._position_sent_at:
+            self._position_gap_max[motor_id] = max(
+                self._position_gap_max.get(motor_id, 0.0),
+                (sent_at - self._position_sent_at[motor_id]) * 1000.0)
+        self._position_sent_at[motor_id] = sent_at
 
     def _send_chassis(
         self,
@@ -2033,6 +2180,7 @@ class RobotService:
             control.KP = -1.0
             control.KD = -1.0
             try:
+                self._require_command_mode()
                 ok = self._robot.setChassis_low(
                     motor_index(self._sdk, motor_id),
                     control,
@@ -2058,6 +2206,7 @@ class RobotService:
             control.KP = -1.0
             control.KD = -1.0
             try:
+                self._require_command_mode()
                 if not self._robot.setChassis_low(
                     motor_index(self._sdk, motor_id),
                     control,
@@ -2251,10 +2400,20 @@ class RobotService:
 
     def _sample_policy_state(self) -> tuple[list[float], float]:
         positions: list[float] = []
+        trace = self.inference_trace
+        recording = trace is not None and trace.active
+        fields = {key: [] for key in ("speed", "torque", "kp", "kd", "motor_error")}
         for index, motor_id in enumerate(POLICY_WIRE_MOTOR_IDS):
             motor_state = self._read_motor(motor_id)
             error_flag = int(motor_state.Error_flag)
+            if recording:
+                for key, attr in (("speed", "Speed_Actual"), ("torque", "Torque_Actual"),
+                                  ("kp", "KP_Actual"), ("kd", "KD_Actual"), ("motor_error", "Error_flag")):
+                    value = float(getattr(motor_state, attr, float("nan")))
+                    fields[key].append(value if math.isfinite(value) else None)
             if error_flag != 0:
+                if recording:
+                    trace.record("fault", motor_id=motor_id, error_flag=error_flag)
                 raise RobotCommandRejected(
                     f"policy state[{index}] motor {motor_id} "
                     f"error_flag=0x{error_flag:04x}"
@@ -2265,9 +2424,29 @@ class RobotService:
             )
             positions.append(position)
         sampled_at = time.monotonic()
-        state = positions + [0.0, 0.0]
+        base_velocity = [0.0, 0.0]
+        if self._policy_execution_mode == "full":
+            robot, _sdk = self._require_robot()
+            ok, _wheels, algorithm = robot.getChassisSpeedState()
+            if not ok or len(algorithm) != 2:
+                raise RobotCommandRejected("无法读取底盘线速度与角速度")
+            base_velocity = [float(algorithm[0]), float(algorithm[1])]
+        state = positions + base_velocity
         if len(state) != POLICY_STATE_DIM or not all(map(math.isfinite, state)):
             raise RobotCommandRejected("policy state 必须恰好为 23 个有限数")
+        if recording:
+            targets = {**self._hold_targets, **self._support_targets}
+            held = [targets.get(motor) for motor in POLICY_WIRE_MOTOR_IDS] + [None, None]
+            gaps = [max(self._position_gap_max.get(motor, 0.0),
+                        (sampled_at - self._position_sent_at[motor]) * 1000.0)
+                    if motor in self._position_sent_at else None for motor in POLICY_WIRE_MOTOR_IDS]
+            trace.record("state", monotonic=sampled_at, state=state, held_action=held,
+                         error=[target - actual if target is not None else None
+                                for target, actual in zip(held, state)],
+                         refresh_gap_ms=gaps, base_feedback_measured=self._policy_execution_mode == "full",
+                         **fields)
+            self._position_gap_max.clear()
+            self._trace_next_sample = sampled_at + 1.0 / 30.0
         return state, sampled_at
 
     @staticmethod
@@ -2297,6 +2476,7 @@ class RobotService:
     def _validate_policy_targets(
         effective_action: list[float],
         latest_state: list[float],
+        execution_mode: str = DEFAULT_EXECUTION_MODE,
     ) -> None:
         if (
             len(effective_action) != POLICY_STATE_DIM
@@ -2308,20 +2488,11 @@ class RobotService:
         ):
             raise RobotCommandRejected("policy state/action 必须全部为有限数")
 
-        for index in POLICY_GRIPPER_WIRE_INDICES:
-            if effective_action[index] not in POLICY_GRIPPER_VALUES:
-                raise RobotCommandRejected(
-                    f"policy gripper action[{index}] 必须严格为 0 或 1.5"
-                )
-
-        # Model-controlled targets (arms, grippers and lift) still have to be
-        # values accepted by the corresponding SDK setters.  Waist/head are
-        # not model targets: indices 17..20 are overwritten from the policy
-        # session's start feedback before every step.  Preserve that finite
-        # snapshot exactly, including encoder drift a few ticks beyond a
-        # nominal zero, instead of turning a hold command into a range fault.
+        # Range-check the axes controlled by the selected mode. Held axes
+        # preserve their finite start feedback, including encoder drift a few
+        # ticks beyond nominal zero, without turning a hold into a range fault.
         for index, (motor_id, target) in enumerate(
-            zip(POLICY_WIRE_MOTOR_IDS[:17], effective_action[:17])
+            zip(POLICY_WIRE_MOTOR_IDS[:model_dimensions(execution_mode)], effective_action[:model_dimensions(execution_mode)])
         ):
             spec = MOTOR_SPEC_BY_ID[motor_id]
             if not spec.minimum <= target <= spec.maximum:
@@ -2329,8 +2500,22 @@ class RobotService:
                     f"policy action[{index}] motor {motor_id} target {target:g} "
                     f"超出 SDK 范围 [{spec.minimum:g}, {spec.maximum:g}] {spec.unit}"
                 )
-        if effective_action[21:] != [0.0, 0.0]:
+        if execution_mode != "full" and effective_action[21:] != [0.0, 0.0]:
             raise RobotCommandRejected("policy 底盘 action[21:23] 必须为零")
+
+    def _policy_wheel_speeds(self, linear: float, angular: float) -> tuple[float, float]:
+        if linear == 0.0 and angular == 0.0:
+            return (0.0, 0.0)
+        if self._chassis_kinematics is None:
+            raise RobotCommandRejected(
+                "23维模式收到非零底盘速度，但尚未配置轮半径、轮距和轮速方向；拒绝下发"
+            )
+        return self._chassis_kinematics.wheel_speeds(linear, angular)
+
+    def validate_policy_chassis(self, actions) -> None:
+        """Check the velocity mapping during dry-run, without touching hardware."""
+        for action in actions:
+            self._policy_wheel_speeds(float(action[21]), float(action[22]))
 
     def _terminate_policy_session(
         self,
@@ -2409,6 +2594,10 @@ class RobotService:
 
         self._hold_targets = new_holds
         self._support_targets = new_support
+        if self.inference_trace is not None and self.inference_trace.active:
+            self.inference_trace.record("safety_hold", reason=reason,
+                                        sent_motor_ids=held_motor_ids,
+                                        failures=list(failures), state=latest_positions)
         with self._policy_lock:
             if self._policy_session_id == active_session_id:
                 self._policy_session_id = None
@@ -2416,6 +2605,7 @@ class RobotService:
                 self._policy_session_started_monotonic = 0.0
                 self._policy_last_end_reason = str(reason)[:160]
                 self._policy_body_hold_target = None
+                self._policy_initial_state = None
         try:
             self._poll_state(force=True)
         except BaseException as exc:
@@ -2457,8 +2647,8 @@ class RobotService:
             raise RobotUnavailable("机器人心跳已断开")
         if enum_int(robot.getInitState()) != 2:
             raise RobotConflict("请先执行初始化")
-        if enum_int(robot.getCurrentMode()) != enum_int(sdk.MotorControlMode.LOW_LEVEL):
-            raise RobotConflict("当前不是 LOW_LEVEL，网页逐关节控制不可用")
+        if enum_int(robot.getCurrentMode()) != CONTROL_MODE_ID:
+            raise RobotConflict(f"当前不是 {CONTROL_MODE_NAME}，网页逐关节控制不可用")
 
     def _check_power_for_motion(self, *, chassis: bool) -> None:
         robot, _ = self._require_robot()
@@ -2483,14 +2673,14 @@ class RobotService:
                 self._robot.isRobotConnected()
                 and enum_int(self._robot.getInitState()) == 2
                 and enum_int(self._robot.getCurrentMode())
-                == enum_int(self._sdk.MotorControlMode.LOW_LEVEL)
+                == CONTROL_MODE_ID
             )
         except BaseException:
             return False
 
     def _require_lease(self, lease_id: str, *, renew: bool) -> None:
-        now = time.monotonic()
         with self._lease_lock:
+            now = time.monotonic()
             if not lease_id or lease_id != self._lease_id or now >= self._lease_deadline:
                 raise RobotConflict("控制权已失效，请重新接管")
             if renew:

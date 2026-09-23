@@ -57,11 +57,11 @@ class _BlockingBeginRobot(FakeRobot):
         self.begin_entered = threading.Event()
         self.release_begin = threading.Event()
 
-    def begin_policy_session(self, lease_id: str) -> dict:
+    def begin_policy_session(self, lease_id: str, *, execution_mode="arms") -> dict:
         self.begin_entered.set()
         if not self.release_begin.wait(2.0):
             raise RuntimeError("test did not release begin_policy_session")
-        return super().begin_policy_session(lease_id)
+        return super().begin_policy_session(lease_id, execution_mode=execution_mode)
 
 
 class _BlockingPolicyStepRobot(FakeRobot):
@@ -165,7 +165,6 @@ class StartStopRegressionTests(unittest.TestCase):
             robot,
             camera,
             policy_factory=lambda _host, _port: policy,
-            health_probe=lambda _host, _port: "OK",
             stop_timeout_s=1.0,
         )
         prompt = "stop before step admission"
@@ -223,7 +222,6 @@ class StartStopRegressionTests(unittest.TestCase):
             robot,
             camera,
             policy_factory=lambda _host, _port: policy,
-            health_probe=lambda _host, _port: "OK",
             stop_timeout_s=1.0,
         )
         prompt = "drain inflight step"
@@ -277,7 +275,6 @@ class StartStopRegressionTests(unittest.TestCase):
             robot,
             camera,
             policy_factory=lambda _host, _port: policy,
-            health_probe=lambda _host, _port: "OK",
             stop_timeout_s=1.0,
         )
         prompt = "concurrent start stop regression"
@@ -350,7 +347,6 @@ class StartStopRegressionTests(unittest.TestCase):
             robot,
             camera,
             policy_factory=policy_factory,
-            health_probe=lambda _host, _port: "OK",
             stop_timeout_s=1.0,
         )
         prompt = "restart only after a new confirmation"

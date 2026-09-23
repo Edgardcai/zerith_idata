@@ -18,6 +18,7 @@ from .chinese_speech import (
     is_chinese_language,
     normalize_session_language,
 )
+from .local_speech import LocalSpeechServices
 from .config import VoiceConfig
 from .llm import ConversationMemory, LlmError, ResponsesConversation
 from .motion_intent import looks_motion_related, parse_fast_motion
@@ -129,7 +130,19 @@ class VoiceAssistant:
             if config.chinese_speech_enabled
             else None
         )
-        self.asr = LanguageRoutedASR(english_asr, self._chinese_speech)
+        self.local_speech = LocalSpeechServices(
+            config.chinese_asr_base_url, config.chinese_tts_base_url,
+            enabled=config.chinese_speech_enabled,
+            cloud_configured=bool(config.audio_api_base and config.audio_api_key),
+        )
+        self._english_local = (
+            ChineseSpeechClient(config.chinese_asr_base_url, config.chinese_tts_base_url,
+                                speaker="Ryan", language="en")
+            if config.chinese_speech_enabled and not config.audio_api_key else None
+        )
+        if self._english_local is not None:
+            english_asr = self._english_local
+        self.asr = LanguageRoutedASR(english_asr, self._chinese_speech, self.local_speech.ready)
         self.llm = ResponsesConversation(
             config.llm_profiles,
             config.llm_model,
@@ -148,13 +161,18 @@ class VoiceAssistant:
             config.tts_speed,
             client=self._audio_http,
         )
-        english_speech = StreamingSpeechPlayer(tts, self.speaker)
+        english_speech = (
+            ChineseSentenceSpeechPlayer(self._english_local, config.speaker_device)
+            if self._english_local is not None else StreamingSpeechPlayer(tts, self.speaker)
+        )
         chinese_speech = (
             ChineseSentenceSpeechPlayer(self._chinese_speech, config.speaker_device)
             if self._chinese_speech is not None
             else None
         )
-        self.speech = LanguageRoutedSpeechPlayer(english_speech, chinese_speech)
+        self.speech = LanguageRoutedSpeechPlayer(english_speech, chinese_speech, self.local_speech.ready,
+                                                cloud_fallback=bool(config.audio_api_key))
+        self.local_speech.start_monitor()
 
     def stop(self) -> None:
         self._reply_cancel_event.set()
@@ -164,8 +182,11 @@ class VoiceAssistant:
         self._manual_wake_event.set()
 
     def close(self) -> None:
+        self.local_speech.close()
         if self._chinese_speech is not None:
             self._chinese_speech.close()
+        if self._english_local is not None:
+            self._english_local.close()
         self._audio_http.close()
 
     def request_session(self, language: str = "zh") -> tuple[bool, str]:
@@ -368,7 +389,7 @@ class VoiceAssistant:
         language: str,
         memory: ConversationMemory,
     ) -> bool:
-        self._reply_cancel_event.clear()
+        self._reply_cancel_event = threading.Event()
         if self.observer is not None:
             self.observer.message("user", text)
 
@@ -422,22 +443,23 @@ class VoiceAssistant:
         stream_sentences: bool = False,
     ) -> Iterator[str]:
         complete: list[str] = []
-        chunker = SentenceChunker(min_characters=15, max_characters=80)
+        cancel_event = self._reply_cancel_event
+        chunker = SentenceChunker(min_characters=18, max_characters=64, first_minimum=12, first_maximum=40)
         try:
             for delta in self.llm.stream_reply(memory.messages, language=language):
-                if self._reply_cancel_event.is_set():
+                if cancel_event.is_set():
                     break
                 complete.append(delta)
                 if stream_sentences:
                     yield from chunker.push(delta)
         finally:
             answer = "".join(complete).strip()
-            if answer and not self._reply_cancel_event.is_set():
+            if answer and not cancel_event.is_set():
                 memory.add("assistant", answer)
                 LOG.info("%s：%s", self.config.robot_name, answer)
                 if self.observer is not None:
                     self.observer.message("assistant", answer)
-        if self._reply_cancel_event.is_set():
+        if cancel_event.is_set():
             return
         if stream_sentences:
             remainder = chunker.flush()
@@ -450,7 +472,7 @@ class VoiceAssistant:
 
     def _speak(self, phrases: Iterator[str] | list[str], language: str) -> None:
         detail = (
-            "首个完整句子已生成，正在本地合成"
+            "回复正在生成，正在合成中文语音"
             if is_chinese_language(language)
             else "回复已生成，正在合成语音"
         )

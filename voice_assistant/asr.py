@@ -42,6 +42,8 @@ class OpenAICompatibleASR:
     ) -> str:
         if samples.size == 0:
             return ""
+        if not self._api_key:
+            raise SpeechRecognitionError("未配置云端语音识别；请启用本地中文语音并等待模型就绪，英文需要另配语音接口")
         if language not in {"zh", "en"}:
             raise ValueError(f"unsupported ASR language: {language}")
         audio = float32_to_wav(samples, sample_rate)

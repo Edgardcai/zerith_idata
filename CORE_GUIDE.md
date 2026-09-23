@@ -173,3 +173,7 @@ cd /home/robot/control
 - `voice_assistant/README.md`：小达语音、对话和运动白名单。
 - `chinese_speech/README.md`：中文模型、协议、下载和性能实测。
 - `H1_ARM_CAMERA_LIDAR_GUIDE.md`：机械臂、RGB-D 与激光雷达综合指南。
+
+8080 网页控制现统一使用 SDK `GRAVITY_COMPENSATION_LEVEL(3)`，沿用低层接口。
+生命周期、互斥与部署说明见 `web_control/README.md` 的 SDK 重力补偿模式章节。
+独立 `send_robot_command.py` 的模式选项不代表 8080 模式，不应与网页会话并发运行。

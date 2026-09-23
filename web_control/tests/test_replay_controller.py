@@ -58,6 +58,67 @@ def write_episode(
     return path
 
 
+def write_aligned_episode(root: Path) -> Path:
+    path = root / "demo_0" / "states" / "aligned_joints.h5"
+    path.parent.mkdir(parents=True)
+    with h5py.File(path, "w") as file:
+        file.attrs["format"] = "icra_wbc_aligned_joints"
+        file.attrs["fps"] = 20.0
+        file.attrs["action_mode"] = "absolute"
+        file.attrs["source_demo"] = "demo_0"
+        for i in range(12):
+            for source in ("state", "action"):
+                vector = np.zeros(23, dtype=np.float32)
+                vector[:16] = np.arange(16) / 100 + i / 1000
+                vector[16] = 0.8
+                file.create_dataset(f"{i}/{source}/vector", data=vector)
+    return path
+
+
+class AlignedReplayTests(unittest.TestCase):
+    def test_mixed_discovery_numeric_order_mapping_and_rate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = write_aligned_episode(root)
+            write_episode(root)
+            self.assertEqual(scan_dataset_directory(str(root))["count"], 2)
+            self.assertEqual(discover_replay_dataset_directories(root)["directories"], [str(root)])
+            for source in ("state", "action"):
+                frames, metadata = load_replay_episode(
+                    str(path.parent.parent), "states/aligned_joints.h5", source, "full", 0.5
+                )
+                self.assertEqual(frames.shape, (12, 23))
+                np.testing.assert_allclose(frames[:, 0], np.arange(12) / 1000, atol=1e-8)
+                np.testing.assert_allclose(frames[0, :16], np.arange(16) / 100, atol=1e-8)
+                self.assertTrue(np.all(frames[:, 16] == 0.8))
+                self.assertEqual(metadata["effective_rate_hz"], 10.0)
+                self.assertEqual(metadata["episode_id"], "demo_0")
+
+    def test_invalid_frames_and_motion_constraints(self) -> None:
+        cases = [
+            ("missing", "缺少"), ("shape", "形状"), ("nan", "NaN"),
+            ("gap", "连续"), ("limit", "超出 SDK"),
+            ("base", "底盘"), ("delta", "absolute"), ("fields", "字段顺序"),
+        ]
+        for case, error in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = write_aligned_episode(root)
+                with h5py.File(path, "a") as file:
+                    if case == "missing": del file["5/action/vector"]
+                    elif case == "shape":
+                        del file["5/action/vector"]
+                        file.create_dataset("5/action/vector", data=np.zeros(22))
+                    elif case == "nan": file["5/action/vector"][0] = np.nan
+                    elif case == "gap": del file["5"]
+                    elif case == "limit": file["5/action/vector"][16] = 0.801
+                    elif case == "base": file["5/action/vector"][21] = 0.1
+                    elif case == "delta": file.attrs["action_mode"] = "delta"
+                    elif case == "fields": file.attrs["state_fields_json"] = '[]'
+                with self.assertRaisesRegex(RobotCommandRejected, error):
+                    load_replay_episode(str(root), path.relative_to(root).as_posix(), "action", "full", 1.0)
+
+
 class ReplayDatasetTests(unittest.TestCase):
     def test_scan_and_exact_23d_mapping(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

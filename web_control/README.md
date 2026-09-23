@@ -5,6 +5,7 @@ Python 3.10 环境中，浏览器端不需要安装任何包。
 
 ## 已实现
 
+- 顶部显示机器人电量百分比和充电状态，20% 及以下突出提示低电量；未收到有效数据时显示“电量 --”。通过本机只读状态服务每秒更新，无需接管控制；模拟模式不读取真机电量。
 - 默认不加载机器人 SDK、不连接、不接管、不运动。
 - 顶部“接管控制”开关签发唯一的短时控制租约；只有持有该租约的页面才能发运动 POST。
 - 每个页面都有独立实例 ID；一个页面接管后，其他页面明确显示“其他页面已接管”并锁定开关。
@@ -31,12 +32,15 @@ Python 3.10 环境中，浏览器端不需要安装任何包。
 - 单关节与初始位姿支持 `0.2×` 到 `2.0×` 速度倍率，默认值在页面上显示为 `1.0×`。
 - 模拟机器人和模拟相机模式，可在完全不触碰硬件的情况下验收 UI/API。
 - “推理”页签使用新版 WebSocket JSON 协议，可自定义远程 host/port 和
-  prompt；先显式 health/metadata 重连，再做零 setter dry-run，最后才允许
+  prompt；先显式建立 WebSocket 连接，再做零 setter dry-run，最后才允许
   二次确认真机执行。
 - 推理执行端复用本进程唯一 `H1Robot` 和唯一 CameraService；不会构造交接包中的
   `Real_Env()`，也不会启动第二个厂商 SDK 客户端。
 - “真机回放”页签可递归扫描数据集目录中的 `.hdf5` / `.h5`，选择单条 episode，
   从 `state` 或 `action` 读取 23 维绝对目标，以 `0.5×`～`2.0×` 回放。
+
+推理页面顶部提供16维、17维、23维执行模式，默认16维（双臂及夹爪），升降、腰和头
+固定为推理启动时的位置。切换模式后需要重新 dry-run。详见 [执行模式说明](PI05_EXECUTOR.md)。
 
 ## 运行
 
@@ -57,7 +61,7 @@ http://192.168.3.43:8080
 ```
 
 服务启动后仍不会构造 `H1Robot`。点击并确认“接管控制”时才加载 SDK 和调用
-`robot_connect()`；点击“初始化”时才切到 `LOW_LEVEL` 并调用会产生实体运动的
+`robot_connect()`；点击“初始化”时才切到 `GRAVITY_COMPENSATION_LEVEL` 并调用会产生实体运动的
 `robot_init()`。
 
 ### 完全模拟运行
@@ -110,12 +114,13 @@ EXECUTOR=/home/robot/control/inference_executor.py
 WEB=http://172.16.18.43:8080
 
 # 只读协议验证
+# 可选诊断，仅适用于支持 metadata 的服务；连接与执行不依赖它
 $PY310 $EXECUTOR metadata --policy-host 192.168.1.154 --policy-port 9973
 
 # 8080 中执行器的当前状态
 $PY310 $EXECUTOR status --web-url $WEB
 
-# 选择 host/port，并显式 health + metadata 重连
+# 选择 host/port，并显式建立 WebSocket 连接
 $PY310 $EXECUTOR reconnect --web-url $WEB \
   --host 192.168.1.154 --port 9973
 
@@ -141,18 +146,53 @@ prompt 也可使用 `--prompt-file /path/to/prompt.txt`。独立 `dry-run --auto
 会在验证后释放 lease；需启动真机时应使用上面的 `run --auto-takeover --prepare`，
 使 reconnect、dry-run 和 start 处于同一 lease，并由 CLI 在后台 heartbeat、最终
 释放 lease。网页和代码的真机执行都只有在
-当前 lease、`Init_Complete(2)`、`LOW_LEVEL`、同 prompt 的当前成功 dry-run 和二次运动确认
+当前 lease、`Init_Complete(2)`、`GRAVITY_COMPENSATION_LEVEL`、同 prompt 的当前成功 dry-run 和二次运动确认
 全部成立时才能开始。`run` 必须带 `--confirm-motion`；它会跨 50 步 Chunk 连续执行，
 直到操作员 stop、Ctrl+C、故障或 lease 失效，Ctrl+C 会请求软件停止。
 必须由现场操作员事先人工完成厂商初始化；`--auto-takeover` 只管理 lease，
 绝不自动 init/deinit。机器人处于反初始化状态时，dry-run 可完成，但 start
 必定被后端拒绝。网络异常也不会自动重连后继运动。
 
+## 推理 Action / SDK 反馈记录
+
+在 8080 推理页点击「真机执行」后自动开始记录；同步推理与 RTC 均支持，无需开启
+额外开关。Dry-run 不生成执行记录。推理页标题下的「Action / SDK 状态曲线」链接打开
+`/static/inference-trace.html`，可切换双臂各关节、夹爪、升降、腰、头和历史执行记录。
+页面显示服务端原始 action、实际下发/保持目标、SDK 实测值，以及目标减实测的误差；
+灰色背景对应等待推理服务返回的时间。关节使用 rad、升降使用 m，不混用单位。
+
+每次执行单独保存到 `/home/robot/control/logs/inference/<日期时间_编号>/`，可用服务
+环境变量 `PI05_TRACE_DIR` 修改目录。页面可下载 CSV 和 JSONL：
+
+- `events.jsonl`：完整服务端 action 包（含未执行的后续步及原始结构化 payload）、
+  请求观测和请求/返回时间、执行步、SDK 采样、停止/故障事件。
+- `samples.csv`：`step` 行保存服务端原始 action 与实际成功下发目标；`state` 行保存
+  SDK 反馈、当时保持的目标、误差、速度、力矩、KP/KD、错误码和位置命令刷新间隔。
+  不把下发前的反馈伪装成下发后的实际位置。`step.feedback_before` 在 JSONL 中单独保存。
+- `metadata.json`：轴顺序、单位、时钟基准、执行模式、prompt 和控制参数。
+- `summary.json`：整次执行的逐轴 RMSE、最大绝对误差、写盘错误/丢弃事件统计。
+
+SDK 采样仍由唯一 owner 线程完成；执行步前读取，等待下一包期间约 30 Hz 读取，
+因此实际采样间隔应以时间戳为准。位置目标保持默认 100 Hz，按固定时间轴跳过逾期周期，
+不累积每轮唤醒延迟，也不补发积压命令。等待时始终保持最后成功下发目标。
+文件由独立线程异步写入、每 0.5 秒 flush，队列有界；写盘故障/队列溢出会显示在曲线页面。
+启动时无法创建记录文件会使本次执行故障退出。异常断电可能丢失最后尚未 flush 的数据；
+未完成执行可能没有 summary，但已写入的 CSV/JSONL 仍可查看。记录不会自动删除，需按需归档。
+
+页面显示最近 4000 条诊断事件及该窗口的误差统计，完整执行保存在文件。
+非全身模式的底盘 state 为原协议占位零，页面不会将其冒充实测反馈。
+记录时间是主机读取时间，各电机顺序读取，不能当作总线同步采样时间。
+
+针对「等待下一包时下沉」：优先查看灰色等待段是否目标稳定而 SDK 反馈发生偏移，
+并对照对应关节的 `refresh_gap_ms`、力矩和 KP/KD。如果刷新稳定而位置仍偏移，需要进一步
+核查实际模式反馈、KP/KD、保持力与负载；启用 SDK 重力补偿和重发目标不能代替真实负载验收。
+本功能不自动调整力矩、增益或控制模式，未通过真机记录确认下沉根因前不宣称已消除。
+
 ## HDF5 真机回放
 
 网页“真机回放”页按以下顺序操作：输入 HDF5 文件的上一级数据集目录，或从输入框的
 `/data` 目录候选中选择，再点击“读取数据”。候选目录由后端递归查找标准
-`dataset/episode-id/episode.hdf5` 布局并去重，只显示数据集目录，不显示文件。
+`dataset/episode-id/episode.hdf5` 和 `dataset/demo-id/states/aligned_joints.h5` 布局并去重，只显示数据集目录，不显示文件。
 随后选择一条 episode、回放源和模式，再选择 `0.5×`～`2.0×` 速度；默认 `1.0×`。
 现场现有样例目录是：
 
@@ -160,11 +200,15 @@ prompt 也可使用 `--prompt-file /path/to/prompt.txt`。独立 `dry-run --auto
 /data/zerith_data/Pepsi_DailyCOrangeJuice2
 ```
 
-回放前必须由当前页面接管机器人并完成 `LOW_LEVEL` 初始化。点击启动后还会弹出一次真机
-确认；回放器先用 3 秒五次平滑曲线从实测姿态对齐到数据首帧，然后按 HDF5 的
-`control_frequency × speed` 发送绝对目标。回放速度改变时间轴，不会改变数据值。
+回放前必须由当前页面接管机器人并完成 `GRAVITY_COMPENSATION_LEVEL` 初始化。点击启动后还会弹出一次真机
+确认；回放器先用 3 秒五次平滑曲线从实测姿态对齐到数据首帧。有 `timestamp/t` 的
+episode 按实际采集时间在内存中重建接近 `control_frequency` 的均匀轨迹，保持首末位置
+和动作时长；关节位置线性插值，夹爪按原采样时刻保持/切换。重复时间戳保留最后一帧，
+时间倒退拒绝加载。随后按重建频率乘 `speed` 发送，避免把 167 ms 的动作压成 33 ms。
+原始文件不修改；没有时间戳的旧数据及 aligned_joints 仍使用其声明的频率。
+这是时间轴修复，不能消除原始轨迹中真实存在的快速运动；需要分别检查其速度连续性。
 
-支持的格式与当前采集数据一致：
+原有采集格式继续支持：
 
 ```text
 observation/state/arm/position        action/arm/position
@@ -174,12 +218,19 @@ observation/state/head/position       action/head/position
 observation/state/base/velocity       action/base/velocity
 ```
 
+另外支持根属性 `format=icra_wbc_aligned_joints` 的转换格式，例如
+`/data/sim_data/0908_newscene_test1_converted/demo_0`（也可输入其上一级目录）。
+读取 `states/aligned_joints.h5` 中的 `<帧号>/state/vector` 或
+`<帧号>/action/vector`，每帧 23 维，按从 0 开始的连续数字帧号排序，
+使用根属性 `fps` 作为回放频率。已有夹爪值直接使用，不再二次转换。
+转换数据距 SDK 边界不超过 `1e-7` 的浮点舍入误差会归一到边界，实际越界仍拒绝。
+
 拼接顺序固定为左臂 7、左夹爪、右臂 7、右夹爪、升降柱、腰 pitch/yaw、头 yaw/pitch、
 底盘 linear/angular。`action` 回放只接受根属性 `action_mode=absolute`；相对动作不会被
 误当成绝对关节目标。
 
 - “双臂动作 + 夹爪”只下发前 16 维，升降柱、腰、头不改动，底盘明确保持零速。
-- “全部 23 维”下发前 21 个位置目标。当前唯一 SDK owner 必须保持 `LOW_LEVEL`，而
+- “全部 23 维”下发前 21 个位置目标。当前唯一 SDK owner 必须保持 `GRAVITY_COMPENSATION_LEVEL`，而
   数据的底盘末两维是 `(m/s, rad/s)`、低层接口需要左右轮 `(rad/s, rad/s)`；由于厂商
   没有公开/标定轮径和轮距，任何非零底盘数据会被明确拒绝，绝不做错误单位直传。
   当前样例的 `action` 底盘为全零，因此可使用 action + 全部 23 维；其 `state` 包含
@@ -199,7 +250,7 @@ SDK 原始位置限位和底盘条件。回放期间控制租约、电机错误�
   → 确认接管
   → H1Robot() + robot_connect()，只读状态
   → 确认初始化
-  → switchControlMode(LOW_LEVEL) + robot_init()
+  → switchControlMode(GRAVITY_COMPENSATION_LEVEL) + robot_init()
   → 关节/机身/底盘控制
   → 确认反初始化
   → robot_deinit()
@@ -240,11 +291,11 @@ margin，也不设置 `max-start-delta`，超界时拒绝而不是静默截断�
 
 ### 底盘为何显示左右轮轮速
 
-双臂单关节控制只在 `LOW_LEVEL` 可用，而 SDK 的底盘线速度/角速度接口
+双臂单关节控制只在 `GRAVITY_COMPENSATION_LEVEL` 可用，而 SDK 的底盘线速度/角速度接口
 `setChassis_high()` 只在 `HIGH_LEVEL` 可用。初始化完成时不能切模式，也不能用第二个
 `H1Robot` 绕过单客户端约束。
 
-因此本控制台长期保持 `LOW_LEVEL`，调用：
+因此本控制台长期保持 `GRAVITY_COMPENSATION_LEVEL`，调用：
 
 ```text
 setChassis_low(left,  Speed=left_rad_s)
@@ -275,7 +326,7 @@ Web 页面不会把关闭连接解释为 Enter，也不会在到位后立即离�
 
 推理页“机械臂归位”与“初始位姿”是两套不同动作：它先把底盘双轮明确置零，再读取并
 保持当时的升降柱高度，只将双臂、腰和头插值到 0，并把双夹爪张开到 0。它要求当前
-页面持有控制租约、机器人已完成初始化并处于 `LOW_LEVEL`；推理运行/停止或故障锁存
+页面持有控制租约、机器人已完成初始化并处于 `GRAVITY_COMPENSATION_LEVEL`；推理运行/停止或故障锁存
 期间均拒绝执行，必须先结束相应状态，防止手动归位与推理同时下发。
 
 ## 相机链路
@@ -348,8 +399,7 @@ systemctl status zerith-h1-web-control.service
 `systemd/zerith-h1-web-control-user.service`。日常重启四个语音/网页服务可直接使用：
 
 ```bash
-systemctl --user restart zerith-chinese-asr.service zerith-chinese-tts.service \
-  zerith-xiaoda-voice.service zerith-h1-web-control.service
+systemctl --user restart zerith-xiaoda-voice.service zerith-h1-web-control.service
 systemctl --user --no-pager status zerith-chinese-asr.service \
   zerith-chinese-tts.service zerith-xiaoda-voice.service zerith-h1-web-control.service
 ```
@@ -358,8 +408,10 @@ systemctl --user --no-pager status zerith-chinese-asr.service \
 `127.0.0.1:8765` 访问它，不导入 `xiaoda-voice` 环境的依赖，也不会再占用一次机器人
 麦克风。当前服务以 `--web-only` 运行：小达唤醒词监听已关闭，仅在网页点击“录入一句”时打开麦克风。
 中文和英文现在都默认打开机器人端 PipeWire 输入；当前默认设备是独立的讯飞
-`XFM-DP-V0.0.18` 麦克风。中文录音仍只进入本地 Paraformer + Qwen3-ASR 链路，英文
-模型、接口和声音保持原样。
+`XFM-DP-V0.0.18` 麦克风。中文默认走已配置的云端识别与合成 API，需要联网。
+“启动本地语音”会按需加载 Paraformer + Qwen3-ASR / Qwen3-TTS，两个服务都健康
+后自动切换；加载期间继续使用云端。“停止并释放显存”恢复云端，按钮不会启用开机启动。
+英文模型、接口和声音保持原样。
 
 反方向的运动调用通过网页进程在 `127.0.0.1:8766` 上的内部接口完成：语音进程不加载
 H1 SDK，网页进程仍是唯一 SDK 持有者。内部控制器只接受固定动作白名单，并绑定网页的
@@ -386,8 +438,8 @@ watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 
 | GET | `/api/config` | SDK 原始限位和控制元数据 |
 | GET | `/api/state` | 23 电机、模式、初始化、电池、底盘和相机状态 |
 | GET | `/api/pi05/status` | 推理 phase、连接、远端、故障、延迟、chunk 与安全门禁状态 |
-| POST | `/api/pi05/probe` | 只读 healthz + metadata；不读取机器人、不推理、不运动 |
-| POST | `/api/pi05/reconnect` | 选择 host/port 并显式 healthz + metadata 重连；不自动恢复动作 |
+| POST | `/api/pi05/probe` | 重新建立 WebSocket 连接；不读取机器人、不推理、不运动 |
+| POST | `/api/pi05/reconnect` | 选择 host/port 并显式建立 WebSocket 连接；不自动恢复动作 |
 | POST | `/api/pi05/disconnect` | 软件停止并关闭推理连接；不调用 deinit |
 | POST | `/api/pi05/dry-run` | 三路真图 + 23 维 state 请求一次 50 步 chunk；零 setter |
 | POST | `/api/pi05/start` | 同 prompt dry-run、lease、关节速度、频率、每 Chunk 步数及精确确认后开始连续真机执行 |
@@ -404,6 +456,7 @@ watchdog。前进/后退使用 1.5 rad/s、1 秒，左转使用 1.5 rad/s、3.5 
 | POST | `/api/voice/finish-input` | 手动结束当前录音并立即识别 |
 | POST | `/api/voice/text` | 按 `zh` / `en` 提交一条键盘文字，进入同一对话/动作链路 |
 | POST | `/api/voice/cancel` | 停止当前录音、合成和本地播放并清空队列 |
+| POST | `/api/voice/local-speech` | `{enabled: boolean}` 按需启停两个本地 GPU 语音服务，状态见 voice/status 的 local_speech |
 | POST | `/api/voice/motion` | 使用当前控制租约显式开启/关闭语音运动；默认关闭 |
 | POST | `/api/takeover` | 开启/关闭控制租约 |
 | POST | `/api/heartbeat` | 续约；运动请求使用 `X-Control-Lease` |
@@ -443,3 +496,39 @@ watchdog、语音运动开关/租约/固定时长/挥腕限位、相机生命周
 
 实体初始化、反初始化、关节、腰头和底盘运动只能在操作者到场、2 m 清场、急停可达、
 确认无 VR/遥控并逐项观察的条件下验收；自动化测试不会在无人看护时擅自移动机器人。
+
+## SDK 重力补偿模式（2026-09-23）
+
+8080 的目标模式统一由 `web_control/control_mode.py` 定义为
+`GRAVITY_COMPENSATION_LEVEL(3)`；`/api/config` 返回模式名称、数值及显示名称，
+网页和语音入口使用同一配置约定。`LOW_LEVEL(1)` 不再是网页运动会话的就绪状态。
+只在允许初始化的生命周期阶段切换模式，执行 action 期间不切换。
+初始化仍会产生实体动作，服务启动、读取状态和 dry-run 不自动初始化。
+
+双臂、夹爪、腰、头、升降、底盘继续走原有 `set*_low()` 接口；夹爪保持力矩
+与 SDK 重力补偿是不同功能。位置指令保留 `Speed=0, Torque=0, KP=KD=-1`，
+不在应用端重复叠加重力补偿。SDK 不支持模式 3 时明确失败，不回退到模式 1。
+实际电机发送入口再次检查模式；模式丢失时丢弃旧保持目标，不向其他模式发送。
+
+推理、回放、手动控制和语音运动沿用唯一 SDK owner 与原有互斥约束。
+运行中保持最后成功下发目标，停止时才按原流程捕获反馈位置保持。同步推理
+仍在包尾请求下一包：等待期间刷新最后目标，不保证跨包连续产生新 action。
+RTC 仍需服务端满足既有协议，不能因控制模式迁移跳过协议检查。
+16/17/23 维映射、单手掩码、升降/机身保持、限幅及停止逻辑保持原有语义。
+
+部署或回滚前应结束活动会话，并通过所属控制流程反初始化到状态 0/4。
+不要在 VR/其他模式仍已初始化时强制切换。网页遇到模式不匹配会拒绝运动，
+模式 0 + 初始化 2 的恢复入口保留原有前置检查，不自动调用。
+纯软件部署不意味着真机模式已切换，最终应以 `/api/state` 的实时反馈为准。
+
+厂商初始化/反初始化可能阻塞 Python 心跳处理，时间超过普通 3 秒租约。
+这几个独占生命周期调用会锁定原租约归属，返回（包括失败）后给原控制者一个正常
+心跳窗口；已过期租约不能借此重新生效，策略动作与普通运动不延长超时规则。
+
+本次迁移验收（2026-09-23）：222 项控制/网页测试、15 项独立工具测试通过；
+浏览器模拟验证覆盖推理启动/停止、HDF5 回放、模式门禁与六个窄屏页签。
+在现场已确认看护且停止 VR 后，真机完成模式 3 初始化（状态 2）、重复初始化、
+反初始化（状态 4）及释放控制权，23 个电机无错误，轮速为零。厂商反初始化
+完成后实测模式回到 0，属于正常生命周期；下一次初始化重新切到模式 3。
+本次没有运行完整真实模型任务或逐项实体语音/底盘动作；这些路径通过自动化回归，
+不能据此宣称全部实体运动工况已验收。同步推理跨包等待仍适用上述限制。

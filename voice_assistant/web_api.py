@@ -175,8 +175,10 @@ class VoiceWebBridge(StatusSink):
         return controller.cancel_current()
 
     def snapshot(self) -> dict[str, Any]:
+        local = getattr(self._controller, "local_speech", None)
         with self._lock:
             return {
+                "local_speech": local.snapshot() if local is not None else None,
                 "available": True,
                 "state": self._state,
                 "detail": self._detail,
@@ -251,7 +253,14 @@ class VoiceWebRequestHandler(BaseHTTPRequestHandler):
                 self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid json object"})
                 return
             payload = decoded
-        if path == "/v1/start":
+        if path == "/v1/local-speech":
+            enabled = payload.get("enabled")
+            if not isinstance(enabled, bool):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "enabled must be a boolean"})
+                return
+            local = getattr(self.api._controller, "local_speech", None)
+            accepted, message = local.set_enabled(enabled) if local is not None else (False, "本地语音管理不可用")
+        elif path == "/v1/start":
             language = str(payload.get("language", "zh"))
             accepted, message = self.api.request_session(language)
         elif path == "/v1/finish-input":

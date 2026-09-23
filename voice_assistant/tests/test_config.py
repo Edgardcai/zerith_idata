@@ -36,6 +36,32 @@ sk-remote-secret
             self.assertEqual(config.end_silence_seconds, 0.42)
             self.assertEqual(config.kws_threads, 1)
 
+    def test_combined_provider_and_json_auth_uses_only_provider_key(self) -> None:
+        content = '''model = "gpt-6-astra"
+base_url = "http://192.168.1.244:8000"
+{"OPENAI_API_KEY": "new-provider-secret"}
+'''
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / "api.txt"
+            path.write_text(content)
+            config = VoiceConfig.load(path)
+        self.assertEqual(config.reasoning_effort, "low")
+        self.assertEqual(len(config.llm_profiles), 1)
+        self.assertEqual(config.llm_profiles[0].api_key, "new-provider-secret")
+        self.assertEqual(config.llm_profiles[0].responses_url, "http://192.168.1.244:8000/responses")
+        self.assertEqual(config.audio_api_key, "")
+        self.assertNotIn("new-provider-secret", repr(config))
+        self.assertEqual(config.validate(require_models=False), [])
+
+    def test_cloud_audio_required_when_local_speech_disabled(self) -> None:
+        from dataclasses import replace
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
+            path = Path(directory) / "api.txt"
+            path.write_text('base_url = "http://localhost:8000"\nOPENAI_API_KEY = "provider-secret"')
+            config = VoiceConfig.load(path)
+        self.assertEqual(config.llm_profiles[0].api_key, "provider-secret")
+        self.assertIn("没有可用的语音 API 配置", replace(config, chinese_speech_enabled=False).validate(False))
+
     def test_name_defaults_to_xiaoda(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             config = VoiceConfig.load(Path(directory) / "missing.txt")

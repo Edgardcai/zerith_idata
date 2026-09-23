@@ -109,6 +109,9 @@ class ChineseASRBackend:
             model=self.stream_model_name,
             device=self.device,
             ngpu=ngpu,
+            # FunASR's PyPI version check has no network timeout. Model startup
+            # must not wait for package-update connectivity.
+            disable_update=True,
             disable_pbar=True,
             disable_log=True,
         )
@@ -117,6 +120,7 @@ class ChineseASRBackend:
             device=self.device,
             ngpu=ngpu,
             max_end_silence_time=self.endpoint_ms,
+            disable_update=True,
             disable_pbar=True,
             disable_log=True,
         )
@@ -124,6 +128,7 @@ class ChineseASRBackend:
             model="ct-punc",
             device=self.device,
             ngpu=ngpu,
+            disable_update=True,
             disable_pbar=True,
             disable_log=True,
         )
@@ -218,6 +223,20 @@ class ChineseASRBackend:
             LOG.warning("Qwen3-ASR final review fallback: %s", exc)
             return fallback, "paraformer"
 
+    async def transcribe_english(self, pcm: bytes) -> dict[str, Any]:
+        if self.qwen is None:
+            raise RuntimeError("English ASR requires the Qwen3-ASR model")
+        audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        def run() -> str:
+            with self.qwen_lock:
+                results = self.qwen.transcribe(
+                    audio=(audio, self.sample_rate), context="", language="English",
+                    return_time_stamps=False,
+                )
+            return str(results[0].text).strip() if results else ""
+        text = await asyncio.to_thread(run)
+        return {"text": text, "source": "qwen3-asr", "language": "en"}
+
     def correct(self, text: str) -> str:
         for source, replacement in self.corrections.items():
             text = text.replace(source, replacement)
@@ -292,18 +311,27 @@ def create_app(backend: ChineseASRBackend) -> Any:
     async def transcribe(request: Any) -> Any:
         reader = await request.multipart()
         raw = b""
+        language = "zh"
         while part := await reader.next():
             if part.name == "file":
                 chunks = bytearray()
                 while chunk := await part.read_chunk():
                     chunks.extend(chunk)
                 raw = bytes(chunks)
+            elif part.name == "language":
+                language = (await part.text()).strip().lower()
         if not raw:
             raise web.HTTPBadRequest(text="audio file is required")
         try:
             pcm = _read_pcm_wav(raw)
         except (ValueError, wave.Error) as exc:
             raise web.HTTPBadRequest(text=str(exc)) from exc
+        if language not in {"zh", "en"}:
+            raise web.HTTPBadRequest(text="language must be zh or en")
+        if language == "en":
+            if backend.qwen is None:
+                raise web.HTTPServiceUnavailable(text="English ASR model is not ready")
+            return web.json_response(await backend.transcribe_english(pcm))
         state = StreamState()
         chunk_bytes = backend.sample_rate * 2 * backend.chunk_ms // 1000
         for offset in range(0, len(pcm), chunk_bytes):

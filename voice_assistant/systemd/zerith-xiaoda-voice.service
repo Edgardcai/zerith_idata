@@ -1,7 +1,7 @@
 [Unit]
 Description=ZERITH H1 PRO XiaoDa Voice Assistant
-After=pipewire.service zerith-chinese-asr.service zerith-chinese-tts.service
-Wants=pipewire.service zerith-chinese-asr.service zerith-chinese-tts.service
+After=pipewire.service
+Wants=pipewire.service
 
 [Service]
 Type=simple

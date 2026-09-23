@@ -86,24 +86,43 @@ class AlsaMicrophone:
                 process.wait(timeout=1.0)
 
 
-@dataclass(frozen=True)
+@dataclass
 class AlsaSpeaker:
     device: str
+
+    def __post_init__(self) -> None:
+        self._lock = threading.Lock()
+        self._process = None
+        self._cancelled = threading.Event()
+
+    def cancel(self) -> None:
+        with self._lock:
+            self._cancelled.set()
+            if self._process is not None and self._process.poll() is None:
+                self._process.terminate()
 
     def play(self, encoded_audio: bytes) -> None:
         if not encoded_audio:
             return
         audio = encoded_audio if encoded_audio[:4] == b"RIFF" else self._decode_to_wav(encoded_audio)
-        process = subprocess.run(
-            ["aplay", "-q", "-D", self.device],
-            input=audio,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            timeout=120,
-            check=False,
-        )
-        if process.returncode:
-            detail = process.stderr.decode("utf-8", errors="replace").strip()
+        with self._lock:
+            self._cancelled.clear()
+            process = subprocess.Popen(
+                ["aplay", "-q", "-D", self.device], stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            )
+            self._process = process
+        try:
+            _, stderr = process.communicate(input=audio, timeout=120)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise
+        finally:
+            with self._lock:
+                self._process = None
+        if process.returncode and not self._cancelled.is_set():
+            detail = stderr.decode("utf-8", errors="replace").strip()
             raise AudioError(f"扬声器播放失败：{detail}")
 
     @staticmethod
@@ -156,6 +175,7 @@ class AlsaPcmStream:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
+                bufsize=0,
             )
 
     def write(self, pcm: bytes) -> None:
@@ -163,17 +183,22 @@ class AlsaPcmStream:
             return
         with self._lock:
             process = self._process
-            if process is None or process.stdin is None:
-                raise AudioError("PCM 播放器尚未启动")
-            try:
-                process.stdin.write(pcm)
-                process.stdin.flush()
-            except (BrokenPipeError, OSError) as exc:
-                raise AudioError("PCM 播放流已中断") from exc
+        if process is None or process.stdin is None:
+            raise AudioError("PCM 播放器尚未启动")
+        # A pipe write can block behind playback. Never hold the cancellation lock here.
+        try:
+            remaining = memoryview(pcm)
+            while remaining:
+                written = process.stdin.write(remaining)
+                if not written:
+                    raise AudioError("PCM 播放流已关闭")
+                remaining = remaining[written:]
+        except (ValueError, OSError) as exc:
+            raise AudioError("PCM 播放流已中断") from exc
 
     def finish(self) -> None:
         with self._lock:
-            process, self._process = self._process, None
+            process = self._process
         if process is None:
             return
         if process.stdin is not None:
@@ -187,7 +212,11 @@ class AlsaPcmStream:
             process.kill()
             process.wait(timeout=2)
             raise AudioError("PCM 播放超时")
-        if returncode:
+        with self._lock:
+            cancelled = self._process is not process
+            if not cancelled:
+                self._process = None
+        if returncode and not cancelled:
             detail = process.stderr.read().decode("utf-8", errors="replace").strip() if process.stderr else ""
             raise AudioError(f"PCM 播放失败：{detail or returncode}")
 
@@ -196,11 +225,6 @@ class AlsaPcmStream:
             process, self._process = self._process, None
         if process is None:
             return
-        if process.stdin is not None:
-            try:
-                process.stdin.close()
-            except OSError:
-                pass
         if process.poll() is None:
             process.terminate()
             try:
@@ -208,6 +232,11 @@ class AlsaPcmStream:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=0.15)
+        if process.stdin is not None:
+            try:
+                process.stdin.close()
+            except OSError:
+                pass
 
 
 def pcm16_to_float32(pcm: bytes) -> np.ndarray:

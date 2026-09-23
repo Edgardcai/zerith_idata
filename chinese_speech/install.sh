@@ -22,6 +22,7 @@ install -m 0644 "$PROJECT_DIR/chinese_speech/systemd/zerith-chinese-asr.service"
 install -m 0644 "$PROJECT_DIR/chinese_speech/systemd/zerith-chinese-tts.service" \
   /home/robot/.config/systemd/user/zerith-chinese-tts.service
 systemctl --user daemon-reload
+systemctl --user disable zerith-chinese-asr.service zerith-chinese-tts.service
 
 echo "Installed. Models download automatically on first service start."
-echo "Start with: systemctl --user enable --now zerith-chinese-asr zerith-chinese-tts"
+echo "GPU services do not start at boot. Start them from the website's local speech button."

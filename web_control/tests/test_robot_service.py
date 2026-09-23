@@ -196,6 +196,8 @@ class RobotServiceTests(unittest.TestCase):
         time.sleep(0.03)  # let the worker's immediate hold tick finish
         self.robot.calls.clear()
         action = self.policy_action_from_feedback()
+        action[7] = 0.42
+        action[15] = 1.23
 
         result = self.service.policy_step(
             lease,
@@ -214,8 +216,10 @@ class RobotServiceTests(unittest.TestCase):
         )
         self.assertEqual(result["effective_action"][17], -2.396844865870662e-05)
         self.assertEqual(result["effective_action"][21:23], [0.0, 0.0])
-        self.assertIn(result["effective_action"][7], (0.0, 1.5))
-        self.assertIn(result["effective_action"][15], (0.0, 1.5))
+        self.assertEqual(result["effective_action"][7], 0.42)
+        self.assertEqual(result["effective_action"][15], 1.23)
+        self.assertEqual(result["sent_action"][7], 0.42)
+        self.assertEqual(result["sent_action"][15], 1.23)
         self.assertNotIn("max_arm_delta_rad", result)
         self.assertNotIn("joint_speed_deg_s", result)
         self.assertNotIn("max_joint_step_rad", result)
@@ -323,9 +327,9 @@ class RobotServiceTests(unittest.TestCase):
         not_finite = list(valid)
         not_finite[0] = float("nan")
         invalid_actions.append(not_finite)
-        bad_gripper = list(valid)
-        bad_gripper[7] = 0.5
-        invalid_actions.append(bad_gripper)
+        out_of_range_gripper = list(valid)
+        out_of_range_gripper[7] = 1.6
+        invalid_actions.append(out_of_range_gripper)
 
         for action in invalid_actions:
             with self.subTest(action=action):
@@ -346,7 +350,7 @@ class RobotServiceTests(unittest.TestCase):
     def test_policy_step_sends_large_arm_and_lift_changes_without_clamping(self) -> None:
         self.restart_fake_service()
         lease = self.acquire_and_init()
-        session_id = self.service.begin_policy_session(lease)["session_id"]
+        session_id = self.service.begin_policy_session(lease, execution_mode="arms_lift")["session_id"]
         action = [
             float(self.robot.states[motor_id].Position_Actual)
             for motor_id in POLICY_WIRE_MOTOR_IDS
@@ -383,7 +387,7 @@ class RobotServiceTests(unittest.TestCase):
                     for motor_id in POLICY_WIRE_MOTOR_IDS
                 ] + [0.0, 0.0]
                 action[index] = target
-                session_id = self.service.begin_policy_session(lease)[
+                session_id = self.service.begin_policy_session(lease, execution_mode="arms_lift")[
                     "session_id"
                 ]
                 with self.assertRaisesRegex(RobotCommandRejected, "超出 SDK 范围"):

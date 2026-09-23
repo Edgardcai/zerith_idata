@@ -33,7 +33,6 @@ from .pi05_protocol import (
     ACTION_HORIZON,
     Pi05ProtocolError,
     ZerithJsonPolicyClient,
-    probe_healthz,
 )
 
 
@@ -123,6 +122,48 @@ def _prompt(args: argparse.Namespace) -> str:
     return value
 
 
+def _task_payload(args: argparse.Namespace, prompt: str) -> dict[str, Any]:
+    """Build the optional multi-stage task envelope while preserving legacy calls."""
+
+    mode = str(getattr(args, "inference_mode", "custom"))
+    payload: dict[str, Any] = {"prompt": prompt, "execution_mode": getattr(args, "execution_mode", "arms")}
+    if getattr(args, "scheduling_mode", "sync") == "rtc":
+        payload["scheduling_mode"] = "rtc"
+        payload["rtc_options"] = {
+            "trigger_index": args.rtc_trigger_index,
+            "delay_initial_steps": args.rtc_delay_initial_steps,
+            "safety_reserve_steps": args.rtc_safety_reserve_steps,
+            "num_denoising_steps": args.rtc_num_denoising_steps,
+            "max_guidance_weight": args.rtc_max_guidance_weight,
+            "max_observation_age_s": args.rtc_max_observation_age,
+            "warmup_timeout_s": args.rtc_warmup_timeout,
+        }
+    if mode == "custom":
+        if getattr(args, "active_hand", None) or getattr(args, "right_prompt", None):
+            raise CliError("custom mode cannot use --active-hand or --right-prompt")
+        return payload
+    active_hand = getattr(args, "active_hand", None)
+    if mode == "single" and active_hand not in ("left", "right"):
+        raise CliError("single mode requires --active-hand left or right")
+    if mode != "single" and active_hand is not None:
+        raise CliError("--active-hand is only valid for single mode")
+    payload["inference_mode"] = mode
+    payload["active_hand"] = active_hand
+    right_prompt = getattr(args, "right_prompt", None)
+    normalised_right = right_prompt.strip() if isinstance(right_prompt, str) else ""
+    if mode == "dual_separate":
+        if not normalised_right:
+            raise CliError("dual_separate mode requires --right-prompt")
+        if len(normalised_right) > 1000:
+            raise CliError("--right-prompt must not exceed 1000 characters")
+        payload["right_prompt"] = normalised_right
+    elif normalised_right:
+        raise CliError("--right-prompt is only valid for dual_separate mode")
+    else:
+        payload["right_prompt"] = None
+    return payload
+
+
 def _web_base(value: str) -> str:
     parsed = urlsplit(str(value).strip())
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
@@ -188,7 +229,6 @@ def _print(value: Any) -> None:
 
 
 def _metadata(args: argparse.Namespace) -> int:
-    health = probe_healthz(args.policy_host, args.policy_port, timeout=args.timeout)
     with ZerithJsonPolicyClient(
         args.policy_host,
         args.policy_port,
@@ -196,7 +236,7 @@ def _metadata(args: argparse.Namespace) -> int:
         inference_timeout=args.inference_timeout,
     ) as client:
         metadata = client.metadata(timeout=args.timeout)
-    _print({"health": health, "metadata": metadata})
+    _print({"metadata": metadata})
     return 0
 
 
@@ -204,7 +244,7 @@ def _web_api(args: argparse.Namespace) -> WebApi:
     return WebApi(
         args.web_url,
         token=args.token,
-        timeout=args.timeout,
+        timeout=max(args.timeout, (4 if getattr(args, "inference_mode", "custom") == "dual_separate" else 2) * args.rtc_warmup_timeout + 60) if getattr(args, "scheduling_mode", "sync") == "rtc" else args.timeout,
     )
 
 
@@ -216,6 +256,19 @@ def _lease(args: argparse.Namespace) -> str:
             "--auto-takeover, is required"
         )
     return value
+
+
+def _release_automatic_takeover(api, lease):
+    """Release the lease without treating a retained initialized SDK as failure."""
+    try:
+        api.request("POST", "/api/takeover", {"enabled": False}, lease=lease)
+    except CliError as exc:
+        if "HTTP 409" not in str(exc) or "不能释放 SDK" not in str(exc):
+            raise
+        state = api.request("GET", "/api/state")
+        if state.get("takeover") is not False or state.get("policy_session", {}).get("active") is not False:
+            raise
+        print("控制租约已释放；机器人仍已初始化，保留 SDK 连接，未执行反初始化。", file=sys.stderr)
 
 
 @contextmanager
@@ -264,12 +317,7 @@ def _control_lease(
         yield lease, True, lease_seconds
     except BaseException as primary_error:
         try:
-            api.request(
-                "POST",
-                "/api/takeover",
-                {"enabled": False},
-                lease=lease,
-            )
+            _release_automatic_takeover(api, lease)
         except BaseException as release_error:
             raise CliError(
                 f"operation failed ({primary_error}); automatic takeover "
@@ -277,12 +325,7 @@ def _control_lease(
             ) from primary_error
         raise
     else:
-        api.request(
-            "POST",
-            "/api/takeover",
-            {"enabled": False},
-            lease=lease,
-        )
+        _release_automatic_takeover(api, lease)
 
 
 def _best_effort_pi05_stop(api: WebApi) -> None:
@@ -328,14 +371,14 @@ def _dry_run(args: argparse.Namespace) -> int:
                     result = api.request(
                         "POST",
                         "/api/pi05/dry-run",
-                        {"prompt": prompt},
+                        _task_payload(args, prompt),
                         lease=lease,
                     )
             else:
                 result = api.request(
                     "POST",
                     "/api/pi05/dry-run",
-                    {"prompt": prompt},
+                    _task_payload(args, prompt),
                     lease=lease,
                 )
             if automatic:
@@ -383,7 +426,7 @@ def _run(args: argparse.Namespace) -> int:
                         prepared = api.request(
                             "POST",
                             "/api/pi05/dry-run",
-                            {"prompt": prompt},
+                            _task_payload(args, prompt),
                             lease=lease,
                         )
                         _print(
@@ -408,7 +451,7 @@ def _run(args: argparse.Namespace) -> int:
                     prepared = api.request(
                         "POST",
                         "/api/pi05/dry-run",
-                        {"prompt": prompt},
+                        _task_payload(args, prompt),
                         lease=lease,
                     )
                     _print(
@@ -470,7 +513,7 @@ def _start_run(
         "POST",
         "/api/pi05/start",
         {
-            "prompt": prompt,
+            **_task_payload(args, prompt),
             "steps_per_chunk": args.steps_per_chunk,
             "control_rate_hz": args.control_rate_hz,
             "joint_speed_deg_s": args.joint_speed_deg_s,
@@ -503,13 +546,38 @@ def _add_prompt_options(parser: argparse.ArgumentParser) -> None:
             "control lease; never initializes or deinitializes the robot"
         ),
     )
+    parser.add_argument("--scheduling-mode", choices=("sync", "rtc"), default="sync", help="sync 30-step chunks or asynchronous RTC")
+    parser.add_argument("--rtc-trigger-index", type=int, default=15)
+    parser.add_argument("--rtc-delay-initial-steps", type=int, default=6)
+    parser.add_argument("--rtc-safety-reserve-steps", type=int, default=2)
+    parser.add_argument("--rtc-num-denoising-steps", type=int, default=10)
+    parser.add_argument("--rtc-max-guidance-weight", type=float, default=5.0)
+    parser.add_argument("--rtc-max-observation-age", type=float, default=0.25)
+    parser.add_argument("--rtc-warmup-timeout", type=float, default=120.0)
+    parser.add_argument("--execution-mode", choices=("arms", "arms_lift", "full"), default="arms",
+                        help="model-controlled axes: 16, 17, or all 23")
+    parser.add_argument(
+        "--inference-mode",
+        choices=("custom", "single", "dual_continuous", "dual_separate"),
+        default="custom",
+        help="task orchestration mode; prompt-only legacy behavior is custom",
+    )
+    parser.add_argument(
+        "--active-hand",
+        choices=("left", "right"),
+        help="required for --inference-mode single",
+    )
+    parser.add_argument(
+        "--right-prompt",
+        help="required second prompt for --inference-mode dual_separate",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ZERITH Pi0.5 web-integrated executor CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    metadata = subparsers.add_parser("metadata", help="health + metadata only; no robot access")
+    metadata = subparsers.add_parser("metadata", help="optional server metadata only; no robot access")
     metadata.add_argument("--policy-host", default="192.168.1.154")
     metadata.add_argument("--policy-port", type=int, default=9973)
     metadata.add_argument("--timeout", type=float, default=5.0)
@@ -520,7 +588,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_web_options(status)
     status.set_defaults(handler=_web_status)
 
-    probe = subparsers.add_parser("probe", help="ask 8080 to run health + metadata")
+    probe = subparsers.add_parser("probe", help="ask 8080 to reconnect the policy WebSocket")
     _add_web_options(probe)
     probe.set_defaults(handler=_web_probe)
 

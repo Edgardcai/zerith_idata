@@ -48,3 +48,6 @@ voice_assistant/models/
 *.tar.gz
 *.tar.bz2
 *.zip
+
+# Per-execution inference diagnostics
+logs/inference/
