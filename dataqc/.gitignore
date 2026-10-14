@@ -1,6 +1,6 @@
 # Local state and credentials
 /runtime/
-/.venv/
+/.venv
 /.env
 /.env.*
 !/.env.example

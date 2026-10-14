@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>数据看板 · Zerith</title><link rel="stylesheet" href="/collection-dashboard/assets/collection-dashboard.css"><script defer src="/collection-dashboard/assets/collection-dashboard.js"></script></head>
+<body><div class="shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span>Zerith</span></div>
+    <nav class="main-nav" aria-label="统计方式">
+      <button class="nav-btn active" data-mode="dates" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v16H4zM8 3v4M16 3v4M4 10h16M8 14h2M14 14h2M8 18h2"/></svg>按日期</button>
+      <button class="nav-btn" data-mode="plans"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h10v4H7zM5 5H3v16h18V5h-2M7 12l2 2 3-3M14 12h3M7 18h10"/></svg>按计划</button>
+    </nav>
+    <a id="back" class="back-link" href="/#collection-dashboard">返回工作台 ↗</a>
+  </aside>
+  <main class="page">
+    <header class="page-head"><h1 id="viewTitle">按日期</h1><div class="head-actions"><span id="updated"></span><button id="refresh" class="primary"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M18 17a7 7 0 0 1-12 1l-2-3"/></svg><span>更新统计</span></button></div></header>
+    <div id="error" class="error" role="alert" hidden></div>
+    <div id="syncStatus" class="sync-status" hidden></div>
+    <section data-panel="dates">
+      <div class="date-toolbar">
+        <div class="date-controls">
+          <div class="segmented date-shortcuts" role="group" aria-label="日期范围"><button id="today" data-range="today" class="active" aria-pressed="true">今天</button><button id="yesterday" data-range="yesterday" aria-pressed="false">昨天</button><button id="last7days" data-range="last7" aria-pressed="false">近7天</button><button id="allDates" data-range="all" aria-pressed="false">全部</button></div>
+          <div id="dateRange" class="date-range"><input id="dateInput" type="date" required aria-label="开始日期"><span>至</span><input id="dateEnd" type="date" required aria-label="结束日期"></div>
+        </div>
+        <select id="dateGrade" aria-label="采用等级"><option value="">全部等级</option><option>A</option><option>B</option><option>C</option><option>F</option><option value="UNRATED">未分级</option></select>
+      </div>
+      <div id="dateMetrics" class="kpis"><div class="loading">正在读取…</div></div>
+      <div class="chart-grid">
+        <article class="card daily-card">
+          <div class="section-head"><div><h2>每日采集数量</h2><span id="chartRange" class="chart-caption"></span></div><button id="exportDaily">导出每日数据</button></div>
+          <div id="dailyChart" class="daily-chart"><div class="empty">正在读取…</div></div>
+          <div id="dailyLegend" class="chart-legend"></div>
+          <div id="dailyTooltip" class="chart-tooltip" role="status" hidden></div>
+        </article>
+        <article class="card grade-card">
+          <div class="section-head"><h2>等级占比</h2><span class="chart-caption">采用等级</span></div>
+          <div id="gradeChart"></div>
+        </article>
+      </div>
+      <article class="card date-products">
+        <div class="section-head"><h2>商品采集数量 <span id="dateProductCount" class="count"></span></h2><button id="exportDate">导出商品表</button></div>
+        <div class="table-tools"><input id="dateSearch" type="search" placeholder="搜索商品" aria-label="搜索商品"><select id="dateSort" aria-label="商品排序"><option value="total">记录数从多到少</option><option value="left">左手数量从少到多</option><option value="right">右手数量从少到多</option><option value="name">商品名称</option></select></div>
+        <div class="table-scroll"><table id="dateTable"><thead><tr><th>商品</th><th class="num">记录数</th><th class="num">左手数量</th><th class="num">右手数量</th><th></th></tr></thead><tbody></tbody></table></div>
+      </article>
+    </section>
+    <section data-panel="plans" hidden>
+      <div class="plan-toolbar"><div class="segmented" id="planBasis"><button data-basis="all" class="active" aria-pressed="true">全部采集</button><button data-basis="ab" aria-pressed="false">仅 A/B</button></div></div>
+      <div id="planCards" class="batch-grid"><div class="loading">正在读取…</div></div>
+      <article id="planContent" class="card plan-detail" hidden>
+        <div class="section-head"><h2 id="planTitle">商品目标对照</h2><div class="inline-actions"><a id="planDocument" href="#">计划文档 ↗</a><button id="exportPlan">导出对照表</button></div></div>
+        <div id="planSummary" class="plan-metrics"></div>
+        <div class="table-tools"><input id="planSearch" type="search" placeholder="搜索计划商品" aria-label="搜索计划商品"><label class="check"><input id="planMissingOnly" type="checkbox">仅看未达标</label><select id="planSort" aria-label="计划商品排序"><option value="gap">缺口从多到少</option><option value="name">商品名称</option><option value="completion">完成度从高到低</option></select></div>
+        <div class="table-scroll"><table id="planTable"><thead><tr><th>商品</th><th>左手 · 实际 / 计划</th><th>右手 · 实际 / 计划</th><th>配额进度</th><th class="num">单手缺口</th><th>状态</th><th></th></tr></thead><tbody></tbody></table></div>
+      </article><div id="planPending" class="empty card" hidden></div>
+    </section>
+  </main>
+</div>
+<dialog id="recordList"><div class="dialog-head"><h2 id="recordListTitle">采集记录</h2><button id="closeRecordList" aria-label="关闭记录列表">✕</button></div><div class="list-actions"><span id="recordCount"></span><button id="exportRecords">导出记录</button></div><div class="table-scroll"><table id="recordTable"><thead><tr><th>记录</th><th>左手</th><th>右手</th><th>采用等级</th><th></th></tr></thead><tbody></tbody></table></div><div class="pagination"><span id="pageInfo"></span><button id="prev">上一页</button><button id="next">下一页</button></div></dialog>
+<dialog id="detail"><div class="dialog-head"><h2 id="detailTitle">记录详情</h2><button id="closeDetail" aria-label="关闭详情">✕</button></div><div id="detailBody"></div></dialog>
+</body></html>

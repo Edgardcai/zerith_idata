@@ -13,7 +13,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict
 
 from .config import api_config
-from .gateway_queue import request_slot, wait_seconds
+from .gateway_queue import request_slot, wait_seconds, cooldown
 from .io import (
     CAMS,
     Path,
@@ -126,48 +126,134 @@ def usage_records(cache):
     return records
 
 
+class RequestDeadlineExceeded(httpx.TimeoutException):
+    """A live SSE connection exceeded its attempt budget without completing."""
+
+
+class ResponseStalled(httpx.TimeoutException):
+    """Gateway heartbeats are not evidence of model generation progress."""
+
+
+def _stream_response(client, endpoint, headers, payload, progress, timing, deadline=300, progress_timeout=90):
+    """Only a terminal Responses event is a result; never accept partial JSON."""
+    started = time.monotonic()
+    last_progress = started
+    with client.stream('POST', endpoint, headers=headers, json=payload) as response:
+        timing['headers_seconds'] = round(time.monotonic() - started, 3)
+        timing['request_id'] = response.headers.get('x-request-id', '')
+        if response.status_code != 200 or 'text/event-stream' not in response.headers.get('content-type', ''):
+            response.read()
+            return response
+        event_lines = []
+        next_log = time.monotonic() + 10
+        def parse_event(lines):
+            data = '\n'.join(lines)
+            return json.loads(data) if data and data != '[DONE]' else {}
+        for line in response.iter_lines():
+            if time.monotonic() - started >= deadline:
+                raise RequestDeadlineExceeded('Responses request deadline exceeded')
+            if time.monotonic() - last_progress >= progress_timeout:
+                raise ResponseStalled('Responses stream has no meaningful generation progress')
+            if time.monotonic() >= next_log:
+                progress(('模型正在生成' if 'first_output_seconds' in timing else '模型等待有效输出') + f' · 已用 {time.monotonic()-started:.1f} 秒')
+                next_log = time.monotonic() + 10
+            if line.startswith('data:'):
+                event_lines.append(line[5:].lstrip())
+                continue
+            if line or not event_lines:
+                continue
+            event = parse_event(event_lines)
+            event_lines = []
+            timing.setdefault('first_event_seconds', round(time.monotonic() - started, 3))
+            kind = event.get('type')
+            timing['events'] = timing.get('events', 0) + 1
+            if kind in ('response.output_text.delta', 'response.reasoning_text.delta', 'response.reasoning_summary_text.delta') and event.get('delta'):
+                last_progress = time.monotonic()
+                timing['generated_characters'] = timing.get('generated_characters', 0) + len(event['delta'])
+            if kind == 'response.output_text.delta':
+                timing.setdefault('first_output_seconds', round(time.monotonic() - started, 3))
+            if kind in ('response.completed', 'response.failed', 'response.incomplete'):
+                data = event['response']
+                timing['response_id'] = data.get('id', '')
+                return httpx.Response(response.status_code, headers=response.headers, json=data)
+            if kind == 'error':
+                return httpx.Response(502, json={'error': event})
+        raise httpx.RemoteProtocolError('Responses stream ended without a terminal event')
+
+
+def _trace_request(cfg, record):
+    path = cfg.get('_request_trace')
+    if path:
+        with Path(path).open('a') as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + '\n')
+
+
 def _request_vlm(url, key, payload, cfg, progress):
-    # Hold one local slot throughout retries; a transient gateway failure is
-    # pending work, never an episode result. Progress callbacks can cancel.
-    with request_slot(progress):
-        limit = cfg.get('api_rate_limit_retries')  # None: wait until recovered/cancelled.
-        retries = None if limit is None else max(0, int(limit))
-        retry = 0
+    limit = cfg.get('api_rate_limit_retries')  # None: preserve pending work until recovered/cancelled.
+    retries = None if limit is None else max(0, int(limit))
+    retry = 0
+    endpoint = url + ('/responses' if url.endswith('/v1') else '/v1/responses')
+    headers = {'Authorization': 'Bearer ' + key}
+    # Reuse the connection across retries; backoff never owns a request slot.
+    with httpx.Client(timeout=httpx.Timeout(cfg['api_timeout'], connect=10), trust_env=False) as client:
         while True:
-            progress('正在请求模型' if not retry else f'恢复检查 · 第 {retry} 次自动重试')
+            timing = dict(attempt=retry + 1, created=time.time())
+            queued = time.monotonic()
             raw_delay = None
-            try:
-                with httpx.Client(timeout=httpx.Timeout(cfg['api_timeout'], connect=10), trust_env=False) as client:
-                    headers = {'Authorization': 'Bearer ' + key}
-                    response = client.post(url + ('/responses' if url.endswith('/v1') else '/v1/responses'), headers=headers, json=payload)
+            rate_limited = False
+            code = ''
+            with request_slot(progress, cfg.get('api_concurrency', 1)):
+                timing['queue_seconds'] = round(time.monotonic() - queued, 3)
+                progress('正在请求模型' if not retry else f'恢复检查 · 第 {retry} 次自动重试')
+                started = time.monotonic()
+                try:
+                    if cfg.get('api_stream', False):
+                        response = _stream_response(client, endpoint, headers, payload | {'stream': True}, progress, timing, cfg.get('api_request_deadline', 300), cfg.get('api_progress_timeout', 90))
+                    else:
+                        response = client.post(endpoint, headers=headers, json=payload)
                     if response.status_code == 404 and not url.endswith('/v1'):
-                        response = client.post(url + '/responses', headers=headers, json=payload)
-                try:
-                    error = response.json().get('error', {}) or {}
-                    code = str(error.get('code') or error.get('type') or '') if isinstance(error, dict) else ''
-                except (ValueError, AttributeError):
-                    code = ''
-                if code in ('insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached', 'usage_limit_reached'):
-                    raise APIUnavailable('VLM 额度不足或用量上限已达，质检未完成，请处理额度后重试')
-                transient = response.status_code in (408, 429, 500, 502, 503, 504) or code in (
-                    'gateway_concurrency_limit', 'rate_limit_exceeded', 'server_error', 'overloaded', 'temporarily_unavailable')
-                if not transient:
-                    return response
-                raw_delay = response.headers.get('retry-after')
-                reason = '网关用户并发已满' if code == 'gateway_concurrency_limit' else f'模型接口暂不可用（HTTP {response.status_code}）'
-            except httpx.TransportError:
-                # Do not expose request headers or credentials in job logs.
-                reason = '模型连接中断或超时'
-            delay = min(120, 30 * 2 ** min(retry, 2))
-            if raw_delay:
-                try:
-                    delay = float(raw_delay)
-                except ValueError:
+                        endpoint = url + '/responses'
+                        if cfg.get('api_stream', False):
+                            response = _stream_response(client, endpoint, headers, payload | {'stream': True}, progress, timing, cfg.get('api_request_deadline', 300), cfg.get('api_progress_timeout', 90))
+                        else:
+                            response = client.post(endpoint, headers=headers, json=payload)
                     try:
-                        delay = parsedate_to_datetime(raw_delay).timestamp() - time.time()
-                    except (ValueError, TypeError, OverflowError):
-                        pass
-            delay = max(30, min(delay, 3600)) if math.isfinite(delay) else 60
+                        error = response.json().get('error', {}) or {}
+                        code = str(error.get('code') or error.get('type') or '') if isinstance(error, dict) else ''
+                    except (ValueError, AttributeError):
+                        code = ''
+                    timing.update(http_status=response.status_code, error_code=code,
+                                  request_id=timing.get('request_id') or response.headers.get('x-request-id', ''))
+                    if code in ('insufficient_quota', 'quota_exceeded', 'billing_hard_limit_reached', 'usage_limit_reached'):
+                        raise APIUnavailable('VLM 额度不足或用量上限已达，质检未完成，请处理额度后重试')
+                    rate_limited = response.status_code == 429 or code in ('gateway_concurrency_limit', 'rate_limit_exceeded')
+                    transient = response.status_code in (408, 429, 500, 502, 503, 504) or code in (
+                        'gateway_concurrency_limit', 'rate_limit_exceeded', 'server_error', 'overloaded', 'temporarily_unavailable')
+                    if not transient:
+                        response.extensions['dataqc_transport'] = timing
+                        return response
+                    raw_delay = response.headers.get('retry-after')
+                    reason = '网关用户并发已满' if code == 'gateway_concurrency_limit' else f'模型接口暂不可用（HTTP {response.status_code}）'
+                except httpx.TransportError as exc:
+                    timing['exception'] = type(exc).__name__
+                    reason = f'模型连接异常（{type(exc).__name__}）'
+                finally:
+                    timing['request_seconds'] = round(time.monotonic() - started, 3)
+                    _trace_request(cfg, timing)
+                    progress(f'模型请求结束 · 耗时 {timing["request_seconds"]:.1f} 秒 · '
+                             + (timing.get('exception') or f'HTTP {timing.get("http_status", "unknown")}'))
+                delay = min(120, 30 * 2 ** min(retry, 2)) if rate_limited else min(15, 2 * 2 ** min(retry, 3))
+                if raw_delay:
+                    try:
+                        delay = float(raw_delay)
+                    except ValueError:
+                        try:
+                            delay = parsedate_to_datetime(raw_delay).timestamp() - time.time()
+                        except (ValueError, TypeError, OverflowError):
+                            pass
+                delay = max(1, min(delay, 3600)) if math.isfinite(delay) else 60
+                if rate_limited:
+                    cooldown(delay, concurrency_limited=code == 'gateway_concurrency_limit')
             if retries is not None and retry >= retries:
                 raise RateLimited(delay)
             retry += 1
@@ -229,7 +315,7 @@ def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
     attempts = cfg.get("api_attempts", 2)
     for attempt in range(attempts):
         try:
-            r = _request_vlm(url, key, payload, cfg, progress)
+            r = _request_vlm(url, key, payload, cfg | {'_request_trace': str(Path(cache) / 'request-timing.jsonl')}, progress)
             if r.status_code in (400, 401, 403, 404):
                 raise APIUnavailable(f"VLM HTTP {r.status_code}：模型或接口配置不可用，已停止自动调用")
             if r.status_code != 200:
@@ -252,6 +338,7 @@ def call_vlm(content, schema, cfg, cache, progress=lambda _: None):
                 dict(
                     result=result,
                     usage=data.get("usage"),
+                    transport=r.extensions.get("dataqc_transport", {}),
                     model=model,
                     request_hash=digest,
                     created=time.time(),

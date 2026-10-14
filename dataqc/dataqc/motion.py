@@ -7,8 +7,9 @@ import numpy as np
 
 from .io import NAMES, clean, normalized_task, parse_task, read_json
 
-RULE_VERSION = "zerith_qc_7"
+RULE_VERSION = "zerith_qc_8"
 EPS = 1e-7  # float32 round-trip tolerance, not a physical tolerance
+STATE_GRIPPER_OPEN_LIMIT = 0.08  # Recorded open feedback can remain near 0.076.
 
 
 def result(key, label, status, detail, issues=()):
@@ -224,7 +225,7 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
     issues, channels, bad_frames = [], {}, []
     for hand, col in [("left", 7), ("right", 15)]:
         action = closure_events(a[:, col], 0.1, 0.8)
-        state = closure_events(s[:, col], 0.05, 0.1) if feedback_available else []
+        state = closure_events(s[:, col], STATE_GRIPPER_OPEN_LIMIT, 0.1) if feedback_available else []
         expected = 1 if hand in hands else 0
         channels[hand] = dict(
             action_close_frames=action,
@@ -270,7 +271,7 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
             thresholds=dict(
                 action_open=0.1,
                 action_close=0.8,
-                state_open=0.05,
+                state_open=STATE_GRIPPER_OPEN_LIMIT,
                 state_close=0.1,
                 confirm_frames=2,
                 max_response_frames=15,

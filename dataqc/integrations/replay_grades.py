@@ -2,31 +2,15 @@
 import copy
 import hashlib
 import json
-import re
 from pathlib import Path
 import threading
 from urllib.parse import urlparse, parse_qs
 
 from dataqc import config
 from dataqc.io import hdf5_path, read_json, write_json
+from dataqc.grade_policy import GRADES, capture, automatic_grade, effective_grade
 
-GRADES=('A','B','C','F')
 GRADE_PRIORITY=('manual','qc','collection')
-
-def capture(root):
-    """Collector review.json is distinct from QC's mutable episode metadata."""
-    review=read_json(root/'review.json')
-    meta=read_json(root/'meta/episode_meta.json') or read_json(root/'episode_meta.json')
-    grade=review.get('grade') or meta.get('collection_grade') or meta.get('collection_quality_grade')
-    source='review.json' if review.get('grade') else 'episode_meta.json'
-    if not grade and not any(k in meta for k in ('manual_quality_grade','manual_failure')):
-        grade=meta.get('quality_grade')
-    grade=str(grade or '').upper()
-    identity=str(review.get('episode_uuid') or meta.get('source_episode_id') or meta.get('episode_uuid') or root.name)
-    number=review.get('number')
-    name=f'episode_{int(number):06d}' if str(number).isdigit() and int(number)>0 else str(meta.get('source_episode_name') or '')
-    if not re.fullmatch(r'episode_?\d+',name):name=''
-    return identity,dict(grade=grade if grade in GRADES else '',source=source if grade in GRADES else '',episode_name=name)
 
 
 def integrate_grades(app):
@@ -67,8 +51,7 @@ def integrate_grades(app):
             # Reports produced before this workflow may already contain an old manual edit.
             baseline=report.get('qc_original') or (report if not report.get('manual_review') else {})
             incomplete=report.get('execution')=='incomplete'
-            qc=baseline.get('quality_grade') or ('B' if baseline.get('review_required') else 'F' if row.get('qc_ok') is False else '')
-            if incomplete:qc=''
+            qc=automatic_grade(report,row.get('qc_ok'))
             row['qc_execution']='incomplete' if incomplete else report.get('execution','completed' if report else '')
             token=hashlib.sha256(json.dumps([str(report_path),report_path.stat().st_mtime_ns if report_path and report_path.is_file() else 0,row.get('qc_ok')],sort_keys=True).encode()).hexdigest()
             choice=choices.get(key,{})
@@ -88,7 +71,7 @@ def integrate_grades(app):
                 choice=dict(source='manual',grade=report.get('quality_grade',''),qc_token=token)
                 choices[key]=choice;changed=True
             manual=choice.get('grade') if choice.get('source')=='manual' else ''
-            effective=manual or qc or original['grade']
+            effective=effective_grade(original['grade'],qc,manual)
             revision=hashlib.sha256(json.dumps([key,token,original,choice],sort_keys=True).encode()).hexdigest()
             row.update(collection_grade=original['grade'],collection_grade_source=original['source'],
                        qc_grade=qc,qc_reason=baseline.get('reason',''),qc_grade_label='未完成' if incomplete else qc or ('历史结论未保留' if report.get('manual_review') and not baseline else '待复核' if baseline.get('review_required') else '待质检'),quality_grade=effective,

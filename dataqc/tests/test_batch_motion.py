@@ -206,3 +206,25 @@ def test_batch_limits_validated_by_settings(cfg):
     assert api.Settings(**fields).motion_batch_size==10
     for override in [dict(motion_batch_size=0),dict(motion_batch_size=21),dict(motion_batch_concurrency=0),dict(motion_batch_concurrency=5)]:
         with pytest.raises(ValidationError):api.Settings(**fields,**override)
+
+
+def test_factored_payload_is_lossless_including_differing_nested_evidence():
+    payload = dict(episodes=[dict(episode_id=str(i), evidence={
+        'check:arm': dict(label='连续性',status='pass' if i == 0 else 'warn',
+                         detail=dict(limit=.8, max_step=.125 + i, note='共用说明', issues=[] if i == 0 else ['跳变'])),
+        'semantics': dict(independent_gripper_feedback=True),
+        'frame:0': dict(state=[.1234567890123456 + i],action=[.5]),
+    }) for i in range(3)])
+    old = copy.deepcopy(payload)
+    wire = batch_motion.factor_payload(payload)
+    def merge(default, delta):
+        result = copy.deepcopy(default)
+        for key, value in delta.items():
+            result[key] = merge(result.get(key, {}), value) if isinstance(value, dict) else value
+        return result
+    restored = copy.deepcopy(wire)
+    defaults = restored.pop('evidence_defaults')
+    for episode in restored['episodes']:
+        episode['evidence'] = {key: merge(defaults.get(key, {}), value) for key, value in episode['evidence'].items()}
+    assert restored == old and payload == old
+    assert len(json.dumps(wire)) < len(json.dumps(old))

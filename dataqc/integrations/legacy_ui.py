@@ -166,3 +166,6 @@ def integrate(app):
     integrate_grades(app)
     from .sku_visualization import integrate_sku
     integrate_sku(app)
+
+    from .collection_dashboard import integrate_dashboard
+    integrate_dashboard(app)

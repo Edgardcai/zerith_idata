@@ -36,9 +36,15 @@ async def lifespan(app):
     legacy=load_legacy();server=ThreadingHTTPServer(('127.0.0.1',0),legacy.Handler)
     app.state.legacy=legacy;app.state.legacy_server=server
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+    from dataqc.collection_dashboard_api import inventory
+    from dataqc.dashboard_sync import RemoteInventory
+    dashboard=inventory()
+    if isinstance(dashboard,RemoteInventory):dashboard.start()
     async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{server.server_port}',timeout=None,trust_env=False) as client:
         app.state.client=client
-        yield
+        try:yield
+        finally:
+            if isinstance(dashboard,RemoteInventory):dashboard.stop()
     server.shutdown();server.server_close()
     for proc in legacy.REPLAY_PROCESSES.values():
         if proc.poll() is None:proc.terminate()
@@ -47,6 +53,8 @@ async def lifespan(app):
 from dataqc.api import app as automatic_app
 app=FastAPI(lifespan=lifespan)
 app.mount('/auto',automatic_app)
+from dataqc.collection_dashboard_api import router as dashboard_router
+app.include_router(dashboard_router)
 
 @app.get('/healthz')
 def health():
