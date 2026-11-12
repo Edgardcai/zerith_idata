@@ -1,64 +1,30 @@
 'use strict';
 const $=id=>document.getElementById(id);
 const PRODUCTS = Object.freeze({
-  "Dr Pepper Soda": "胡椒博士汽水",
-  "Dr Pepper Zero Sugar": "胡椒博士零糖汽水",
-  "Liquid Death Peach": "Liquid Death 蜜桃味",
-  "Liquid Death Sweet Tea": "Liquid Death 甜茶",
-  "Liquid Death Blueberry": "Liquid Death 蓝莓味",
-  "Bubbly Raspberry": "Bubly 覆盆子气泡水",
-  "Celsius Orange": "Celsius 橙子味气泡水",
-  "Diet Coke": "健怡可乐",
-  "Izze Orange": "Izze 橙子味",
-  "Izze Blackberry": "Izze 黑莓味",
-  "Izze Apple": "Izze 苹果味",
-  "Izze Grapefruit": "Izze 西柚味",
-  "Red Bull": "红牛",
-  "Spindrift Lemon": "Spindrift 柠檬气泡水",
-  "Minute Maid Lemonade": "美汁源柠檬水",
-  "Starry Soda": "Starry 汽水",
-  "Coca-Cola Cherry": "可乐樱桃味",
-  "Strawberry Ginger Ale": "姜汁草莓汽水",
-  "Monster Black": "原味魔爪",
-  "Monster White": "零糖魔爪",
-  "Monster Violet": "魔爪紫罗兰味",
-  "Monster Red": "魔爪热带水果味",
-  "Monster Blue": "魔爪芒果味",
-  "Monster Green": "魔爪苹果味",
-  "Vita Extra Coconut": "Vita加浓椰子水",
-  "Premier Protein": "蛋白奶昔",
-  "Tropicana Apple": "纯果乐苹果味",
-  "Tropicana Pineapple": "纯果乐菠萝味",
-  "Lux Soap": "力士香皂",
-  "Safeguard Soap": "舒肤佳香皂",
-  "Dettol Soap": "滴露香皂",
-  "Trash Bags": "垃圾袋",
-  "MG Pen Set": "晨光套装笔",
-  "Danisa Cookies": "皇冠丹麦曲奇饼干",
-  "Pocky Chocolate": "Pocky巧克力味",
-  "RITZ Crackers": "RITZ 饼干",
-  "Fruit Roll-ups": "果汁卷卷糖",
-  "LOT100 Mango": "一百份芒果果汁软糖",
-  "LOT100 Mixed Fruit": "一百份什果果汁软糖",
-  "LOT100 Grape": "一百份黑加仑果汁软糖",
-  "HandFan": "手持风扇",
-  "KeyCleanTool": "键盘清洁工具",
-  "Lays Cucumber": "乐事薯片黄瓜味",
-  "ClipLight": "夹子阅读灯",
-  "MM Red": "M&M牛奶巧克力豆",
-  "MM Yellow": "M&M花生牛奶巧克力豆",
-  "Lays Barbecue": "乐事薯片烤肉味",
-  "Lays Original": "乐事薯片原味",
   "Monster Silver": "魔爪银罐",
+  "Monster Blue": "魔爪蓝罐",
   "Monster Pink": "魔爪粉罐",
+  "Monster Black": "魔爪黑罐",
+  "Monster Purple": "魔爪紫罐",
+  "Monster Green": "魔爪绿罐",
   "Celsius": "Celsius",
   "Liquid Death Black": "Liquid Death 黑罐",
+  "Tropicana Apple": "纯果乐苹果汁",
+  "Tropicana Pineapple": "纯果乐菠萝汁",
+  "Dr. Pepper": "Dr. Pepper",
+  "Dr. Pepper Zero Sugar": "Dr. Pepper 无糖",
+  "Starry": "Starry",
   "Spindrift": "Spindrift",
   "Bubly": "Bubly",
+  "Canada Dry Strawberry": "Canada Dry 草莓味",
+  "Izze Orange": "Izze 橙色",
   "Izze Purple": "Izze 紫色",
   "Izze Green": "Izze 绿色",
   "Izze Red": "Izze 红色",
-  "Coke": "白色罐装可乐",
+  "Coke": "可口可乐",
+  "Coke Cherry": "可口可乐樱桃味",
+  "Premier Protein": "Premier Protein",
+  "Vita Coco Extra Coconut": "Vita Coco 浓椰子味",
   "Pepsi": "百事可乐",
   "Yili Peach Yogurt": "伊利桃味酸奶",
   "Coca-Cola": "可口可乐",
@@ -92,16 +58,29 @@ const PRODUCTS = Object.freeze({
   "Arizona Raspberry Tea": "亚利桑那覆盆子茶",
   "Mirinda Peach": "美年达桃味汽水",
   "Ganten": "百岁山",
+  "Lays Barbecue": "乐事烧烤味薯片",
+  "Lays Original": "乐事原味薯片",
+  "Lays Cucumber": "乐事黄瓜味薯片",
   "Panda Toy": "熊猫玩具",
   "Yineng Juice": "亿能果汁",
   "Cestbon": "怡宝",
   "Minute Maid Peach": "美汁源桃味饮品",
   "Itoen Oolong": "伊藤园乌龙茶",
+  "LOT100 Grape": "一百份葡萄味软糖",
+  "LOT100 Mixed Fruit": "一百份混合水果味软糖",
+  "LOT100 Mango": "一百份芒果味软糖",
+  "Fruit Roll-ups": "水果卷软糖",
+  "Pocky Chocolate": "百奇巧克力味饼干棒",
+  "Danisa Cookies": "皇冠丹麦曲奇",
+  "RITZ Crackers": "乐之饼干",
   "FoldCup": "折叠杯",
   "RoseSachet": "玫瑰香挂",
   "LuckyTowel": "大吉毛巾",
   "LeafSpoon": "树叶勺具",
+  "HandFan": "手持风扇",
   "PandaTowel": "熊猫毛巾",
+  "KeyCleanTool": "键盘清洁工具",
+  "ClipLight": "夹子阅读灯",
   "DeskMetalStand": "金属桌面支架",
   "WeatherClock": "天气时钟",
   "Sprite Cherry Lime": "雪碧樱桃青柠味",
@@ -113,19 +92,11 @@ const PRODUCTS = Object.freeze({
   "ENONE Sparkling Water": "依能苏打水",
   "Mirinda Orange": "橙子味美年达",
   "Mirinda Apple": "苹果味美年达",
+  "MM Red": "M&M牛奶巧克力豆",
+  "MM Yellow": "M&M花生牛奶巧克力豆",
   "Warheads Mixed": "子弹头牌酸果味糖混合口味",
   "Warheads Blue Raspberry": "子弹头牌酸果味糖蓝树莓味",
   "Warheads Watermelon": "子弹头牌酸果味糖西瓜味"
-});
-
-const PRODUCT_ALIASES = Object.freeze({
- "Dr. Pepper": "Dr Pepper Soda",
- "Dr. Pepper Zero Sugar": "Dr Pepper Zero Sugar",
- "Starry": "Starry Soda",
- "Coke Cherry": "Coca-Cola Cherry",
- "Vita Coco Extra Coconut": "Vita Extra Coconut",
- "Monster Purple": "Monster Violet",
- "Canada Dry Strawberry": "Strawberry Ginger Ale"
 });
 
 let appliedScene=null;
@@ -187,20 +158,14 @@ function updateProductPrompt(){
 function restoreProductSelectors(){
  const left=$('left').value,right=$('right').value;
  $('handMode').value=left&&!right?'left':right&&!left?'right':'both';
- const editable=['idle','closed','rejected'].includes(snapshot?.collection?.phase||'idle');
- let renamed=false;
  for(const side of ['left','right']){
-  let value=$(side).value;
-  const select=$(side+'Product');
-  if(editable&&Object.hasOwn(PRODUCT_ALIASES,value)){
-   value=PRODUCT_ALIASES[value];$(side).value=value;renamed=true;
-  }
+  const value=$(side).value,select=$(side+'Product');
   select.querySelectorAll('[data-legacy]').forEach(option=>option.remove());
   if(value&&!Object.hasOwn(PRODUCTS,value)){const option=new Option(value,value);option.dataset.legacy='1';select.add(option);}
   if(value)select.value=value;
   productPickers[side].sync();
  }
- if(renamed)updateProductPrompt();else renderProductMode();
+ renderProductMode();
 }
 function scenePending(){return !appliedScene||$('taskId').value!==String(appliedScene.task_id)||$('sceneId').value!==String(appliedScene.scene_id);}
 function renderDirectory(){const c=snapshot?.collection;const editing=['idle','closed','rejected'].includes(c?.phase||'idle');const path=editing?appliedScene?.dataset:c?.session?.dataset;$('directoryLabel').textContent='目录';$('directory').textContent=path||'请先应用场景';$('copyPath').disabled=!path;$('sceneHint').textContent=!editing?'采集中':scenePending()?'待应用':'已应用';}
