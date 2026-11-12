@@ -1,37 +1,11 @@
 #!/usr/bin/env python3
 """Install a self-tested bundle only while collection and initialization are idle."""
-import argparse,fcntl,json,os,tempfile,time,urllib.request
+import argparse,fcntl,json,os,tempfile,time
 from pathlib import Path
 from preflight import ROOT,check,snapshot,teleop_pids
 from switch_trial import digest,tmux,trial_pids,wait_started
 
 AUTOSTART_CONFIG=Path('/etc/zerith-collection-autostart.json')
-
-def idle_boot_check(state,policy,init,now):
-    """A program-only restart of a proven inactive controller; no robot reset."""
-    errors=[]
-    checks={v['key']:v for v in state['device']['checks']}
-    for key in ('service','communication','mode'):
-        if checks.get(key,{}).get('ok') is not True:errors.append('检查未通过：'+key)
-    collection=state['collection']
-    if collection.get('phase') not in ('idle','closed') or collection.get('current'):
-        errors.append('请先结束采集会话')
-    if init.get('fresh') is not True or init.get('system_init') not in (0,4,5):
-        errors.append('机器人未确认处于未初始化、反初始化完成或错误状态')
-    operator=policy.get('operator',{})
-    if (not 0<=now-policy.get('timestamp',0)<2 or policy.get('active') is not False
-            or policy.get('initializing') is not False or operator.get('initialized') is not False
-            or operator.get('calibrated') is not False or operator.get('state')!='STOP_TELEOP'
-            or operator.get('motor_control_active') is not False or operator.get('control_mode')!=0):
-        errors.append('控制器未确认停止，禁止仅启动等待初始化模式')
-    return errors
-
-def deployment_check(idle_boot):
-    state=snapshot()
-    if not idle_boot:return check(state)
-    with urllib.request.urlopen('http://127.0.0.1:25120/system_init',timeout=3) as r:init=json.load(r)
-    policy=json.loads((ROOT/'runtime/status.json').read_text())
-    return idle_boot_check(state,policy,init,time.time())
 
 def atomic_json(path,value):
     mode=path.stat().st_mode & 0o777 if path.exists() else 0o644
@@ -47,12 +21,11 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--candidate',type=Path,default=ROOT/'runtime/teleop_zero_lock_candidate')
     parser.add_argument('--check',action='store_true',help='Only inspect; do not stop or replace anything')
-    parser.add_argument('--idle-boot',action='store_true',help='Restart a proven inactive controller into its boot wait; initialization still requires normal VR/motor checks')
     args=parser.parse_args()
     if os.geteuid()!=0:raise RuntimeError('Run as original teleop owner')
     with (ROOT/'runtime/switch.lock').open('a') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        errors=deployment_check(args.idle_boot)
+        errors=check(snapshot())
         if errors:raise RuntimeError('; '.join(errors))
         candidate=args.candidate.resolve()
         validation=json.loads((candidate.parent/'validated.json').read_text())
@@ -77,9 +50,9 @@ def main():
         panes=tmux('list-panes','-t','robot_startup:teleop','-F','#{pane_id}').splitlines()
         if len(panes)!=1:raise RuntimeError('Unexpected teleop pane layout')
         print(json.dumps({'checked':True,'old_sha256':old_digest,'new_sha256':manifest['sha256'],
-                          'source_commit':manifest.get('source_commit'),'startup_mode':'boot' if args.idle_boot else 'live'}),flush=True)
+                          'source_commit':manifest.get('source_commit')}),flush=True)
         if args.check:return
-        errors=deployment_check(args.idle_boot)
+        errors=check(snapshot())
         if errors:raise RuntimeError('; '.join(errors))
         tmux('send-keys','-t',panes[0],'C-c')
         deadline=time.monotonic()+10
@@ -96,8 +69,7 @@ def main():
             boot_config['teleop']['sha256']=manifest['sha256']
             atomic_json(AUTOSTART_CONFIG,boot_config)
         started=time.time()
-        mode='--boot' if args.idle_boot else '--live'
-        tmux('respawn-pane','-k','-t',panes[0],'cd /home/robot/teleop_zero_lock && ./runtime/teleop_zero_lock '+mode+'; exec sh')
+        tmux('respawn-pane','-k','-t',panes[0],'cd /home/robot/teleop_zero_lock && ./runtime/teleop_zero_lock --live; exec sh')
         pid=wait_started(started)
         print(json.dumps({'upgraded':True,'pid':pid,'sha256':manifest['sha256'],
                           'operator_initialization_required':True}),flush=True)
