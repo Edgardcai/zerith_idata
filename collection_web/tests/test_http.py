@@ -33,6 +33,18 @@ class HttpTests(unittest.TestCase):
         self.assertEqual(self.request('/')[0],200);self.assertEqual(self.request('/static/app.js')[0],200)
         self.assertEqual(json.loads(self.request('/api/bootstrap')[1])['csrf'],self.app.csrf)
         status=json.loads(self.request('/api/status')[1]);self.assertEqual(status['collection']['phase'],'idle');self.assertFalse(status['device']['ready'])
+
+    def test_prompt_mode_bootstrap_and_readonly_directory_validation(self):
+        boot=json.loads(self.request('/api/bootstrap')[1]);self.assertEqual(boot['default_prompt_mode'],'tabletop')
+        self.assertTrue(boot['default_prompt'].startswith('Place the item held in the left hand'))
+        for mode,total in [('shelf_grasp',2),('tabletop',4),('shelf_place',2)]:
+            code,raw=self.request('/api/task/directory',{'prompt_mode':mode,'hand_mode':'both','left':'Tea','right':'Coffee'})
+            self.assertEqual(code,200);report=json.loads(raw)
+            self.assertEqual(report['config']['subtask_num'],total)
+            self.assertEqual(report['targets']['prompt_mode'],mode)
+            self.assertEqual(len(report['targets']['stage_prompts']),total)
+            self.assertFalse(Path(report['source_dataset']).exists())
+        self.assertEqual(self.request('/api/task/directory',{'prompt_mode':'tabletop','hand_mode':'both','left':'Tea','right':'Coffee','subtask_num':2})[0],400)
     def test_directory_groups_include_multiple_sessions_and_filter_details(self):
         first=self.root/'batch_one';second=self.root/'batch_two'
         first.mkdir();second.mkdir()

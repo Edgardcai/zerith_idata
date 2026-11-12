@@ -19,7 +19,7 @@ from cameras import Cameras, NAMES
 from collector import Collector
 from device_monitor import DeviceMonitor
 from episodes import EpisodeStore
-from tasks import DEFAULT_PROMPT, parse_targets, default_task_id
+from tasks import DEFAULT_COMPOSED_PROMPT, DEFAULT_PROMPT_MODE, parse_targets, default_task_id
 from teleop_status import TeleopStatus
 
 ROOT=Path(__file__).resolve().parent
@@ -74,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             path=urlparse(self.path).path
-            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_PROMPT,'depth_recording_supported':True,'default_task_id':default_task_id(),'selected_scene':self.app.collector.selected_scene})
+            if path=='/api/bootstrap':return self.json({'csrf':self.app.csrf,'default_prompt':DEFAULT_COMPOSED_PROMPT,'default_prompt_mode':DEFAULT_PROMPT_MODE,'depth_recording_supported':True,'default_task_id':default_task_id(),'selected_scene':self.app.collector.selected_scene})
             if path=='/api/status':return self.json(self.app.status(compact=parse_qs(urlparse(self.path).query).get('compact')==['1']))
             if path=='/api/episode-groups':return self.json({'groups':self.app.store.groups()})
             if path=='/api/episodes':

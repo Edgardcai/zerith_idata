@@ -92,6 +92,42 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual(status['current']['progress']['completed_steps'],1)
         self.assertEqual(status['current']['state'],'recording')
         self.assertEqual(status['phase'],'waiting')
+
+    def test_all_prompt_modes_reach_rpc_with_atomic_stage_counts(self):
+        for mode in ('shelf_grasp','tabletop','shelf_place'):
+            for hand in ('left','right','both'):
+                with self.subTest(mode=mode,hand=hand):
+                    session=self.collector.start({'prompt_mode':mode,'hand_mode':hand,'left':'Tea','right':'Coffee'})['session']
+                    eventually(lambda:self.collector.accepted)
+                    actual=json.loads((Path(session['source_dataset'])/'task_meta.json').read_text())
+                    expected=(4 if hand=='both' else 2) if mode=='tabletop' else (2 if hand=='both' else 1)
+                    self.assertEqual(actual['subtask_num'],expected)
+                    self.assertEqual(len(session['targets']['stage_prompts']),expected)
+                    self.assertEqual(actual['step_list'],[])
+                    self.assertNotIn('prompt_mode',actual)
+                    self.collector.end()
+
+    def test_tabletop_four_stage_progress_and_archived_prompt_metadata(self):
+        import h5py
+        session=self.collector.start({'prompt_mode':'tabletop','hand_mode':'both','left':'Tea','right':'Coffee'})['session']
+        eventually(lambda:self.collector.accepted)
+        path=episode(Path(session['source_dataset']),finished=False)
+        (path/'collection.log').write_text('采集会话启动\n')
+        with h5py.File(path/'episode.hdf5','a') as f:f.attrs.update(total_subtasks=4,completed_subtasks=0)
+        eventually(lambda:self.collector.status()['current'] is not None)
+        uid=self.collector.status()['current']['uuid']
+        for i in range(1,4):
+            with self.collector.lock:self.collector.responses.append({'at':time.time(),'value':{'event_type':'EPISODE_PROGRESS','uid':uid,'completed_subtask_index':i}})
+            self.assertEqual(self.collector.status()['current']['progress']['completed_steps'],i)
+        with h5py.File(path/'episode.hdf5','a') as f:f.attrs['completed_subtasks']=4
+        atomic_json(path/'episode_meta.json',{'episode_id':uid,'step_index':[{'start_frame_id':2*i,'end_frame_id':2*i+1} for i in range(4)]})
+        (path/'collection.log').write_text('子任务 4 保存完毕 | 分界帧: 8\n采集流结束\n')
+        eventually(lambda:self.collector.status()['counts']['completed']==1)
+        row=self.store.list()[0];self.assertEqual(row['detail']['completed_steps'],4)
+        metadata=json.loads((Path(row['path'])/'collection_task.json').read_text())
+        self.assertEqual(metadata['targets']['prompt_mode'],'tabletop')
+        self.assertEqual(metadata['targets']['stage_prompts'],session['targets']['stage_prompts'])
+        self.assertEqual(metadata['config']['subtask_num'],4)
     def test_duplicate_start_and_active_end_rejected(self):
         self.start()
         with self.assertRaises(ValueError):self.collector.start({'task_name':'other'})
