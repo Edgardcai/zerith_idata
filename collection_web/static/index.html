@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css?v=20260916.2"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css?v=20260929.1"></head>
 <body>
 <header><a class="brand" href="/"><span class="brand-icon">Z</span>采集工作台</a><div class="header-status"><span id="connection" class="pill">连接中</span><span id="battery" class="battery">电量 —</span></div><div class="header-actions"><button id="check" class="secondary">设备检测</button><button id="end" class="secondary" disabled>结束会话</button><button id="start" class="primary">启动采集</button></div></header>
 <main>
@@ -13,8 +13,9 @@
 <div id="checks" class="checks" aria-label="设备检查"></div>
 <div class="workspace">
 <section class="card task-card"><div class="card-title"><h2>采集任务</h2><span id="sessionLabel" class="muted"></span></div>
-<form id="taskForm"><label>提示词<textarea id="prompt" rows="2" maxlength="500" spellcheck="false"></textarea></label>
-<div class="targets"><label>左手目标<input id="left" placeholder="自动识别"></label><label>右手目标<input id="right" placeholder="自动识别"></label></div>
+<form id="taskForm"><div class="product-controls"><label>采集模式<select id="handMode"><option value="both">双手</option><option value="left">左手</option><option value="right">右手</option></select></label><div id="leftProductLabel" class="product-field"><label for="leftProductSearch">左手商品</label><select id="leftProduct" hidden></select></div><div id="rightProductLabel" class="product-field"><label for="rightProductSearch">右手商品</label><select id="rightProduct" hidden></select></div></div>
+<label>提示词<textarea id="prompt" rows="2" maxlength="500" spellcheck="false" readonly></textarea></label>
+<input id="left" type="hidden"><input id="right" type="hidden">
 <section class="stage-config" aria-label="分阶段采集"><div class="stage-config-heading"><label>阶段数<input id="subtasks" type="number" min="1" max="20" step="1" value="2" aria-describedby="stageHint"></label><label class="history-toggle"><input id="recordDepth" type="checkbox" disabled>深度图</label><details id="taskOptions"><summary>更多参数</summary><div class="parameters"><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label><label>高度标签 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="可选" title="记录于每条数据"></label></div></details></div><ol id="stagePlan" class="stage-plan"></ol><p id="stageHint" class="stage-hint" role="status">长按 Y 开始 · 短按 Y 切换阶段 / 保存</p></section>
 </form></section>
 <aside class="device-column">
@@ -31,5 +32,6 @@
 <div class="review-toolbar"><button id="reviewPlay" class="primary" disabled>三路播放</button><button id="reviewPause" class="secondary">暂停</button><input id="reviewSeek" type="range" min="0" max="0" step="0.01" value="0" aria-label="三路视频进度" disabled><span id="reviewTime">00:00 / 00:00</span><label>倍速 <select id="reviewSpeed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label><button id="reviewRetry" class="secondary">重新加载</button></div>
 <p id="reviewStatus" class="review-status" role="status" aria-live="polite"></p><div id="reviewGrid" class="review-grid"></div></dialog>
 <script src="/static/review.js" defer></script>
-<script src="/static/app.js?v=20260916.2" defer></script>
+<script src="/static/product-picker.js?v=20260929.2" defer></script>
+<script src="/static/app.js?v=20261030.1" defer></script>
 </body></html>

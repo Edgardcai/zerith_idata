@@ -5,6 +5,7 @@ in control. No SDK publisher or independent command thread is created.
 """
 import functools
 import json
+import logging
 import math
 import os
 import threading
@@ -336,14 +337,47 @@ def after_joystick(self, policy, State):
             self.ctrl.send_head_cmd(0.0, 0.0)  # bus applies the bounded initial ramp
     policy.operator = {'initialized': bool(self.is_initialized),
                        'calibrated': bool(getattr(self, 'is_calibrate', False)),
-                       'state': getattr(self.state, 'name', str(self.state))}
+                       'state': getattr(self.state, 'name', str(self.state)),
+                       'control_mode': getattr(self.ctrl, 'control_mode', None),
+                       'motor_control_active': bool(
+                           getattr(getattr(self, 'motor_ctrl', None), '_active_event', None)
+                           and self.motor_ctrl._active_event.is_set())}
     policy.write_status()
+
+
+def guard_calibration_phase(run_phase):
+    """Release the factory wait when real mode/init feedback leaves VR control."""
+    @functools.wraps(run_phase)
+    def call(self, update_joystick_callback, is_initialized_callback):
+        def calibration_allowed():
+            mode = getattr(self.ctrl, 'control_mode', None)
+            initialized = getattr(self.ctrl, 'init_state', None)
+            if mode != 0 or initialized != 2:
+                logging.getLogger('teleop.calibration').info(
+                    '退出 VR 标定等待：实际控制模式=%s，初始化状态=%s', mode, initialized)
+                return False
+            return bool(is_initialized_callback())
+
+        def update_if_allowed():
+            # Do not consume a calibration button after control has changed.
+            if calibration_allowed():
+                return update_joystick_callback()
+            return None
+
+        if not calibration_allowed():
+            return None
+        return run_phase(
+            self, update_joystick_callback=update_if_allowed,
+            is_initialized_callback=calibration_allowed)
+    return call
+
 
 def install(namespace, status_path=None, initialization_check=None, config_loader=None):
     """Patch known class methods before constructing any live vendor controller."""
     from controllers.ZerithCtrl import ZerithCtrl
     from controllers.HeadCtrl import HeadCtrl
     from processors.ZerithWBC import ZerithWBC
+    from processors.CalibrationManager import CalibrationManager
     Teleop = namespace['TeleopController']
     State = namespace['TeleopState']
     policy = ZeroPolicy(status_path=status_path)
@@ -362,6 +396,8 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
     def wrap(cls, name, builder):
         original[(cls.__name__, name)] = getattr(cls, name)
         setattr(cls, name, functools.wraps(getattr(cls, name))(builder(getattr(cls, name))))
+
+    wrap(CalibrationManager, 'run_calibration_phase', guard_calibration_phase)
 
     def ctrl_constructor(old):
         def init(self, *args, **kwargs):

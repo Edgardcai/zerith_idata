@@ -45,6 +45,8 @@ def timing_quality(f, t, dt, rate):
     result={'status':'failed' if reasons else 'legacy_unverified','reasons':reasons,
             'duplicate_count':duplicates,'backward_count':backwards,'gap_count':gaps}
     if 'timing' not in f:return result
+    if int(f['timing'].attrs.get('version', 0)) == 2:
+        return inference_timing_quality(f, n, result)
     try:
         g=f['timing']
         if int(g.attrs['version'])!=1:raise ValueError('不支持的时序格式版本')
@@ -91,6 +93,45 @@ def timing_quality(f, t, dt, rate):
     result['status']='failed' if reasons else 'passed'
     return result
 
+
+
+def inference_timing_quality(f, n, result):
+    """8080 SDK capture: host receipt times, explicitly no exposure-clock claim."""
+    reasons = result['reasons']
+    try:
+        g = f['timing']
+        def column(path):
+            a = np.asarray(g[path][:])
+            if a.shape != (n,) or not np.isfinite(a).all():
+                raise ValueError('时序字段不完整：' + path)
+            return a
+        ref = column('reference_receive_ns')
+        if np.any(np.diff(ref) <= 0): reasons.append('主机参考时间未递增')
+        state_age = (ref - column('state_receive_ns')) / 1e6
+        if np.any(state_age < 0) or np.any(state_age > 100): reasons.append('状态时间差超出 0–100ms')
+        if np.any(column('command_receive_ns') > ref): reasons.append('存在未来动作')
+        column('base_feedback_measured')
+        repeats = {}; max_age = 0.
+        for camera in ('cam_high', 'cam_left_wrist', 'cam_right_wrist'):
+            prefix = 'cameras/rs/' + camera + '/color/'
+            received = column(prefix + 'receive_ns')
+            seq = column(prefix + 'frame_number')
+            column(prefix + 'postdecode_monotonic_ns')
+            age = (ref - received) / 1e6
+            max_age = max(max_age, float(age.max()))
+            if np.any(age < 0) or np.any(age > 100): reasons.append(camera + ' 图像时间差超出 0–100ms')
+            if np.any(np.diff(seq) < 0): reasons.append(camera + ' 相机流重置')
+            repeats[camera] = int(np.count_nonzero(np.diff(seq) == 0))
+        stats = json.loads(g.attrs.get('sample_stats', '{}'))
+        if stats.get('missing_after_start', 0): reasons.append(f"{stats['missing_after_start']} 个录制样本未能对齐")
+        if not bool(f.attrs.get('complete', False)): reasons.append('录制未完整结束')
+        result.update(alignment='host_receive_causal_hold', hardware_synchronized=False,
+                      max_state_age_ms=float(state_age.max()), max_camera_age_ms=max_age,
+                      repeated_camera_frames=repeats)
+    except (KeyError, ValueError, TypeError, OverflowError) as exc:
+        reasons.append('时序元数据校验失败：' + str(exc))
+    result['status'] = 'failed' if reasons else 'passed'
+    return result
 
 def validate_finished(directory):
     directory=Path(directory)

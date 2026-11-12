@@ -186,3 +186,72 @@ ctrl.deinit();policy.config={'lift_enabled':False,'lift_height_m':.6}
 fresh();assert ctrl.init();assert ctrl.vr_home_pose[0]==.4
 ctrl.deinit();assert not blocked
 print('FIXED_LIFT_INIT_INTERPOLATION_OUTPUT_IK_RECALIBRATION_DISABLE_PASS',flush=True)
+
+# Exercise the exact factory calibration wait, with no VR/device constructor.
+# A stale operator initialized flag used to trap its caller after a mode change.
+from processors.CalibrationManager import CalibrationManager
+factory_phase=originals[('CalibrationManager','run_calibration_phase')]
+calibration_mode_checks=0
+calibration_bus_count=len(bus.messages)
+def calibration_fixture():
+    phase=object.__new__(CalibrationManager)
+    phase.ctrl=SimpleNamespace(control_mode=0,init_state=2,
+        waist_pos=np.zeros(3),arm_pos=np.zeros(14),head_pos=np.zeros(2))
+    phase._is_current_pose_near_home=lambda:(True,0.0)
+    phase.run_calibration=lambda **kw:{'offline':True}
+    phase.recalibration_required_samples=1
+    phase.recalibration_transition_duration=.1
+    phase.safe_ctrl=SimpleNamespace(reset_all=noop,set_calibration_pose=noop,
+        set_paused_head_angles=noop)
+    phase.processor=SimpleNamespace(get_vr_command=lambda **kw:{})
+    return phase
+
+class OriginalWaitBlocked(Exception): pass
+phase=calibration_fixture();polls=[0]
+def old_mode_switch():
+    polls[0]+=1;phase.ctrl.control_mode=3
+    if polls[0]>=3:raise OriginalWaitBlocked()
+try:
+    factory_phase(phase,old_mode_switch,lambda:True)
+except OriginalWaitBlocked:
+    assert polls[0]==3
+else:
+    raise AssertionError('Factory regression reproduction unexpectedly exited')
+calibration_mode_checks+=1
+
+for field,values in [('control_mode',(1,2,3)),('init_state',(0,1,3,4))]:
+    for value in values:
+        phase=calibration_fixture();polls=[0]
+        def change_feedback():
+            polls[0]+=1;setattr(phase.ctrl,field,value)
+            if polls[0]>1:raise AssertionError('Calibration did not release its caller')
+            return 'calibrate'  # The switch wins over a simultaneous A press.
+        assert phase.run_calibration_phase(change_feedback,lambda:True) is None
+        assert polls[0]==1
+        calibration_mode_checks+=1
+
+for mode in (None,3):
+    phase=calibration_fixture();phase.ctrl.control_mode=mode
+    def forbidden_button_poll():raise AssertionError('Consumed a button outside VR mode')
+    assert phase.run_calibration_phase(forbidden_button_poll,lambda:True) is None
+    calibration_mode_checks+=1
+
+phase=calibration_fixture();initialized=[True]
+def cancel_initialization():initialized[0]=False
+assert phase.run_calibration_phase(cancel_initialization,lambda:initialized[0]) is None
+calibration_mode_checks+=1
+
+# VR mode still waits for its explicit calibration event and keeps the factory
+# completion contract. These callbacks perform no motion or actual calibration.
+phase=calibration_fixture();polls=[0]
+def normal_calibration_button():
+    polls[0]+=1
+    return 'calibrate' if polls[0]==3 else None
+calibration_result=phase.run_calibration_phase(normal_calibration_button,lambda:True)
+assert polls[0]==3 and calibration_result['imu_state']=={'offline':True}
+assert calibration_result['is_transitioning'] is True
+assert len(calibration_result['paused_pose'])==19
+calibration_mode_checks+=1
+assert len(bus.messages)==calibration_bus_count and not blocked
+print('REAL_FACTORY_CALIBRATION_MODE_EXIT_PASS',calibration_mode_checks,
+      'NO_DEVICE_COMMANDS',flush=True)

@@ -31,6 +31,13 @@
 - `runtime/status.json` 约 5 Hz 更新，含 `operator`、`calibration_seq`、`warnings`、实际角度、升降柱目标/实测高度、当前应用配置。`ready` 表示位置稳定，不再控制角度超差暂停；故障保护独立。
 - 状态接口由网站读文件接入，不导入遥操运行依赖。平常超过 3 秒未更新显示状态中断，原厂阻塞初始化期间最长允许 15 秒。
 
+### VR 与 9999 切换
+
+`teleop` 进程同时承载模式 3 的重力补偿电机执行循环，使用 9999 时也需要保留它。
+2026-10-15 修复了原厂标定等待只检查内部 `is_initialized` 标志的问题：等待前和每次轮询均检查实际 `control_mode == 0`、`init_state == 2`，模式切走或反初始化后立即退出，返回外层模式分派循环。切换期间的 A 键事件不会继续触发 VR 标定。
+
+从 VR 转到 9999 时，先结束采集并完成反初始化，再在 9999 选择重力补偿模式、初始化，最后发送新目标。`runtime/status.json` 的 `operator.control_mode` 和 `operator.motor_control_active` 可用于核对实际模式与电机执行循环是否一致。修复包包含对原厂函数的 12 项离线回归检查，全部使用内存回调，不连接设备。
+
 ## 构建与测试
 
 需要本机厂商二进制副本 `vendor/teleop.original`，SHA256 必须为：
@@ -80,4 +87,4 @@ python3 tools/monitor_trial.py --seconds 600
 sudo python3 tools/switch_trial.py restore --operator-ready
 ```
 
-恢复同一窗口的 `/opt/robot/teleop`。开机启动配置没有被替换；机器人服务重启后仍使用厂商原程序，需要按上述步骤重新启用扩展。试验日志和缓存均在本目录 runtime 中。
+恢复同一窗口的 `/opt/robot/teleop`。2026-09-10 起，本机已通过 collection_autostart 的 robotd drop-in 默认直接启动锁腰扩展；手动回退只影响当前运行，下次开机仍选择锁腰版。试验日志和缓存均在本目录 runtime 中。

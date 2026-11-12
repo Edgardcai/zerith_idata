@@ -6,6 +6,7 @@ if sys.version_info[:2] != (3,10):
 root=Path(__file__).resolve().parents[1]
 parser=argparse.ArgumentParser();parser.add_argument('--output',default='runtime/teleop_zero_lock');args=parser.parse_args()
 output=(root/args.output).resolve()
+output.parent.mkdir(parents=True,exist_ok=True)
 for process in Path('/proc').iterdir():
     if not process.name.isdigit():continue
     try:
@@ -23,11 +24,12 @@ inputs={'__ORIGINAL_CODE__':a.read('teleop'),
         '__PATCH_SOURCE__':(root/'patch/zero_lock.py').read_text(),
         '__POLICY_TEST_SOURCE__':(root/'tests/test_policy.py').read_text(),
         '__MODEL_TEST_SOURCE__':(root/'tests/probe_model.py').read_text(),
-        '__PREFLIGHT_SOURCE__':(root/'tools/preflight.py').read_text()}
+        '__PREFLIGHT_SOURCE__':(root/'tools/preflight.py').read_text(),
+        '__BOOT_GUARD_SOURCE__':Path('/home/robot/collection_autostart/boot_guard.py').read_text()}
 for key,value in inputs.items():source=source.replace(key,repr(value))
 digest=a.build(output,{'teleop':marshal.dumps(compile(source,'zero_lock_trial_entry.py','exec'))})
 manifest={'original_sha256':original_hash,'sha256':digest,'changed_entries':['teleop'],
-          'preserved_entries':len(a.entries)-1,'python':'3.10','version':'collection-1.0-warn-lift-status',
+          'preserved_entries':len(a.entries)-1,'python':'3.10','version':'collection-1.0-calibration-mode-exit',
           'physical_validation':'pending'}
-(root/'runtime/build.json').write_text(json.dumps(manifest,indent=2)+'\n')
+(output.parent/'build.json').write_text(json.dumps(manifest,indent=2)+'\n')
 print(json.dumps(manifest))

@@ -2,11 +2,12 @@
 import os, sys, types, marshal, json, hashlib, logging.handlers
 from pathlib import Path
 ROOT = Path('/home/robot/teleop_zero_lock')
+ARTIFACT_DIR = Path(sys.executable).resolve().parent
 mode = sys.argv[1:]
 allow_pending_save = mode == ['--live', '--allow-pending-save']
 if allow_pending_save:
     mode = ['--live']
-if mode not in (['--offline-self-test'], ['--live']):
+if mode not in (['--offline-self-test'], ['--live'], ['--boot']):
     raise SystemExit('Use --offline-self-test, or the documented operator trial switch procedure.')
 offline = mode == ['--offline-self-test']
 blocked = []
@@ -22,10 +23,16 @@ else:
         raise SystemExit('Trial requires the original teleop process ownership (root).')
     preflight = types.ModuleType('trial_preflight')
     exec(__PREFLIGHT_SOURCE__, preflight.__dict__)
-    errors = preflight.check(preflight.snapshot(), allow_pending_save=allow_pending_save)
+    if mode == ['--boot']:
+        boot_guard = types.ModuleType('boot_guard')
+        exec(__BOOT_GUARD_SOURCE__, boot_guard.__dict__)
+        boot_guard.claim('teleop')
+        errors = []
+    else:
+        errors = preflight.check(preflight.snapshot(), allow_pending_save=allow_pending_save)
     if preflight.teleop_pids():
         errors.append('Original teleop still running; refusing a second command publisher')
-    marker = json.loads((ROOT/'runtime/validated.json').read_text())
+    marker = json.loads((ARTIFACT_DIR/'validated.json').read_text())
     with open(sys.executable,'rb') as executable:
         digest=hashlib.file_digest(executable,'sha256').hexdigest() if hasattr(hashlib,'file_digest') else hashlib.sha256(executable.read()).hexdigest()
     if marker.get('sha256') != digest or marker.get('passed') is not True:
@@ -34,24 +41,26 @@ else:
         raise SystemExit('; '.join(errors))
 
 os.environ['JAX_PLATFORMS'] = 'cpu'
-(ROOT/'runtime/logs').mkdir(exist_ok=True)
+LOG_DIR = ARTIFACT_DIR/'offline-logs' if offline else ROOT/'runtime/logs'
+LOG_DIR.mkdir(exist_ok=True)
 # Redirect only the factory logger module's explicit directory constant.
 # Its rotation/retention/symlink operations must all stay inside the trial directory.
 import processors
 logger_code=marshal.loads(__LOGGER_CODE__)
 assert logger_code.co_consts.count('/var/log/robot/teleop') == 1
-logger_code=logger_code.replace(co_consts=tuple(str(ROOT/'runtime/logs') if c == '/var/log/robot/teleop' else c for c in logger_code.co_consts))
+logger_code=logger_code.replace(co_consts=tuple(str(LOG_DIR) if c == '/var/log/robot/teleop' else c for c in logger_code.co_consts))
 logger_module=types.ModuleType('processors.logger')
 logger_module.__file__=str(Path(sys._MEIPASS)/'processors/logger.py')
 logger_module.__package__='processors'
 sys.modules['processors.logger']=logger_module
 processors.logger=logger_module
 exec(logger_code,logger_module.__dict__)
-assert logger_module.LOG_DIR == str(ROOT/'runtime/logs')
+assert logger_module.LOG_DIR == str(LOG_DIR)
 namespace = {'__name__':'vendor_teleop', '__file__':str(Path(sys._MEIPASS)/'teleop.py')}
 exec(marshal.loads(__ORIGINAL_CODE__), namespace)
 import jax
-jax.config.update('jax_compilation_cache_dir', str(ROOT/'runtime/jax_cache'))
+jax.config.update('jax_compilation_cache_dir', str(
+    ARTIFACT_DIR/'jax_cache' if offline else ROOT/'runtime/jax_cache'))
 patch = types.ModuleType('zero_lock');patch.__file__=str(ROOT/'patch/zero_lock.py')
 sys.modules['zero_lock'] = patch
 exec(__PATCH_SOURCE__, patch.__dict__)
@@ -61,6 +70,7 @@ if offline:
     exec(__POLICY_TEST_SOURCE__,testmod.__dict__)
     result=unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromModule(testmod))
     if not result.wasSuccessful():raise SystemExit(1)
+    policy_test_count=result.testsRun
     from controllers.ZerithCtrl import ZerithCtrl
     from processors.ZerithWBC import ZerithWBC
     from controllers.HeadCtrl import HeadCtrl
@@ -68,7 +78,9 @@ if offline:
     if blocked: raise RuntimeError('Unexpected real ZCM construction attempt')
     with open(sys.executable,'rb') as executable:
         digest=hashlib.sha256(executable.read()).hexdigest()
-    (ROOT/'runtime/validated.json').write_text(json.dumps({'sha256':digest,'passed':True,'unit_tests':result.testsRun})+'\n')
+    (ARTIFACT_DIR/'validated.json').write_text(json.dumps({
+        'sha256':digest,'passed':True,'unit_tests':policy_test_count,
+        'calibration_mode_checks':globals().get('calibration_mode_checks',0)})+'\n')
     print('EXACT_BINARY_OFFLINE_VALIDATED',digest,flush=True)
 else:
     def initialization_check():
