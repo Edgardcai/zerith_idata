@@ -36,7 +36,7 @@ class Application:
         self.monitor=DeviceMonitor(self.runtime)
         self.cameras=Cameras()
         self.teleop=TeleopStatus() if start_devices else TeleopStatus(self.runtime/'teleop')
-        self.collector=Collector(self.store,self.monitor,self.runtime)
+        self.collector=Collector(self.store,self.monitor,self.runtime,teleop=self.teleop)
         self.worker=None;self.worker_log=None
         if start_devices:
             self.monitor.start()

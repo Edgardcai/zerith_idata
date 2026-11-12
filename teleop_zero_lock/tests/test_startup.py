@@ -25,6 +25,11 @@ class StartupTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'startup rejected'):
                 switch_trial.wait_started(time.time() - 10, timeout=1)
 
+    def test_fixed_pose_version_confirms_matching_process(self):
+        state={'pid':123,'timestamp':time.time(),'version':'collection-1.1-fixed-pose'}
+        with patch.object(switch_trial,'trial_pids',return_value=[123]),patch.object(Path,'read_text',return_value=json.dumps(state)):
+            self.assertEqual(switch_trial.wait_started(time.time()-1,timeout=1),123)
+
     def test_embedded_live_gate_honors_pending_save_flag(self):
         source = (Path(__file__).resolve().parents[1] / 'tools/bootstrap.py').read_text()
         gate = source.split("os.environ['JAX_PLATFORMS']")[0]

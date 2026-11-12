@@ -14,6 +14,15 @@ def analyze(directory):
     if '采集流结束' not in (directory / 'collection.log').read_text():
         raise ValueError('Episode is not finalized; refusing to read live HDF5')
     report = {'directory': str(directory), 'fields': {}, 'images': {}}
+    target = np.zeros(4)
+    metadata = directory / 'collection_task.json'
+    if metadata.exists():
+        pose = json.loads(metadata.read_text()).get('targets', {}).get('fixed_pose')
+        if pose is not None:
+            target = np.asarray(pose['target_rad'], dtype=float)
+            if target.shape != (4,) or not np.isfinite(target).all():
+                raise ValueError('Invalid recorded fixed-pose target')
+    report['target_rad'] = target.tolist()
     with h5py.File(directory / 'episode.hdf5', 'r') as f:
         t = f['timestamp/t'][:]
         seconds = t / (1000 if np.median(t) > 1e11 else 1)
@@ -51,10 +60,14 @@ def analyze(directory):
         report['axis_order'] = ['waist_pitch', 'waist_yaw', 'head_yaw', 'head_pitch']
         report['limits_rad'] = limits.tolist()
         report['actual_max_abs_rad'] = np.max(np.abs(actual), axis=0).tolist()
-        report['actual_outside_frames'] = np.sum(np.abs(actual) > limits, axis=0).tolist()
+        report['actual_outside_frames'] = np.sum(np.abs(actual - target) > limits, axis=0).tolist()
         report['command_max_abs_rad'] = np.max(np.abs(commands), axis=0).tolist()
         report['commands_zero_within_1e_minus_6'] = bool(np.all(np.abs(commands) <= 1e-6))
-        report['actual_within_limits'] = bool(np.isfinite(actual).all() and np.all(np.abs(actual) <= limits))
+        report['actual_max_error_rad'] = np.max(np.abs(actual - target), axis=0).tolist()
+        report['actual_outside_target_frames'] = np.sum(np.abs(actual - target) > limits, axis=0).tolist()
+        report['command_max_error_rad'] = np.max(np.abs(commands - target), axis=0).tolist()
+        report['commands_match_target_within_1e_minus_6'] = bool(np.all(np.abs(commands - target) <= 1e-6))
+        report['actual_within_limits'] = bool(np.isfinite(actual).all() and np.all(np.abs(actual - target) <= limits))
         report['numeric_integrity'] = all(d['frames_match'] and d['finite'] for d in report['fields'].values())
         report['image_sample_integrity'] = all(d['frames_match'] and d['sample_nonempty'] for d in report['images'].values())
         report['subtask_transitions'] = f['subtask_transitions'][:].tolist()

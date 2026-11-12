@@ -10,8 +10,9 @@ from tasks import validate_task, dataset_name, scene_config
 from protocol import Vendor
 
 class Collector:
-    def __init__(self,store,monitor,runtime,vendor_factory=Vendor):
+    def __init__(self,store,monitor,runtime,vendor_factory=Vendor,teleop=None):
         self.store=store;self.monitor=monitor;self.runtime=Path(runtime);self.vendor_factory=vendor_factory
+        self.teleop=teleop
         self.lock=threading.RLock();self.operation=threading.Lock();self.shutdown=threading.Event()
         self.session=store.last_session();self.stream=None;self.vendor=None;self.rpc_thread=None
         self.phase='idle';self.error=None;self.responses=[];self.events=[];self.transport=False;self.accepted=False
@@ -78,6 +79,12 @@ class Collector:
             if not self.selected_scene or report['dataset']!=self.selected_scene['dataset']:
                 raise ValueError('请先应用当前日期和场景，再启动采集')
             if not report['ready']:raise ValueError('启动前检查未通过：'+'、'.join(c['label'] for c in report['checks'] if not c['ok']))
+            if self.teleop is not None:
+                pose=self.teleop.snapshot()
+                if pose.get('pose_config_supported') and pose.get('applied_config') and pose.get('phase') not in ('offline','uninitialized','initializing'):
+                    report['targets']['fixed_pose']={'config':pose['applied_config'],
+                        'angle_fields':pose['angle_fields'],'target_rad':pose['target_rad'],
+                        'actual_rad_at_session_start':pose['actual_rad'],'recorded_at':time.time()}
             ident=uuid.uuid4().hex
             if report['dataset']!=report['source_dataset']:
                 destination=Path(report['dataset']);destination.mkdir(exist_ok=True)

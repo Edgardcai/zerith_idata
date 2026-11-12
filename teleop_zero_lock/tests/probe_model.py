@@ -35,6 +35,23 @@ for height in (0.0, .4, .8):
         jac=jax.jacfwd(lifted.forward_kinematics)(jnp.asarray(q))
         assert np.max(np.abs(np.asarray(jac)[...,[0,1,2,17,18]])) < 1e-7
 print('FIXED_LIFT_24_FK_AND_JACOBIAN_PASS',flush=True)
+# Verify all link transforms, including the neck and both hands, against the
+# unfrozen vendor model at the selected nonzero angles. Derivatives must agree.
+custom_fk_count=0
+for angles in ([.5,0,0,0],[.35,-.2,.15,-.12],[.7,.3,-.4,.2]):
+    for height in (None,0.0,.4,.8):
+        for robot in (wbc.robot,wbc.dummy_robot):
+            frozen=freeze_model(robot,height,angles)
+            for _ in range(3):
+                q=rng.uniform(-.2,.2,19)
+                expected=np.asarray(robot.forward_kinematics(jnp.asarray(project(q,height,angles=angles))))
+                got=np.asarray(frozen.forward_kinematics(jnp.asarray(q)))
+                np.testing.assert_allclose(got,expected,atol=1e-6)
+                custom_fk_count+=1
+            jac=jax.jacfwd(frozen.forward_kinematics)(jnp.asarray(q))
+            locked=[1,2,17,18]+([0] if height is not None else [])
+            assert np.max(np.abs(np.asarray(jac)[...,locked]))<1e-7
+print('CUSTOM_POSE_FK_AND_JACOBIAN_PASS',custom_fk_count,flush=True)
 policy, originals=install(namespace)
 patched=ZerithWBC(str(p),2,1.85)
 assert not np.asarray(patched.robot.joints.twists)[[1,2,25,26]].any()
@@ -186,6 +203,84 @@ ctrl.deinit();policy.config={'lift_enabled':False,'lift_height_m':.6}
 fresh();assert ctrl.init();assert ctrl.vr_home_pose[0]==.4
 ctrl.deinit();assert not blocked
 print('FIXED_LIFT_INIT_INTERPOLATION_OUTPUT_IK_RECALIBRATION_DISABLE_PASS',flush=True)
+
+# Real vendor interpolation/serialization, with simulated motor feedback only.
+# Asymmetric head angles catch the factory's otherwise invisible yaw/pitch swap.
+from pose_config import ANGLE_FIELDS,validate_config
+custom_clock=[time.monotonic()]
+policy.clock=lambda:custom_clock[0]
+angles=np.array([.5,-.2,.15,-.1])
+policy.config=validate_config({'lift_enabled':True,'lift_height_m':.6,**dict(zip(ANGLE_FIELDS,angles))})
+head_feedback=[np.array([.03,-.02])]
+waist_feedback=[np.array([.4,0,0])]
+ctrl._waist_state_handler('waist_state',SimpleNamespace(position_actual=[.4,0,0],error_flag=[0,0,0]))
+ctrl._head_state_handler('head_state',SimpleNamespace(position_actual=head_feedback[0],error_flag=[0,0]))
+np.testing.assert_allclose(ctrl.get_current_pose()[17:19],head_feedback[0])
+original_publish=bus.publish
+def simulated_publish(channel,message):
+    original_publish(channel,message)
+    if channel=='waist_control':
+        waist_feedback[0]=np.asarray(message.position)
+    if channel=='head_control':head_feedback[0]=np.asarray(message.position)
+    ctrl._waist_state_handler('waist_state',SimpleNamespace(position_actual=waist_feedback[0],error_flag=[0,0,0]))
+    ctrl._head_state_handler('head_state',SimpleNamespace(position_actual=head_feedback[0],error_flag=[0,0]))
+bus.publish=simulated_publish
+bus.messages.clear();assert ctrl.init()
+waists=[m for ch,m in bus.messages if ch=='waist_control']
+np.testing.assert_allclose(waists[0].position,[.4,0,0],atol=1e-6)
+np.testing.assert_allclose(waists[-1].position,[.6,*angles[:2]],atol=1e-6)
+assert max(max(abs(v) for v in m.speed[1:]) for m in waists)<=.150001
+assert any(.05<m.position[1]<.45 for m in waists)
+np.testing.assert_allclose(ctrl.vr_home_pose[[1,2,17,18]],angles)
+np.testing.assert_allclose(policy.head_target(),[.03,-.02])
+previous=policy.head_target()
+for _ in range(int(policy.duration/.02)+3):
+    custom_clock[0]+=.02
+    ctrl.send_head_cmd(.4,.6)
+    current=next(m for ch,m in reversed(bus.messages) if ch=='head_control')
+    assert max(abs(np.asarray(current.position)-previous))/.02<=.030001
+    previous=np.array(current.position)
+np.testing.assert_allclose(previous,angles[2:],atol=1e-10)
+q=np.arange(19,dtype=float)/100
+for locked in (False,True):
+    ctrl.waist_locked=locked;ctrl.waist_last_published=np.array([.2,-.1,.1])
+    ctrl.send_control_cmd(q,np.ones(19),np.ones(19),.2)
+    ctrl.publish_motor_control(q,np.ones(19))
+    waist=next(m for ch,m in reversed(bus.messages) if ch=='waist_control')
+    head_message=next(m for ch,m in reversed(bus.messages) if ch=='head_control')
+    np.testing.assert_allclose(waist.position,[.6,*angles[:2]])
+    assert waist.speed==[0,0,0]
+    np.testing.assert_allclose(head_message.position,angles[2:])
+    arm=next(m for ch,m in reversed(bus.messages) if ch=='upper_joint_control')
+    np.testing.assert_allclose(arm.position,q[3:17])
+for _ in range(2):
+    patched.update_dummy(1.7)
+    current=np.asarray(patched.dummy_robot.joints.parent_transforms).copy()
+    if _==0:first=current
+    else:np.testing.assert_array_equal(current,first)
+    poses=patched.get_home_pose(is_dummy=True)
+    patched.move_to_cartesian([patched.mapping_vr_to_command[n] for n in poses],list(poses.values()))
+    assert np.isfinite(patched.cfg).all()
+    np.testing.assert_allclose(patched.cfg[[1,2,17,18]],angles)
+    assert abs(patched.cfg[0]-.6)<1e-6
+command=head.get_head_command(patched.cfg)
+assert command['head_yaw']==angles[2] and command['head_pitch']==angles[3]
+node.safe_ctrl.set_paused_pose=noop;node.safe_ctrl.mark_user_paused=noop
+from zero_lock import pause_node
+pause_node(node,namespace['TeleopState'],policy)
+np.testing.assert_allclose(node.paused_pose[[1,2,17,18]],angles)
+# The current measured head pose is still truthful, with no factory axis swap.
+np.testing.assert_allclose(ctrl.get_current_pose()[17:19],head_feedback[0])
+ctrl.deinit();assert not policy.active
+policy.config=validate_config({'lift_enabled':False})
+bus.messages.clear();assert ctrl.init()
+waists=[m for ch,m in bus.messages if ch=='waist_control']
+np.testing.assert_allclose(waists[0].position[1:],angles[:2],atol=1e-6)
+np.testing.assert_allclose(waists[-1].position[1:],[0,0],atol=1e-6)
+assert ctrl.vr_home_pose[0]==.4
+ctrl.deinit();bus.publish=original_publish;policy.clock=time.monotonic
+assert not blocked
+print('CUSTOM_POSE_REAL_INIT_RAW_HEAD_IK_XLOCK_PAUSE_RECALIBRATION_RESET_PASS NO_DEVICE_COMMANDS',flush=True)
 
 # Exercise the exact factory calibration wait, with no VR/device constructor.
 # A stale operator initialized flag used to trap its caller after a mode change.

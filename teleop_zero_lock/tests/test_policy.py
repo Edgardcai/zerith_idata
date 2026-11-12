@@ -163,4 +163,88 @@ class LiftTests(unittest.TestCase):
         self.assertEqual(project(q,.6,True)[0],0)
         np.testing.assert_array_equal(project(q,.6)[3:17],q[3:17])
 
+
+class FixedPoseTests(unittest.TestCase):
+    setUp=PolicyTests.setUp
+    sample=PolicyTests.sample
+
+    def configure(self, angles=(.5, -.2, .15, -.1)):
+        from pose_config import ANGLE_FIELDS, validate_config
+        self.p.config=validate_config(dict(zip(ANGLE_FIELDS, angles)))
+        return np.array(angles)
+
+    def test_old_configuration_and_all_joint_limits(self):
+        from pose_config import ANGLE_FIELDS, ANGLE_LIMITS, validate_config
+        self.assertTrue(all(validate_config({'lift_enabled':True,'lift_height_m':.8})[f]==0 for f in ANGLE_FIELDS))
+        for field,(lower,upper) in zip(ANGLE_FIELDS,ANGLE_LIMITS):
+            for v in (lower,upper,'0'):
+                self.assertEqual(validate_config({field:v})[field],float(v))
+            for v in (lower-.001,upper+.001,None,True,{},[],float('inf'),float('nan'),''):
+                with self.subTest(field=field,value=v),self.assertRaises(ValueError):validate_config({field:v})
+
+    def test_positions_use_targets_but_derivatives_remain_zero(self):
+        angles=self.configure();q=np.arange(38,dtype=float).reshape(2,19)
+        out=project(q,.7,angles=angles)
+        np.testing.assert_allclose(out[:,[1,2,17,18]],np.tile(angles,(2,1)))
+        np.testing.assert_array_equal(out[:,3:17],q[:,3:17])
+        for height in (None,.7):
+            derivative=project(q,height,True,angles)
+            self.assertFalse(derivative[:,[1,2,17,18]].any())
+            if height is not None:self.assertFalse(derivative[:,0].any())
+
+    def test_arm_requires_selected_waist_and_not_zero(self):
+        angles=self.configure();self.sample()
+        with self.assertRaises(RuntimeError):self.p.arm()
+        self.sample(waist=(.4,*angles[:2]),head=angles[2:]);self.p.arm()
+        self.assertTrue(self.p.active)
+
+    def test_nonzero_head_ramp_never_swaps_axes_or_exceeds_rate(self):
+        angles=self.configure();seed=np.array([-.05,.08])
+        self.sample(waist=(.4,*angles[:2]),head=seed);self.p.arm()
+        previous=self.p.head_target();np.testing.assert_allclose(previous,seed)
+        for _ in range(int(self.p.duration/.02)+3):
+            self.t+=.02;self.sample(waist=(.4,*angles[:2]),head=previous)
+            current=self.p.head_target()
+            self.assertLessEqual(float(np.max(np.abs(current-previous)))/.02,.030001)
+            previous=current
+        np.testing.assert_allclose(previous,angles[2:],atol=1e-12)
+
+    def test_ready_warnings_and_final_bus_are_relative_to_targets(self):
+        angles=self.configure();self.sample(waist=(.4,*angles[:2]),head=angles[2:]);self.p.arm()
+        for _ in range(12):
+            self.t+=.1;self.sample(waist=(.4,*angles[:2]),head=angles[2:]);self.p.ready()
+        self.assertTrue(self.p.ready());self.assertEqual(self.p.warnings(),[])
+        bus=GuardedBus(SimpleNamespace(publish=lambda *a:None),self.p)
+        waist=SimpleNamespace(position=[.4,0,0],speed=[.1,1,1])
+        head=SimpleNamespace(position=[0,0],speed=[1,1],torque=[0,0])
+        bus.publish('waist_control',waist);bus.publish('head_control',head)
+        np.testing.assert_allclose(waist.position,[.4,*angles[:2]])
+        np.testing.assert_allclose(head.position,angles[2:]);self.assertEqual(head.speed,[0,0])
+        self.sample(waist=(.4,angles[0]+.01,angles[1]),head=angles[2:])
+        self.assertFalse(self.p.ready());self.assertIn('+0.01000',self.p.warnings()[0])
+
+    def test_head_integral_regulates_selected_angle_and_fault_holds_target(self):
+        angles=self.configure();self.sample(waist=(.4,*angles[:2]),head=angles[2:]);self.p.arm()
+        self.p.gravity=lambda waist,head:np.zeros(2)
+        self.t+=.01;self.sample(waist=(.4,*angles[:2]),head=angles[2:]);self.p.head_feedforward()
+        np.testing.assert_array_equal(self.p.integral,[0,0])
+        self.t+=.01;self.sample(waist=(.4,*angles[:2]),head=angles[2:]+.01);self.p.head_feedforward()
+        self.assertTrue(np.all(self.p.integral<0))
+        target=self.p.head_target();self.t+=.3
+        np.testing.assert_array_equal(self.p.head_target(),target)
+        self.assertIsNotNone(self.p.fault)
+
+    def test_pause_keeps_fixed_pose_and_arm_measurements(self):
+        from zero_lock import pause_node
+        angles=self.configure();self.p.config.update(lift_enabled=True,lift_height_m=.6)
+        heads=[];q=np.arange(19,dtype=float)/100
+        node=SimpleNamespace(ctrl=SimpleNamespace(stop_chassis=lambda:None,get_current_pose=lambda:q),
+            chassis_ctrl=SimpleNamespace(reset_velocity_state=lambda:None),
+            processor=SimpleNamespace(get_vr_command=lambda:{}),
+            safe_ctrl=SimpleNamespace(set_paused_pose=lambda x:None,set_paused_head_angles=heads.append,mark_user_paused=lambda:None))
+        pause_node(node,SimpleNamespace(STOP_TELEOP=0),self.p)
+        np.testing.assert_allclose(node.paused_pose[[1,2,17,18]],angles)
+        self.assertEqual(node.paused_pose[0],.6)
+        np.testing.assert_allclose(node.paused_pose[3:17],q[3:17]);np.testing.assert_allclose(heads[0],angles[2:])
+
 if __name__ == '__main__':unittest.main()

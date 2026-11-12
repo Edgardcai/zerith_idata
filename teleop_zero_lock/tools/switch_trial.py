@@ -46,7 +46,7 @@ def wait_started(started_at, timeout=45):
             state=json.loads((ROOT/'runtime/status.json').read_text())
             if (state.get('pid') in pids and state.get('timestamp',0)>=started_at
                     and 0<=time.time()-state['timestamp']<3
-                    and state.get('version')=='collection-1.0'):
+                    and state.get('version') in ('collection-1.0','collection-1.1-fixed-pose')):
                 return state['pid']
         except (OSError,ValueError,TypeError):pass
         if time.time()-started_at>5 and not pids:

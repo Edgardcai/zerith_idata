@@ -19,7 +19,18 @@
 <section class="stage-config" aria-label="分阶段采集"><div class="stage-config-heading"><label>阶段数<input id="subtasks" type="number" min="1" max="20" step="1" value="2" aria-describedby="stageHint"></label><label class="history-toggle"><input id="recordDepth" type="checkbox" disabled>深度图</label><details id="taskOptions"><summary>更多参数</summary><div class="parameters"><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label><label>高度标签 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="可选" title="记录于每条数据"></label></div></details></div><ol id="stagePlan" class="stage-plan"></ol><p id="stageHint" class="stage-hint" role="status">长按 Y 开始 · 短按 Y 切换阶段 / 保存</p></section>
 </form></section>
 <aside class="device-column">
-<section class="card teleop-panel" aria-label="遥操与固定高度"><div class="teleop-heading"><h2 id="teleopState" role="status" aria-live="polite">等待遥操状态</h2><button id="teleopVoice" class="text-button" type="button">语音提示</button></div><div id="teleopWarning" class="teleop-warning" hidden role="status"></div><div class="lift-controls"><label class="lift-switch"><input id="fixedLift" type="checkbox">固定升降柱</label><label class="lift-value"><input id="fixedLiftHeight" aria-label="固定升降柱高度，米" type="number" min="0" max="0.8" step="0.01" value="0.4">m</label><button id="saveTeleop" class="secondary" type="button">保存</button></div><span id="liftApplied" class="muted"></span></section>
+<section class="card teleop-panel" aria-label="遥操与固定姿态">
+<div class="teleop-heading"><h2 id="teleopState" role="status" aria-live="polite">等待遥操状态</h2><button id="teleopVoice" class="text-button" type="button">语音提示</button></div>
+<div id="teleopWarning" class="teleop-warning" hidden role="status"></div>
+<div class="lift-controls"><label class="lift-switch"><input id="fixedLift" type="checkbox">固定升降柱</label><label class="lift-value"><input id="fixedLiftHeight" aria-label="固定升降柱高度，米" type="number" min="0" max="0.8" step="0.01" value="0.4">m</label><button id="saveTeleop" class="secondary" type="button">保存姿态</button></div>
+<div class="pose-controls" aria-label="头腰固定角度，弧度">
+<label>腰部 pitch · rad<input id="fixedWaistPitch" type="number" min="0" max="1.309" step="any" value="0" required></label>
+<label>腰部 yaw · rad<input id="fixedWaistYaw" type="number" min="-0.9" max="0.9" step="any" value="0" required></label>
+<label>头部 yaw · rad<input id="fixedHeadYaw" type="number" min="-1.5708" max="1.5708" step="any" value="0" required></label>
+<label>头部 pitch · rad<input id="fixedHeadPitch" type="number" min="-0.7854" max="0.5236" step="any" value="0" required></label>
+</div>
+<p class="pose-hint muted">反初始化并结束采集会话后保存，下次初始化生效。头部角度相对上身。</p>
+<div id="poseApplied" class="pose-applied" role="status"></div><span id="liftApplied" class="muted"></span></section>
 <details class="card telemetry"><summary>实时关节<span id="vrStatus">等待 VR</span></summary><div id="joints" class="joints"></div></details>
 <section class="card camera-card"><div class="card-title"><h2>相机</h2><span id="cameraHint" class="muted"></span><button id="cameraToggle" class="text-button">打开预览</button></div><div id="cameraGrid" class="camera-grid" hidden><figure><figcaption>左腕</figcaption><img data-camera="left" alt="左腕实时画面"><span data-camera-state="left">等待画面</span></figure><figure><figcaption>头部</figcaption><img data-camera="head" alt="头部实时画面"><span data-camera-state="head">等待画面</span></figure><figure><figcaption>右腕</figcaption><img data-camera="right" alt="右腕实时画面"><span data-camera-state="right">等待画面</span></figure></div></section>
 </aside></div>

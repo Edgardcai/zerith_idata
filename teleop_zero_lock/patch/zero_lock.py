@@ -13,34 +13,26 @@ import time
 from pathlib import Path
 
 import numpy as np
+from pose_config import ANGLE_FIELDS, ANGLE_LIMITS, POSE_VERSION, validate_config
 
 LOCK_NAMES = ('body_pitch_joint', 'body_yaw_joint', 'neck_yaw_joint', 'neck_pitch_joint')
 LOCK_INDICES = (1, 2, 17, 18)
 
 
-def validate_config(value):
-    if not isinstance(value, dict) or not isinstance(value.get('lift_enabled', False), bool):
-        raise ValueError('升降柱配置格式错误')
-    height = value.get('lift_height_m', 0.4)
-    if isinstance(height, bool):
-        raise ValueError('升降柱高度必须是 0–0.8 m')
-    height = float(height)
-    if not math.isfinite(height) or not 0 <= height <= .8:
-        raise ValueError('升降柱高度必须是 0–0.8 m')
-    return {'lift_enabled': value.get('lift_enabled', False), 'lift_height_m': height}
-
-
-def project(value, lift_height=None, derivative=False):
+def project(value, lift_height=None, derivative=False, angles=None):
     q = np.array(value, dtype=float, copy=True)
     if q.ndim not in (1, 2) or q.shape[-1] != 19 or not np.isfinite(q).all():
         raise ValueError('zero lock requires a finite 19-joint configuration')
-    q[..., list(LOCK_INDICES)] = 0.0
+    target = np.zeros(4) if angles is None else np.asarray(angles, dtype=float)
+    if target.shape != (4,) or not np.isfinite(target).all():
+        raise ValueError('Fixed pose requires four finite joint angles')
+    q[..., list(LOCK_INDICES)] = 0.0 if derivative else target
     if lift_height is not None:
         q[..., 0] = 0.0 if derivative else lift_height
     return q
 
 
-def freeze_model(robot, lift_height=None):
+def freeze_model(robot, lift_height=None, angles=None):
     """Preserve the vendor's 19-variable layout; remove motion of four axes.
 
     Zero twists make FK and its analytic Jacobian use the same fixed transforms.
@@ -55,7 +47,14 @@ def freeze_model(robot, lift_height=None):
     if tuple(ids) != LOCK_INDICES:
         raise ValueError('Vendor joint ordering changed')
     rows = jnp.array([robot.joints.names.index(name) for name in LOCK_NAMES])
+    targets = np.zeros(4) if angles is None else np.asarray(angles, dtype=float)
+    if targets.shape != (4,) or not np.isfinite(targets).all():
+        raise ValueError('Fixed model requires four finite joint angles')
     with jdc.copy_and_mutate(robot) as fixed:
+        for row, angle in zip(rows, targets):
+            transform = (jaxlie.SE3(robot.joints.parent_transforms[row]) @
+                         jaxlie.SE3.exp(robot.joints.twists[row] * angle)).wxyz_xyz
+            fixed.joints.parent_transforms = fixed.joints.parent_transforms.at[row].set(transform)
         fixed.joints.twists = fixed.joints.twists.at[rows].set(0.0)
         if lift_height is not None:
             if robot.joints.actuated_names[0] != 'daogui_joint':
@@ -109,7 +108,7 @@ class ZeroPolicy:
         self.feedforward = np.zeros(2)
         self.integral = np.zeros(2)
         self.comp_ready = False
-        self.config = {'lift_enabled': False, 'lift_height_m': .4}
+        self.config = validate_config({})
         self.initializing = False
         self.operator = {'initialized': False, 'calibrated': False, 'state': 'STOP_TELEOP'}
         self.calibration_seq = 0
@@ -118,13 +117,18 @@ class ZeroPolicy:
     def lift_height(self):
         return self.config['lift_height_m'] if self.config['lift_enabled'] else None
 
+    @property
+    def lock_angles(self):
+        return np.array([self.config.get(field, 0.0) for field in ANGLE_FIELDS], dtype=float)
+
     def warnings(self):
         actual = self.feedback(self.clock())
         if not self.active or actual is None:
             return []
         names = ['腰 pitch', '腰 yaw', '头 yaw', '头 pitch']
         limits = [self.tolerance, self.tolerance, self.tolerance, self.head_pitch_tolerance]
-        result = [f'{name} 偏差 {v:.5f} rad' for name, v, limit in zip(names, actual, limits) if abs(v) > limit]
+        error = actual - self.lock_angles
+        result = [f'{name} 偏差 {v:+.5f} rad' for name, v, limit in zip(names, error, limits) if abs(v) > limit]
         if self.lift_height is not None:
             lift = float(self.samples['waist'][1][0])
             if abs(lift - self.lift_height) > .005:
@@ -140,8 +144,9 @@ class ZeroPolicy:
             now = self.clock()
             previous = self.samples.get(kind)
             locked = values[1:3] if kind == 'waist' else values
+            target = self.lock_angles[:2] if kind == 'waist' else self.lock_angles[2:]
             limits = self.tolerance if kind == 'waist' else np.array([self.tolerance, self.head_pitch_tolerance])
-            if (not valid or np.any(np.abs(locked) > limits) or
+            if (not valid or np.any(np.abs(locked - target) > limits) or
                     previous is None or now - previous[0] > 0.25):
                 self.stable_since = None
             self.samples[kind] = (now, values.copy(), bool(valid))
@@ -160,15 +165,16 @@ class ZeroPolicy:
             actual = self.feedback(now)
             if actual is None:
                 raise RuntimeError('Head/waist feedback stale or motor error; zero lock not armed')
-            # The factory init has already smoothly commanded the waist to zero.
-            # Refuse a large remaining error instead of snapping the waist to zero.
-            if np.max(np.abs(actual[:2])) > 0.03:
-                raise RuntimeError('Waist did not reach the factory zero home; zero lock not armed')
-            if np.max(np.abs(actual[2:])) > 0.35:
-                raise RuntimeError('Head outside the first-trial start envelope (0.35 rad)')
+            # The factory interpolation must reach the selected waist pose first.
+            if np.max(np.abs(actual[:2] - self.lock_angles[:2])) > 0.03:
+                raise RuntimeError('Waist did not reach the configured pose; fixed pose not armed')
+            if any(not lower - .05 <= angle <= upper + .05
+                   for angle, (lower, upper) in zip(actual[2:], ANGLE_LIMITS[2:])):
+                raise RuntimeError('Head feedback outside the model limits')
             self.fault = None
             self.seed_head = actual[2:].copy()  # raw wire order, no vendor head_pos swap
-            self.duration = max(3.0, 1.875 * float(np.max(np.abs(self.seed_head))) / 0.03) if np.any(self.seed_head) else 0.0
+            delta = float(np.max(np.abs(self.seed_head - self.lock_angles[2:])))
+            self.duration = max(3.0, 1.875 * delta / 0.03) if delta else 0.0
             self.ramp_elapsed = 0.0
             self.last_target_at = now
             self.last_head_target = self.seed_head.copy()
@@ -179,7 +185,7 @@ class ZeroPolicy:
             self.comp_ready = False
             self.stable_since = None
             self.active = True
-            self.reason = 'moving_head_to_zero'
+            self.reason = 'moving_head_to_target'
 
     def disarm(self):
         with self.mutex:
@@ -202,7 +208,7 @@ class ZeroPolicy:
             self.last_target_at = now
             t = min(1.0, self.ramp_elapsed / self.duration) if self.duration else 1.0
             s = 10*t**3 - 15*t**4 + 6*t**5
-            self.last_head_target = self.seed_head * (1.0 - s)
+            self.last_head_target = self.seed_head * (1.0 - s) + self.lock_angles[2:] * s
             return self.last_head_target.copy()
 
     def head_feedforward(self):
@@ -226,7 +232,8 @@ class ZeroPolicy:
             target = np.clip(g + self.integral, -.6, .6)
             self.comp_ready = bool(np.max(np.abs(target - self.feedforward)) < .01)
             if self.comp_ready:
-                error = np.where(np.abs(actual[2:]) > .0015, -actual[2:], 0.0)
+                delta = self.lock_angles[2:] - actual[2:]
+                error = np.where(np.abs(delta) > .0015, delta, 0.0)
                 # Slow integral trim for small URDF mass/friction errors; bounded at 0.15 Nm.
                 self.integral = np.clip(self.integral + .4 * error * dt, -.15, .15)
                 target = np.clip(g + self.integral, -.6, .6)
@@ -245,11 +252,11 @@ class ZeroPolicy:
                 self.fault = 'feedback_lost_reinitialize'
                 self.reason = self.fault
             elif self.ramp_elapsed < self.duration:
-                self.reason = 'moving_head_to_zero'
+                self.reason = 'moving_head_to_target'
             elif self.gravity is not None and not self.comp_ready:
                 self.reason = 'settling_gravity_compensation'
-            elif np.any(np.abs(actual) > [self.tolerance, self.tolerance, self.tolerance, self.head_pitch_tolerance]):
-                self.reason = 'actual_joint_not_zero'
+            elif np.any(np.abs(actual - self.lock_angles) > [self.tolerance, self.tolerance, self.tolerance, self.head_pitch_tolerance]):
+                self.reason = 'actual_joint_not_at_target'
             else:
                 if self.stable_since is None:
                     self.stable_since = now
@@ -271,6 +278,7 @@ class ZeroPolicy:
                        'ready': ready, 'reason': self.reason, 'tolerance_rad': self.tolerance,
                        'head_pitch_tolerance_rad': self.head_pitch_tolerance,
                        'actual_rad': None if actual is None else actual.tolist(),
+                       'target_rad': self.lock_angles.tolist(),
                        'head_target_rad': self.head_target().tolist() if self.active else None,
                        'head_feedforward_nm': self.feedforward.tolist(),
                        'head_integral_nm': self.integral.tolist(),
@@ -279,7 +287,8 @@ class ZeroPolicy:
                        'operator': self.operator.copy(), 'calibration_seq': self.calibration_seq,
                        'lift_actual_m': float(self.samples['waist'][1][0]) if actual is not None else None,
                        'lift_target_m': self.lift_height if self.active else None,
-                       'deviation_policy': 'warn_only', 'version': 'collection-1.0'}
+                       'deviation_policy': 'warn_only', 'pose_config_supported': True,
+                       'version': POSE_VERSION}
             tmp = self.status_path.with_suffix('.tmp')
             tmp.write_text(json.dumps(payload, allow_nan=False) + '\n')
             tmp.replace(self.status_path)
@@ -299,7 +308,7 @@ class GuardedBus:
             if channel == 'waist_control':
                 if len(msg.position) != 3:
                     raise ValueError('Unexpected waist command shape')
-                msg.position = [msg.position[0], 0.0, 0.0]
+                msg.position = [msg.position[0], *self.policy.lock_angles[:2].tolist()]
                 msg.speed = [msg.speed[0], 0.0, 0.0]
                 if self.policy.lift_height is not None:
                     msg.position[0] = self.policy.lift_height
@@ -310,19 +319,19 @@ class GuardedBus:
                 if np.max(np.abs(msg.torque)) > 1e-6:
                     raise ValueError('Unexpected factory head feed-forward; refusing double compensation')
                 msg.torque = self.policy.head_feedforward().tolist()
-                # Factory KP/KD stay unchanged; bounded gravity feed-forward holds zero.
+                # Factory KP/KD stay unchanged; bounded feed-forward holds the pose.
         return self.original.publish(channel, msg)
 
 
 
-def pause_node(self, State):
+def pause_node(self, State, policy):
     self.state = State.STOP_TELEOP
     self.is_transitioning = False
     self.ctrl.stop_chassis()
     self.chassis_ctrl.reset_velocity_state()
-    self.paused_pose = project(self.ctrl.get_current_pose())
+    self.paused_pose = project(self.ctrl.get_current_pose(), policy.lift_height, angles=policy.lock_angles)
     self.safe_ctrl.set_paused_pose(self.processor.get_vr_command())
-    self.safe_ctrl.set_paused_head_angles(np.zeros(2))
+    self.safe_ctrl.set_paused_head_angles(policy.lock_angles[2:].copy())
     self.safe_ctrl.mark_user_paused()
 
 
@@ -332,9 +341,9 @@ def after_joystick(self, policy, State):
         # Position deviations and settling only warn. Genuine feedback faults
         # retain the stop behavior; all vendor safety handlers still run first.
         if (policy.fault or not policy.active) and self.state in (State.DECOUPLED, State.TELEOP):
-            pause_node(self, State)
+            pause_node(self, State, policy)
         if policy.active:
-            self.ctrl.send_head_cmd(0.0, 0.0)  # bus applies the bounded initial ramp
+            self.ctrl.send_head_cmd(policy.lock_angles[3], policy.lock_angles[2])  # bus applies the bounded ramp
     policy.operator = {'initialized': bool(self.is_initialized),
                        'calibrated': bool(getattr(self, 'is_calibrate', False)),
                        'state': getattr(self.state, 'name', str(self.state)),
@@ -389,9 +398,11 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
 
     def constrain_planner(planner):
         height = policy.lift_height
-        planner.robot = freeze_model(planner._zero_base_robot, height)
-        planner.dummy_robot = freeze_model(planner._zero_base_dummy, height)
-        planner.cfg, planner.home_cfg = project(planner.cfg, height), project(planner.home_cfg, height)
+        angles = policy.lock_angles
+        planner.robot = freeze_model(planner._zero_base_robot, height, angles)
+        planner.dummy_robot = freeze_model(planner._zero_base_dummy, height, angles)
+        planner.cfg = project(planner.cfg, height, angles=angles)
+        planner.home_cfg = project(planner.home_cfg, height, angles=angles)
 
     def wrap(cls, name, builder):
         original[(cls.__name__, name)] = getattr(cls, name)
@@ -417,7 +428,12 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
         def observer(old, kind=kind):
             def call(self, channel, msg):
                 policy.observe(kind, msg)
-                return old(self, channel, msg)
+                result = old(self, channel, msg)
+                if kind == 'head' and policy.samples[kind][2]:
+                    # H1 PRO wire/model order is yaw, pitch; the factory handler swaps it.
+                    # Keep its internal measured pose in the model's joint order too.
+                    self.head_pos = policy.samples[kind][1].copy()
+                return result
             return call
         wrap(ZerithCtrl, method, observer)
 
@@ -434,6 +450,11 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
                 policy.config = validate_config(config_loader())
             self.vr_home_pose = self._zero_original_vr_home.copy()
             self.waist_locked = False
+            for name, angle in zip(LOCK_NAMES, policy.lock_angles):
+                joint = self.model.joints[self.model.getJointId(name)]
+                if not self.model.lowerPositionLimit[joint.idx_q] <= angle <= self.model.upperPositionLimit[joint.idx_q]:
+                    raise ValueError('固定角度超出机器人模型范围：' + name)
+            self.vr_home_pose[list(LOCK_INDICES)] = policy.lock_angles
             if policy.lift_height is not None:
                 joint = self.model.joints[self.model.getJointId('daogui_joint')]
                 if not self.model.lowerPositionLimit[joint.idx_q] <= policy.lift_height <= self.model.upperPositionLimit[joint.idx_q]:
@@ -446,7 +467,14 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
             policy.write_status()
             try:
                 # No output lock is armed until the original interpolation ends.
-                result = old(self, *args, **kwargs)
+                duration = self.init_home_transition_duration
+                delta = float(np.max(np.abs(self.waist_pos[1:3] - policy.lock_angles[:2])))
+                # Bound peak waist angular speed to 0.15 rad/s with a quintic ramp.
+                self.init_home_transition_duration = max(duration, math.ceil(1.875 * delta / .15 / self.dt) * self.dt)
+                try:
+                    result = old(self, *args, **kwargs)
+                finally:
+                    self.init_home_transition_duration = duration
             finally:
                 policy.initializing = False
             if result:
@@ -486,13 +514,16 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
     def send_control(old):
         def call(self, traj, vel, acc, height_offset, motor_ctrl=None, trace_info=None):
             if policy.active:
-                traj = project(traj, policy.lift_height)
-                vel, acc = project(vel, policy.lift_height, True), project(acc, policy.lift_height, True)
+                traj = project(traj, policy.lift_height, angles=policy.lock_angles)
+                vel = project(vel, policy.lift_height, True, policy.lock_angles)
+                acc = project(acc, policy.lift_height, True, policy.lock_angles)
                 if policy.lift_height is not None:
                     height_offset = 0.0
                     self.waist_last_published[0] = policy.lift_height
                 # Preserve the vendor X-lock of the lift, but never its nonzero waist cache.
-                self.waist_last_published[1:3] = 0.0
+                self.waist_last_published[1:3] = policy.lock_angles[:2]
+            elif policy.initializing:
+                policy.write_status()
             return old(self, traj, vel, acc, height_offset, motor_ctrl, trace_info)
         return call
     wrap(ZerithCtrl, 'send_control_cmd', send_control)
@@ -500,7 +531,7 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
     def get_head(old):
         def call(self, *args, **kwargs):
             if policy.active:
-                return {'head_yaw': 0.0, 'head_pitch': 0.0, 'source': 'zero_lock'}
+                return {'head_yaw': float(policy.lock_angles[2]), 'head_pitch': float(policy.lock_angles[3]), 'source': 'fixed_pose'}
             return old(self, *args, **kwargs)
         return call
     wrap(HeadCtrl, 'get_head_command', get_head)
@@ -538,9 +569,10 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
         def call(self, *args, **kwargs):
             if not self._zero_lock_ik:
                 return old(self, *args, **kwargs)
-            self.cfg, self.home_cfg = project(self.cfg, policy.lift_height), project(self.home_cfg, policy.lift_height)
+            self.cfg = project(self.cfg, policy.lift_height, angles=policy.lock_angles)
+            self.home_cfg = project(self.home_cfg, policy.lift_height, angles=policy.lock_angles)
             result = old(self, *args, **kwargs)
-            self.cfg = project(self.cfg, policy.lift_height)
+            self.cfg = project(self.cfg, policy.lift_height, angles=policy.lock_angles)
             return self.cfg.copy()
         return call
     wrap(ZerithWBC, 'move_to_cartesian', move)
@@ -549,8 +581,8 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
         def call(self, *args, **kwargs):
             result = old(self, *args, **kwargs)
             if result and self.is_initialized and policy.active:
-                self.paused_pose = project(self.paused_pose)
-                pause_node(self, State)
+                self.paused_pose = project(self.paused_pose, policy.lift_height, angles=policy.lock_angles)
+                pause_node(self, State, policy)
                 policy.calibration_seq += 1
                 namespace['logger'].info('标定成功：短按 A 启动遥操；头腰偏差只预警，不暂停')
                 after_joystick(self, policy, State)
@@ -562,7 +594,7 @@ def install(namespace, status_path=None, initialization_check=None, config_loade
         def call(self, *args, **kwargs):
             result = old(self, *args, **kwargs)
             if self.is_initialized and policy.active and self.state != State.ERROR:
-                pause_node(self, State)
+                pause_node(self, State, policy)
                 policy.calibration_seq += 1
                 namespace['logger'].info('重新标定成功：短按 A 启动遥操')
                 after_joystick(self, policy, State)

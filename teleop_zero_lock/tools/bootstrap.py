@@ -62,6 +62,9 @@ import jax
 jax.config.update('jax_compilation_cache_dir', str(
     ARTIFACT_DIR/'jax_cache' if offline else ROOT/'runtime/jax_cache'))
 patch = types.ModuleType('zero_lock');patch.__file__=str(ROOT/'patch/zero_lock.py')
+pose_config = types.ModuleType('pose_config')
+sys.modules['pose_config'] = pose_config
+exec(__POSE_CONFIG_SOURCE__, pose_config.__dict__)
 sys.modules['zero_lock'] = patch
 exec(__PATCH_SOURCE__, patch.__dict__)
 if offline:
@@ -93,7 +96,7 @@ else:
         path=ROOT/'config.json'
         return json.loads(path.read_text()) if path.exists() else {'lift_enabled':False,'lift_height_m':.4}
     policy,_ = patch.install(namespace, ROOT/'runtime/status.json', initialization_check, config_loader)
-    print('ZERO_LOCK_TRIAL: awaiting operator initialization; target zero is NOT proof of actual zero.',flush=True)
+    print('FIXED_POSE: awaiting operator initialization; measured feedback remains unchanged.',flush=True)
     node=namespace['TeleopController'](initial_teleop_height=float(os.environ.get('TELEOP_INITIAL_HEIGHT','1.85')))
     try:
         node.start()

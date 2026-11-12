@@ -59,6 +59,23 @@ class CollectorTests(unittest.TestCase):
         self.assertIs(actual['record_depth'],True)
         self.collector.end();self.start()
         self.assertIs(self.collector.status()['session']['config']['record_depth'],False)
+
+    def test_fixed_pose_is_archived_with_episode_without_entering_vendor_config(self):
+        from types import SimpleNamespace
+        from teleop_status import TeleopStatus,ANGLE_FIELDS
+        applied=TeleopStatus.validate({'waist_pitch_rad':.5,'head_yaw_rad':.1})
+        pose={'pose_config_supported':True,'phase':'running','applied_config':applied,
+              'config':TeleopStatus.validate({}),'angle_fields':list(ANGLE_FIELDS),
+              'target_rad':[.5,0,.1,0],'actual_rad':[.499,0,.101,.02]}
+        self.collector.teleop=SimpleNamespace(snapshot=lambda:pose)
+        self.start();session=self.collector.status()['session']
+        self.assertEqual(session['targets']['fixed_pose']['config'],applied)
+        actual=json.loads((self.root/'1_test'/'task_meta.json').read_text())
+        self.assertNotIn('fixed_pose',actual)
+        episode(self.root/'1_test');eventually(lambda:self.collector.status()['counts']['completed']==1)
+        path=Path(self.store.list()[0]['path'])
+        archived=json.loads((path/'collection_task.json').read_text())['targets']['fixed_pose']
+        self.assertEqual(archived['target_rad'],[.5,0,.1,0]);self.assertEqual(archived['actual_rad_at_session_start'],pose['actual_rad'])
     def test_default_two_stages_and_live_progress(self):
         self.start()
         actual=json.loads((self.root/'1_test'/'task_meta.json').read_text())
