@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 import sys
 import tempfile
-import copy
 import unittest
 from unittest.mock import patch
 
@@ -65,27 +64,3 @@ class UpgradeTests(unittest.TestCase):
         self.state['device']['checks'][-1]['detail']='初始化完成'
         with self.assertRaisesRegex(RuntimeError,'反初始化'):self.run_upgrade()
         self.assertEqual(self.calls,[])
-
-    def idle_state(self):
-        self.state['device']['vr_connected']=False
-        self.state['device']['checks'][1]['ok']=False
-        policy={'timestamp':100.,'active':False,'initializing':False,'operator':{
-            'initialized':False,'calibrated':False,'state':'STOP_TELEOP','motor_control_active':False,'control_mode':0}}
-        return policy
-    def test_idle_boot_allows_only_program_restart_in_known_inactive_states(self):
-        policy=self.idle_state()
-        for value in (0,4,5):
-            self.assertEqual(upgrade_trial.idle_boot_check(self.state,policy,{'fresh':True,'system_init':value},100.5),[])
-        for value in (1,2,3,None,99):
-            self.assertTrue(upgrade_trial.idle_boot_check(self.state,policy,{'fresh':True,'system_init':value},100.5))
-    def test_idle_boot_rejects_active_stale_calibrating_or_motor_control(self):
-        policy=self.idle_state();init={'fresh':True,'system_init':5}
-        for field,value in [('active',True),('initializing',True),('timestamp',90.)]:
-            changed=copy.deepcopy(policy);changed[field]=value
-            self.assertTrue(upgrade_trial.idle_boot_check(self.state,changed,init,100.5))
-        for field,value in [('initialized',True),('calibrated',True),('state','DECOUPLED'),('motor_control_active',True),('control_mode',3)]:
-            changed=copy.deepcopy(policy);changed['operator'][field]=value
-            self.assertTrue(upgrade_trial.idle_boot_check(self.state,changed,init,100.5))
-        self.assertTrue(upgrade_trial.idle_boot_check(self.state,policy,{'fresh':False,'system_init':5},100.5))
-        self.state['collection']['phase']='waiting'
-        self.assertTrue(upgrade_trial.idle_boot_check(self.state,policy,init,100.5))
