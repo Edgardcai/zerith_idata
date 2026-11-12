@@ -69,6 +69,8 @@ sudo python3 tools/upgrade_trial.py
 
 候选包可以放在独立临时构建目录，使用 `tools/upgrade_trial.py --candidate /绝对路径/teleop_zero_lock_candidate --check` 先只读核验，再去掉 `--check` 切换。工具核对候选包自检、当前运行版本、空闲状态和开机配置，更新匹配的 build/validated/开机哈希，等待新进程实时状态确认；旧程序与元数据分别保留在 `runtime/teleop_zero_lock.previous`、`runtime/previous-release.json`。构建可用 `--vendor` 指定原厂输入、`--source-commit` 记录源码提交。
 
+仅同步软件且现场硬件尚未就绪时，可显式使用升级工具的 `--idle-boot`。它要求原始初始化反馈新鲜且为未初始化(0)、反初始化完成(4)或错误状态(5)，同时要求新鲜遥操状态确认未初始化、未标定、未启用锁定或电机控制循环、处于 VR 的 STOP_TELEOP，且采集会话已结束；切换前重复核验。新程序以原有 `--boot` 入口等待操作员，实际初始化仍检查 VR、电机及通信，不复位机器人或清除硬件错误。默认升级路径保持原有完整设备检查。
+
 操作员明确允许后台保存继续时，可在 `plan` 或 `start` 命令后加 `--allow-pending-save`，允许会话等待或保存期间切换。此参数不会取消保存或删除数据；正在录制、未反初始化或设备检查失败仍拒绝切换。
 
 若启动失败后原厂和扩展遥操都已退出，且该 tmux 窗口停在 shell，可执行 `sudo python3 tools/switch_trial.py start --operator-ready --recover-stopped`。切换工具会等待扩展进程对应的实时状态，失败时显示窗口输出。`--allow-pending-save` 已同步传入二进制内部检查，修改内部检查必须重建并重新自检。
