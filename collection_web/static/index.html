@@ -5,6 +5,11 @@
 <header><a class="brand" href="/"><span class="brand-icon">Z</span>采集工作台</a><div class="header-status"><span id="connection" class="pill">连接中</span><span id="battery" class="battery">电量 —</span></div><div class="header-actions"><button id="check" class="secondary">设备检测</button><button id="end" class="secondary" disabled>结束会话</button><button id="start" class="primary">启动采集</button></div></header>
 <main>
 <div id="alert" class="alert" hidden role="alert"></div>
+<nav class="prompt-modes" aria-label="提示词配置">
+<button type="button" data-prompt-mode="shelf_grasp" aria-pressed="false">货架抓取配置</button>
+<button type="button" data-prompt-mode="tabletop" aria-pressed="true">桌面取放配置</button>
+<button type="button" data-prompt-mode="shelf_place" aria-pressed="false">货架放置配置</button>
+</nav>
 <section class="card scene-panel" aria-label="采集场景">
 <div class="scene-controls"><label>日期<input id="taskId" type="number" min="0" max="99999999" step="1" placeholder="YYYYMMDD"></label><label>场景<input id="sceneId" type="number" min="1" max="99999999" step="1" value="1"></label><button id="applyScene" class="primary" type="button">应用</button><span id="sceneHint" class="muted" role="status">待应用</span></div>
 <div class="directory"><span id="directoryLabel">目录</span><code id="directory">请先应用场景</code><button id="copyPath" class="text-button" disabled>复制</button></div>
@@ -16,7 +21,7 @@
 <form id="taskForm"><div class="product-controls"><label>采集模式<select id="handMode"><option value="both">双手</option><option value="left">左手</option><option value="right">右手</option></select></label><div id="leftProductLabel" class="product-field"><label for="leftProductSearch">左手商品</label><select id="leftProduct" hidden></select></div><div id="rightProductLabel" class="product-field"><label for="rightProductSearch">右手商品</label><select id="rightProduct" hidden></select></div></div>
 <label>提示词<textarea id="prompt" rows="2" maxlength="500" spellcheck="false" readonly></textarea></label>
 <input id="left" type="hidden"><input id="right" type="hidden">
-<section class="stage-config" aria-label="分阶段采集"><div class="stage-config-heading"><label>阶段数<input id="subtasks" type="number" min="1" max="20" step="1" value="2" aria-describedby="stageHint"></label><label class="history-toggle"><input id="recordDepth" type="checkbox" disabled>深度图</label><details id="taskOptions"><summary>更多参数</summary><div class="parameters"><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label><label>高度标签 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="可选" title="记录于每条数据"></label></div></details></div><ol id="stagePlan" class="stage-plan"></ol><p id="stageHint" class="stage-hint" role="status">长按 Y 开始 · 短按 Y 切换阶段 / 保存</p></section>
+<section class="stage-config" aria-label="分阶段采集"><div class="stage-config-heading"><label>阶段数<input id="subtasks" type="number" min="1" max="20" step="1" value="4" readonly aria-describedby="stageHint" title="根据提示词配置和左右手自动生成"></label><label class="history-toggle"><input id="recordDepth" type="checkbox" disabled>深度图</label><details id="taskOptions"><summary>更多参数</summary><div class="parameters"><label>频率 · Hz<input id="frequency" type="number" min="1" max="60" value="30"></label><label>最长时长 · 秒<input id="maxTime" type="number" min="1" max="1200" value="1000"></label><label>高度标签 · m<input id="liftHeight" type="number" min="0" step="any" placeholder="可选" title="记录于每条数据"></label></div></details></div><ol id="stagePlan" class="stage-plan"></ol><p id="stageHint" class="stage-hint" role="status">长按 Y 开始 · 短按 Y 切换阶段 / 保存</p></section>
 </form></section>
 <aside class="device-column">
 <section class="card teleop-panel" aria-label="遥操与固定姿态">
@@ -44,5 +49,6 @@
 <p id="reviewStatus" class="review-status" role="status" aria-live="polite"></p><div id="reviewGrid" class="review-grid"></div></dialog>
 <script src="/static/review.js" defer></script>
 <script src="/static/product-picker.js?v=20260929.2" defer></script>
-<script src="/static/app.js?v=20261030.1" defer></script>
+<script src="/static/task-prompts.js?v=20261112.1" defer></script>
+<script src="/static/app.js?v=20261112.1" defer></script>
 </body></html>
