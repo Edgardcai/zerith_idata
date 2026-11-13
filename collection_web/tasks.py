@@ -9,6 +9,12 @@ DEFAULT_PROMPT_MODE = 'tabletop'
 PROMPT_MODES = ('shelf_grasp', 'tabletop', 'shelf_place')
 
 
+def reject_retired_product(value):
+    # Applied only to new task submissions; historical episodes stay readable.
+    if value.strip().casefold() == 'monster pink':
+        raise ValueError('Monster Pink 是旧批次名称；第四批红罐为 Monster Red（魔爪热带水果味），请刷新页面后重新选择')
+
+
 def compose_task(prompt_mode, hand_mode, left='', right=''):
     if prompt_mode not in PROMPT_MODES:
         raise ValueError('未知的提示词配置')
@@ -22,6 +28,7 @@ def compose_task(prompt_mode, hand_mode, left='', right=''):
                 or not value.isascii() or any(c in value for c in '/\\\x00\n\r')):
             raise ValueError('请选择有效的英文商品名称')
         products[side] = value.strip()
+        reject_retired_product(products[side])
     left, right = products['left'], products['right']
     if prompt_mode == 'shelf_grasp':
         prompt = (f'Grasp {left} with the left hand and then grasp {right} with the right hand.'
@@ -126,8 +133,10 @@ def validate_task(payload):
         result[key] = int(number)
     targets = parse_targets(prompt)
     for side in ('left','right'):
+        reject_retired_product(targets[side])
         value = payload.get(side, targets[side])
         if not isinstance(value, str) or len(value)>200: raise ValueError('目标物体名称无效')
+        reject_retired_product(value)
         targets[side] = value.strip()
     height=payload.get('lift_height')
     if height is not None and str(height).strip():

@@ -50,7 +50,6 @@ const PRODUCTS = Object.freeze({
   "Lays Barbecue": "乐事薯片烤肉味",
   "Lays Original": "乐事薯片原味",
   "Monster Silver": "魔爪银罐",
-  "Monster Pink": "魔爪粉罐",
   "Celsius": "Celsius",
   "Liquid Death Black": "Liquid Death 黑罐",
   "Spindrift": "Spindrift",
@@ -125,7 +124,18 @@ const PRODUCT_ALIASES = Object.freeze({
  "Coke Cherry": "Coca-Cola Cherry",
  "Vita Coco Extra Coconut": "Vita Extra Coconut",
  "Monster Purple": "Monster Violet",
+ // Only new editable drafts migrate; active sessions retain their recorded names.
+ "Monster Pink": "Monster Red",
  "Canada Dry Strawberry": "Strawberry Ginger Ale"
+});
+
+const PRODUCT_SEARCH_TERMS = Object.freeze({
+ "Monster Black": "魔爪黑 魔爪黑罐",
+ "Monster White": "魔爪白 魔爪白罐",
+ "Monster Violet": "魔爪紫 魔爪紫罐",
+ "Monster Red": "魔爪红 魔爪红罐",
+ "Monster Blue": "魔爪蓝 魔爪蓝罐",
+ "Monster Green": "魔爪绿 魔爪绿罐"
 });
 
 let appliedScene=null;
@@ -169,7 +179,11 @@ const productPickers = {};
 function populateProducts(){
  for(const side of ['left','right']){
   const select=$(side+'Product');
-  for(const [name,label] of Object.entries(PRODUCTS))select.add(new Option(`${label} · ${name}`,name));
+  for(const [name,label] of Object.entries(PRODUCTS)){
+   const option=new Option(`${label} · ${name}`,name);
+   option.dataset.searchTerms=PRODUCT_SEARCH_TERMS[name]||'';
+   select.add(option);
+  }
  }
  $('leftProduct').value='Dahongpao Milk Tea';$('rightProduct').value='If coconut';
  for(const side of ['left','right'])productPickers[side]=new ProductPicker($(side+'Product'));

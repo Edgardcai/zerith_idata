@@ -60,7 +60,7 @@ class ProductPicker {
   if (this.input.disabled || this.select.disabled) return;
   const normalize = value => value.normalize('NFKC').toLowerCase().replace(/\s+/g, '');
   const needle = normalize(query);
-  this.matches = Array.from(this.select.options).filter(option => normalize(option.textContent).includes(needle));
+  this.matches = Array.from(this.select.options).filter(option => normalize(option.textContent+' '+(option.dataset.searchTerms||'')).includes(needle));
   this.list.replaceChildren();
   this.active = -1;
   this.input.removeAttribute('aria-activedescendant');

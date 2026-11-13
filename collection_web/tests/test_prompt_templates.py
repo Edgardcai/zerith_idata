@@ -8,6 +8,34 @@ from tasks import compose_task, parse_targets, validate_task
 
 
 class PromptTemplateTests(unittest.TestCase):
+    def test_batch4_names_match_operator_list_and_all_modes(self):
+        root=Path(__file__).resolve().parents[1]
+        expected=json.loads((Path(__file__).parent/'fixtures/catalog_batch4.json').read_text())
+        source=(root/'static/app.js').read_text()
+        products=json.loads(source.split('const PRODUCTS = Object.freeze(',1)[1].split(');',1)[0])
+        self.assertEqual(len(expected),33)
+        self.assertNotIn('Monster Pink',products)
+        for name,label in expected.items():
+            self.assertEqual(products[name],label,name)
+            for mode in ('shelf_grasp','tabletop','shelf_place'):
+                for hand in ('left','right','both'):
+                    with self.subTest(product=name,mode=mode,hand=hand):
+                        cfg,targets=validate_task({'prompt_mode':mode,'hand_mode':hand,'left':name,'right':name})
+                        self.assertEqual(parse_targets(cfg['task_name']),{k:targets[k] for k in ('left','right')})
+                        self.assertIn(name,cfg['task_name'])
+                        self.assertTrue(cfg['task_name'].isascii())
+    def test_new_submissions_reject_retired_monster_pink_including_old_pages(self):
+        for mode in ('shelf_grasp','tabletop','shelf_place'):
+            for hand in ('left','right','both'):
+                with self.subTest(mode=mode,hand=hand),self.assertRaisesRegex(ValueError,'Monster Red'):
+                    validate_task({'prompt_mode':mode,'hand_mode':hand,'left':'Monster Pink','right':'Monster Pink'})
+        for payload in [
+            {'task_name':'Grasp Monster Pink with the left hand.'},
+            {'task_name':'Grasp Monster Pink with the left hand.','left':'Monster Red'},
+            {'task_name':'Custom task','right':' monster pink '},
+        ]:
+            with self.subTest(payload=payload),self.assertRaisesRegex(ValueError,'Monster Red'):
+                validate_task(payload)
     def test_exact_prompts_and_stage_counts_for_all_nine_choices(self):
         expected={
             ('shelf_grasp','left'):('Grasp Tea with the left hand.',1),

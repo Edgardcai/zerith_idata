@@ -45,6 +45,16 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(len(report['targets']['stage_prompts']),total)
             self.assertFalse(Path(report['source_dataset']).exists())
         self.assertEqual(self.request('/api/task/directory',{'prompt_mode':'tabletop','hand_mode':'both','left':'Tea','right':'Coffee','subtask_num':2})[0],400)
+    def test_retired_monster_pink_is_rejected_before_any_session_starts(self):
+        for mode in ('shelf_grasp','tabletop','shelf_place'):
+            base={'prompt_mode':mode,'hand_mode':'both','left':'Monster Blue','right':'Monster Pink'}
+            code,raw=self.request('/api/task/directory',base)
+            self.assertEqual(code,400);self.assertIn('Monster Red',json.loads(raw)['error'])
+            code,raw=self.request('/api/task/directory',{**base,'right':'Monster Red'})
+            self.assertEqual(code,200);report=json.loads(raw)
+            self.assertEqual(report['targets']['right'],'Monster Red')
+            self.assertNotIn('Monster Pink',report['config']['task_name'])
+            self.assertEqual(self.app.collector.phase,'idle')
     def test_directory_groups_include_multiple_sessions_and_filter_details(self):
         first=self.root/'batch_one';second=self.root/'batch_two'
         first.mkdir();second.mkdir()
