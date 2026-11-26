@@ -20,6 +20,11 @@ def measure(root, cfg, cache, progress):
         if fingerprint(root) != before: raise ValueError('传统质检期间原始数据发生变化')
         if refresh:report['refresh_token']=refresh
         write_json(cache / 'raw_report.json', report)
+    from .recorded_task import upgrade_cached
+    updated = upgrade_cached(root, cfg, cache, report)
+    if updated is not report:
+        report = updated
+        write_json(cache / 'raw_report.json', report)
     return report, before
 
 

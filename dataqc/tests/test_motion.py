@@ -57,8 +57,11 @@ def test_gripper_warnings(problem):
     else:
         s[:, 7], a[:, 7] = 0.26, 1.5
     c = gripper_check(s, a, TASK, stages)
-    assert c["status"] == "warn"
-    assert c["detail"]["issues"]
+    expected = 'warn' if problem in ('wrong_stage', 'delayed_feedback') else 'pass'
+    assert c["status"] == expected
+    assert bool(c["detail"]["issues"]) == (expected == 'warn')
+    assert c['detail']['count_grading'] is False
+    assert all('expected_closures' not in v for v in c['detail']['channels'].values())
 
 
 def test_hysteresis_and_short_jitter():

@@ -76,7 +76,7 @@ class Settings(Strict):
     yolo_frame_offset: int = Field(default=40, ge=1, le=120)
     yolo_confidence: float = Field(default=.25, ge=.01, le=1)
     yolo_thresholds_path: str = ''
-    api_model: Literal["gpt-6-astra", "gpt-5.6-terra"] = "gpt-6-astra"
+    api_model: Literal["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-terra"] = "gpt-6.1-sol"
     vlm_enabled: StrictBool = False
     vlm_token_budget: int = Field(default=250000, ge=10000, le=500000)
     max_output_tokens: int = Field(default=8192, ge=500, le=20000)
@@ -305,7 +305,7 @@ def control(rid: str, action: Literal["pause", "resume", "cancel", "retry"]):
                 db.update("episodes", e["id"], status="queued", data=data)
         config = dict(r["config"])
         current = settings()
-        for key in ("api_model", "vision_version", "reasoning_effort", "max_output_tokens", "vlm_token_budget", "yolo_frame_offset", "yolo_confidence", "yolo_thresholds_path"):
+        for key in ("api_model", "api_local_address", "vision_version", "reasoning_effort", "max_output_tokens", "vlm_token_budget", "yolo_frame_offset", "yolo_confidence", "yolo_thresholds_path"):
             config[key] = current[key]
         db.update("runs", rid, status="queued", error="", config=config)
     return need_run(rid)

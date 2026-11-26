@@ -119,7 +119,6 @@ def describe_entry(entry):
     b,e=entry.get('range',[0,d['n']])
     if not 0<=b<e<=d['n']:raise ValueError('导出区间越界')
     task=entry.get('task',d['task'])
-    if not (entry.get('direct') or entry.get('skip_quality_checks')) and not parse_task(task):raise ValueError('导出指令不符合模板')
     return e-b,task
 
 
@@ -134,8 +133,6 @@ def write_episode(payload):
     if not 0 <= b < e <= d["n"]:
         raise ValueError("导出区间越界")
     task = entry.get("task", d["task"])
-    if not (entry.get("direct") or entry.get("skip_quality_checks")) and not parse_task(task):
-        raise ValueError("导出指令不符合模板")
     cols = {
         "observation.state": pa.array(
             d["state"][idx].astype(np.float32).tolist(),
@@ -222,6 +219,8 @@ def write_episode(payload):
         num_frames=n,
         source_hdf5=entry.get("source_hdf5", "") if "source_parquet" in entry else str(hdf5_path(root)),
         source_format=d.get("source_format", "zerith_columnar"),
+        chassis_zero_filled=bool(d.get('attrs', {}).get('chassis_zero_filled', False)),
+        source_recorded_channel_count=d.get('attrs', {}).get('recorded_channel_count', 23),
         source_episode=str(root),
         source_root=str(root),
         source_original=provenance["source"],
@@ -305,15 +304,19 @@ def publish_dataset(temp, out, ep_rows, stat_rows, mapping, tasks, features, glo
         weights = np.array([v["count"][0] for v in values], dtype=float)
         if not len(values):
             continue
-        means = np.array([v["mean"] for v in values])
-        stds = np.array([v["std"] for v in values])
+        # JSON null represents an unavailable statistic (e.g. an unrecorded
+        # action channel). Restore it as NaN before numeric aggregation; object
+        # arrays would attempt None * weight. Keep missing statistics missing,
+        # without zero-filling actions or treating absent commands as samples.
+        means = np.array([v["mean"] for v in values], dtype=float)
+        stds = np.array([v["std"] for v in values], dtype=float)
         mean = np.average(means, axis=0, weights=weights)
         variance = np.average(
             stds**2 + (means - mean) ** 2, axis=0, weights=weights
         )
         aggregate[key] = dict(
-            min=np.min([v["min"] for v in values], axis=0),
-            max=np.max([v["max"] for v in values], axis=0),
+            min=np.min(np.array([v["min"] for v in values], dtype=float), axis=0),
+            max=np.max(np.array([v["max"] for v in values], dtype=float), axis=0),
             mean=mean,
             std=np.sqrt(variance),
             count=[int(weights.sum())],
@@ -484,9 +487,6 @@ def validate_dataset(root, threshold=40, progress=lambda _:None):
         or len({t["task"] for t in tasks}) != len(tasks)
     ):
         issues.append("task 总量或索引不一致")
-    for t in tasks:
-        if not parse_task(normalized_task(t["task"])):
-            warnings.append(dict(check="prompt",reason="提示词句式需要复核，物品名称不限"))
     for k in ["observation.state", "action"]:
         if info.get("features", {}).get(k, {}).get("names") != NAMES:
             issues.append(k + " 维度名称或顺序不符")

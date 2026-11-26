@@ -9,8 +9,10 @@ import numpy as np
 from pydantic import Field
 from . import vision
 from .io import NAMES, clean, load, read_json, write_json
+from .gripper_policy import INSTRUCTION, project_motion
+from . import prompt_policy
 
-VERSION = 'trajectory_review_v3'
+VERSION = 'trajectory_review_v4_counts_prompt_info'
 CRITERIA = ('指标一致性','动作连续性','夹爪配合','阶段完成情况','掉落风险','碰撞风险','抓取失败风险','任务未完成风险')
 
 class Finding(vision.Strict):
@@ -63,7 +65,8 @@ def evidence_payload(d,report):
         coverage=dict(total_frames=n,sampled_frames=indices,all_frames_numerically_checked=True,full_trajectory_sent=False),
         semantics=dict(source_format=d.get('source_format','zerith_columnar'),
             timestamp_policy=d.get('timestamp_policy','recorded'),
-            excluded_checks=['lift_height'],
+            excluded_checks=['lift_height', 'gripper_closure_count', 'prompt'],
+            gripper_closure_counts='informational_only',
             independent_gripper_feedback=d.get('gripper_feedback_available',True),
             source_state_action_policy=d['attrs'].get('state_action_policy',''),
             unobserved=['视频/图像','物体位置与运动','接触力/力矩','碰撞传感器','任务成功传感器']))
@@ -96,6 +99,8 @@ def inspect(root,report,cfg,cache,progress=lambda _:None):
         '只有可由现有数据直接评估的项目才能 pass。掉落、碰撞、实际抓住物体、实际完成任务缺少物体/力/接触证据时用 not_observable，'
         '不得声称它们已被排除，也不因缺少这些传感器而一律判 suspected。'
         '夹爪配合评估可用的指令/反馈；无独立反馈时仅评估指令。阶段完成情况只检查记录覆盖和阶段动作序列，不代表物理任务成功。'
+        + INSTRUCTION +
+        prompt_policy.INSTRUCTION +
         '输出简洁中文：summary不超过80字，每项reason不超过70字。不分 A/B/F，不修改任务、阶段或删帧。') ),
         dict(type='input_text',text=json.dumps(payload,ensure_ascii=False,separators=(',',':')))]
     write_json(cache/'motion_input.json',payload)
@@ -121,4 +126,4 @@ def validated_result(raw,payload,signature,cfg,elapsed):
     result=dict(version=VERSION,signature=signature,model=cfg['api_model'],input_type='metrics_and_trajectory_only',execution='completed',
         status='review' if any(f['status']=='suspected' or (f['criterion'] in CRITERIA[:4] and f['status']!='pass') for f in raw['findings']) else 'pass',
         **raw,evidence=payload['evidence'],coverage=payload['coverage'],semantics=payload['semantics'],elapsed_seconds=elapsed)
-    return result
+    return prompt_policy.project_motion(project_motion(result))

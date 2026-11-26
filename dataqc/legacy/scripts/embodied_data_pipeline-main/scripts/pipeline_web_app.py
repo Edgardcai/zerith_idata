@@ -1695,7 +1695,7 @@ def quality_check_items(cfg: dict[str, Any]) -> list[dict[str, str]]:
     if cfg.get("robot_type") == "zerith":
         return [dict(name=name,criterion=criterion) for name,criterion in [
             ("结构与完整性", "State/Action 各 23 维；数值有限；HDF5、3 路图像与视频逐帧完整"),
-            ("左右夹爪与阶段", "按任务操作手检查次数、阶段和反馈；异常仅预警 B，人工复核"),
+            ("左右夹爪与阶段", "闭合次数仅统计，不参与判级；检查阶段与反馈延迟，异常预警 B 待复核"),
             ("双臂连续性", "时间间隔 > 0.1 s、重复/倒退仅预警 B，显示帧位置和间隔；关节跳变 > 0.8 rad 预警 B，人工复核"),
             ("腰部 / 头部", "pitch/yaw 均值、Q01/Q99 均为 ±0.02 rad，State / Action 超限预警 B"),
             ("静止与标注", "动作指标集中交给 Terra 审查；静止段及缺失阶段需人工确认"),

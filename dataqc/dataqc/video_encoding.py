@@ -63,6 +63,48 @@ def can_copy_video(path):
         return False
 
 
+def encode_full_video(source, target, frames):
+    """Transcode a complete 30 fps camera stream without the Python frame pipe."""
+    import json
+    from pathlib import Path
+    from .io import encode_selection
+
+    def stream(path):
+        result = subprocess.run([
+            'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=r_frame_rate,avg_frame_rate,nb_frames,codec_name,pix_fmt,width,height',
+            '-of', 'json', str(path),
+        ], capture_output=True, text=True, timeout=20, check=True)
+        return json.loads(result.stdout)['streams'][0]
+
+    target = Path(target)
+    try:
+        original = stream(source)
+        if any(original.get(key) != '30/1' for key in ('r_frame_rate', 'avg_frame_rate')):
+            raise ValueError('Uniform 30 fps source stream required')
+        if int(original.get('nb_frames', 0)) != frames:
+            raise ValueError('Full-video frame count does not match')
+        target.parent.mkdir(parents=True, exist_ok=True)
+        args, _ = selected_encoder()
+        command = ['ffmpeg', '-v', 'error', '-nostdin', '-xerror', '-y', '-threads', '2',
+                   '-i', str(source), '-map', '0:v:0', '-an', '-filter_threads', '1',
+                   '-fps_mode', 'passthrough', *args, '-pix_fmt', 'yuv420p',
+                   '-movflags', '+faststart', str(target)]
+        if 'h264_nvenc' in args:
+            with nvenc_slot(_DEVICE.get()):
+                subprocess.run(command, capture_output=True, check=True, timeout=180)
+        else:
+            subprocess.run(command, capture_output=True, check=True, timeout=180)
+        converted = stream(target)
+        if (converted.get('codec_name') != 'h264' or converted.get('pix_fmt') != 'yuv420p'
+                or any(converted.get(key) != original.get(key)
+                       for key in ('nb_frames', 'r_frame_rate', 'avg_frame_rate', 'width', 'height'))):
+            raise ValueError('Converted video does not match the required full stream')
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+        target.unlink(missing_ok=True)
+        encode_selection(source, target, range(frames))
+
+
 @contextmanager
 def nvenc_slot(device='0'):
     """Eight process-safe slots per GPU, also shared across workbench jobs."""

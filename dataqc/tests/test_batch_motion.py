@@ -163,6 +163,52 @@ def test_real_http_usage_counted_once_and_compact_payload(moving_source,cfg,tmp_
     assert set(k for k in compact['evidence'] if k.startswith('check:')) == set(k for k in full['evidence'] if k.startswith('check:'))
 
 
+@pytest.mark.parametrize('stages', [None, [], 'missing'])
+def test_compact_payload_preserves_unmapped_stages_without_fabricating_them(moving_source, cfg, stages):
+    report = raw_checks(moving_source)
+    sequence = next(c for c in report['checks'] if c['key'] == 'gripper_sequence')
+    sequence.update(status='warn')
+    sequence['detail']['issues'] = ['阶段标注缺失或不完整，需补全后核对闭合阶段']
+    if stages == 'missing':
+        sequence['detail'].pop('stages')
+    else:
+        sequence['detail']['stages'] = stages
+    payload, _ = motion_review.prepare(moving_source, report, cfg)
+    original = copy.deepcopy(payload)
+    compact = batch_motion.compact_payload(payload)
+    retained = compact['evidence']['check:gripper_sequence']
+    assert retained['status'] == 'warn'
+    assert retained['detail'] == sequence['detail']
+    assert {'frame:0', 'frame:149'} <= compact['evidence'].keys()
+    assert payload == original
+
+
+def test_four_stage_record_reaches_batch_model_with_unmapped_stage_warning(moving_source, cfg, tmp_path, monkeypatch):
+    import h5py
+
+    with h5py.File(moving_source / 'episode.hdf5', 'a') as f:
+        f.attrs['task_name'] = ('Place the left item, then place the right item. '
+                              'Grasp Milk with the left hand, then grasp Tea with the right hand.')
+        del f['subtask_transitions']
+        f.create_dataset('subtask_transitions', data=[30, 60, 100, 150])
+    items = items_for(moving_source, tmp_path, 2)
+    for item in items:
+        sequence = next(c for c in item['report']['checks'] if c['key'] == 'gripper_sequence')
+        assert sequence['detail']['stages'] is None
+        assert sequence['status'] == 'warn'
+    calls = []
+    def call(content, *args):
+        calls.append(content)
+        return response(content)
+    monkeypatch.setattr(vision, 'call_vlm', call)
+    results = batch_motion.review_many(items, cfg, tmp_path / 'batches')
+    assert len(calls) == 1
+    assert all('result' in outcome and 'error' not in outcome for outcome in results.values())
+    for outcome in results.values():
+        sequence = outcome['result']['evidence']['check:gripper_sequence']
+        assert sequence['status'] == 'warn' and sequence['detail']['stages'] is None
+
+
 def test_pause_keeps_completed_results_for_resume(moving_source,cfg,tmp_path,monkeypatch):
     items=items_for(moving_source,tmp_path,3);calls=[]
     monkeypatch.setattr(vision,'call_vlm',lambda content,*args:calls.append(1) or response(content))

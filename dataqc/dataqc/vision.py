@@ -195,7 +195,12 @@ def _request_vlm(url, key, payload, cfg, progress):
     endpoint = url + ('/responses' if url.endswith('/v1') else '/v1/responses')
     headers = {'Authorization': 'Bearer ' + key}
     # Reuse the connection across retries; backoff never owns a request slot.
-    with httpx.Client(timeout=httpx.Timeout(cfg['api_timeout'], connect=10), trust_env=False) as client:
+    client_options = dict(timeout=httpx.Timeout(cfg['api_timeout'], connect=10), trust_env=False)
+    if cfg.get('api_local_address'):
+        # Source routing can select a working uplink on machines with several NICs.
+        client_options['transport'] = httpx.HTTPTransport(
+            local_address=cfg['api_local_address'], trust_env=False)
+    with httpx.Client(**client_options) as client:
         while True:
             timing = dict(attempt=retry + 1, created=time.time())
             queued = time.monotonic()
@@ -643,12 +648,6 @@ def validate_decision(decision, d, stationary, allow_relabel=False):
         return
     n = d["n"]
     stages = decision["stages"]
-    task = parse_task(decision["corrected_prompt"])
-    if not task:
-        raise ValueError("建议提示词不符合严格模板")
-    if not allow_relabel and decision["corrected_prompt"] != normalized_task(d["task"]):
-        decision["grade"] = "REVIEW"
-        decision["reason"] += "；建议改动商品或操作手，需人工确认"
     if not stages or stages[0]["start"] != 0 or stages[-1]["end"] != n:
         raise ValueError("阶段未完整覆盖记录")
     last = 0
@@ -656,11 +655,8 @@ def validate_decision(decision, d, stationary, allow_relabel=False):
         if (
             st["start"] != last
             or not 0 <= st["start"] < st["end"] <= n
-            or task.get(st["hand"]) != st["item"]
         ):
             raise ValueError("阶段区间或物品不一致")
         last = st["end"]
-    if [s["hand"] for s in stages] != list(task):
-        raise ValueError("阶段手别顺序不符合任务")
     if any(i < 0 or i >= len(stationary) for i in decision["safe_trim_ids"]):
         raise ValueError("非法静止区间引用")

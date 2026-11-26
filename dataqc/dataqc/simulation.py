@@ -64,14 +64,12 @@ def stage_mapping(meta, steps, n, targets):
         if not parsed or len(parsed)!=1:
             return [],['仿真阶段缺少明确的操作手与目标物品标注']
         hand,item=next(iter(parsed.items()))
-        if targets.get(hand)!=item:
-            return [],['仿真阶段目标与整条任务不一致']
         if stages and stages[-1]['hand']==hand:
             stages[-1]['end']=e
         else:
             stages.append(dict(hand=hand,item=item,start=b,end=e))
         cursor=e
-    if cursor!=n or [s['hand'] for s in stages]!=list(targets):
+    if cursor!=n:
         return [],['仿真阶段缺失、顺序不符或未覆盖完整任务']
     return stages,issues
 
@@ -145,11 +143,6 @@ def read(root):
     targets=parse_task(task) or {}
     stages,stage_issues=stage_mapping(meta,steps,n,targets)
     mismatches=[]
-    if meta.get('task') and meta.get('prompt') and task_text(meta['task'])!=task_text(meta['prompt']):
-        mismatches.append(f"任务冲突：task={meta['task']}；prompt={meta['prompt']}")
-    for hand in ('left','right'):
-        if meta.get(hand+'_target') and targets.get(hand)!=meta[hand+'_target']:
-            mismatches.append(f"{'左手' if hand=='left' else '右手'}目标冲突：提示词={targets.get(hand)}；元数据={meta[hand+'_target']}")
     measured=state.copy()
     if locked:measured[:,17:21]=np.asarray(posture)
     return dict(root=root,state=state,action=action,t=t,attrs=attrs,n=n,transitions=[s['end'] for s in stages],

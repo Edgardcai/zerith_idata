@@ -97,6 +97,41 @@ def test_quota_is_not_retried(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+def test_configured_source_address_reaches_gateway(tmp_path, monkeypatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    addresses = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            addresses.append(self.client_address[0])
+            self.rfile.read(int(self.headers['Content-Length']))
+            body = b'{"status":"completed"}'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    monkeypatch.setattr(gateway_queue, 'LOCK_PATH', tmp_path / 'queue.lock')
+    with ThreadingHTTPServer(('127.0.0.1', 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = vision._request_vlm(
+                f'http://127.0.0.1:{server.server_port}/v1', 'fixture', {},
+                dict(api_timeout=2, api_local_address='127.0.0.2', api_rate_limit_retries=0),
+                lambda _: None)
+            assert result.json()['status'] == 'completed'
+            assert addresses == ['127.0.0.2']
+        finally:
+            server.shutdown()
+            thread.join(5)
+
+
 def test_retry_exhaustion_is_explicit(tmp_path, monkeypatch):
     calls = mock_gateway(monkeypatch, tmp_path, [limited(headers={'retry-after': '45'}) for _ in range(3)])
     delays = []

@@ -7,7 +7,7 @@ import numpy as np
 
 from .io import NAMES, clean, normalized_task, parse_task, read_json
 
-RULE_VERSION = "zerith_qc_8"
+RULE_VERSION = "zerith_qc_10_counts_prompt_info"
 EPS = 1e-7  # float32 round-trip tolerance, not a physical tolerance
 STATE_GRIPPER_OPEN_LIMIT = 0.08  # Recorded open feedback can remain near 0.076.
 
@@ -86,9 +86,9 @@ def arm_and_posture_checks(s, a, t):
                 result(
                     f"arm_{source}_{hand}",
                     f"{source.title()} · {'左' if hand == 'left' else '右'}臂连续性",
-                    "warn" if issues else "pass",
+                    "warn" if issues else "pass" if np.isfinite(delta).any() else "na",
                     dict(
-                        max_step_rad=float(delta.max()),
+                        max_step_rad=float(delta[np.isfinite(delta)].max()) if np.isfinite(delta).any() else None,
                         jump_limit_rad=0.8,
                         max_gap_seconds=float(np.diff(t).max()),
                         gap_limit_seconds=0.1,
@@ -102,7 +102,10 @@ def arm_and_posture_checks(s, a, t):
         channels = []
         issues = []
         for col in range(17, 21):
-            v = arr[:, col]
+            v = arr[np.isfinite(arr[:, col]), col]
+            if not len(v):
+                channels.append(dict(joint=NAMES[col], mean_rad=None, q01_rad=None, q99_rad=None, bad_frames=[], status='na'))
+                continue
             mean = float(v.mean())
             q01, q99 = np.quantile(v, [0.01, 0.99]).tolist()
             ok = abs(mean) <= 0.02 + EPS and max(abs(q01), abs(q99)) <= 0.02 + EPS
@@ -112,7 +115,7 @@ def arm_and_posture_checks(s, a, t):
                     mean_rad=mean,
                     q01_rad=q01,
                     q99_rad=q99,
-                    bad_frames=np.flatnonzero(abs(v)>0.02+EPS).tolist(),
+                    bad_frames=np.flatnonzero(abs(arr[:, col])>0.02+EPS).tolist(),
                     status="pass" if ok else "warn",
                 )
             )
@@ -124,7 +127,7 @@ def arm_and_posture_checks(s, a, t):
             result(
                 f"posture_{source}",
                 f"{source.title()} · 腰部 / 头部零位",
-                "warn" if issues else "pass",
+                "warn" if issues else "pass" if any(c['status']!='na' for c in channels) else "na",
                 dict(
                     channels=channels,
                     mean_range_rad=[-0.02, 0.02],
@@ -175,6 +178,11 @@ def closure_events(values, open_limit, close_limit):
     events = []
     pending = None
     for i, value in enumerate(values):
+        if not np.isfinite(value):
+            closed = False
+            armed = False
+            pending = None
+            continue
         target = (
             False if value <= open_limit else True if value >= close_limit else None
         )
@@ -194,10 +202,10 @@ def closure_events(values, open_limit, close_limit):
     return events
 
 
-def gripper_check(s, a, task, transitions, stages=None, feedback_available=True):
+def gripper_check(s, a, task, transitions, stages=None, feedback_available=True, expected_hands=None):
     n = len(s)
     targets = parse_task(normalized_task(task))
-    hands = list(targets) if targets else ["left", "right"]
+    hands = expected_hands if expected_hands is not None else list(targets) if targets else ["left", "right"]
     if stages is None:
         ends = list(transitions)
         if (
@@ -226,20 +234,12 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
     for hand, col in [("left", 7), ("right", 15)]:
         action = closure_events(a[:, col], 0.1, 0.8)
         state = closure_events(s[:, col], STATE_GRIPPER_OPEN_LIMIT, 0.1) if feedback_available else []
-        expected = 1 if hand in hands else 0
         channels[hand] = dict(
             action_close_frames=action,
             state_close_frames=state,
-            expected_closures=expected,
         )
-        for name, events in ([("Action", action), ("State", state)] if feedback_available else [("Action", action)]):
-            if len(events) != expected:
-                issues.append(
-                    f"{'左' if hand == 'left' else '右'}爪 {name} 闭合 {len(events)} 次，应为 {expected} 次"
-                )
-                bad_frames.extend(events)
         # Allow physical feedback up to 0.5 s later (and two frames timestamp skew).
-        if feedback_available and len(action) == len(state) == expected:
+        if feedback_available and len(action) == len(state):
             for ac, sc in zip(action, state):
                 if not -2 <= sc - ac <= 15:
                     issues.append(
@@ -262,10 +262,11 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
             status = "warn"
     return result(
         "gripper_sequence",
-        "夹爪次数 / 阶段 / 反馈",
+        "夹爪阶段 / 反馈",
         status,
         dict(
             channels=channels,
+            count_grading=False,
             stages=stages,
             bad_frames=sorted(set(bad_frames)),
             thresholds=dict(
@@ -276,7 +277,7 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
                 confirm_frames=2,
                 max_response_frames=15,
             ),
-            note="初始已闭合不计作一次闭合；闭合为数值增大，State 接触后不要求达到 0.56",
+            note="闭合次数仅作统计，不限制次数，不参与判级；初始已闭合不计作一次闭合",
         ),
         issues,
     )
@@ -285,7 +286,7 @@ def gripper_check(s, a, task, transitions, stages=None, feedback_available=True)
 def contextual_checks(d, root, stages=None):
     if (
         any(
-            d[k].shape != (d["n"], 23) or not np.isfinite(d[k]).all()
+            d[k].shape != (d["n"], 23) or (not np.isfinite(d[k]).all() and not (k == 'action' and d.get('action_valid') is not None))
             for k in ("state", "action")
         )
         or d["n"] < 2

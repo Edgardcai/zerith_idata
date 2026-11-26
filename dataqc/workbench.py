@@ -34,14 +34,17 @@ def load_legacy():
 @asynccontextmanager
 async def lifespan(app):
     legacy=load_legacy();server=ThreadingHTTPServer(('127.0.0.1',0),legacy.Handler)
+    from integrations.market_ui import build_page
+    market_app.state.workbench_html=build_page(legacy.HTML)
     app.state.legacy=legacy;app.state.legacy_server=server
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     from dataqc.collection_dashboard_api import inventory
     from dataqc.dashboard_sync import RemoteInventory
     dashboard=inventory()
     if isinstance(dashboard,RemoteInventory):dashboard.start()
-    async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{server.server_port}',timeout=None,trust_env=False) as client:
+    async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{server.server_port}',timeout=None,trust_env=False) as client, httpx.AsyncClient(base_url='http://127.0.0.1:8787', timeout=httpx.Timeout(65, connect=3), trust_env=False) as camera_client:
         app.state.client=client
+        app.state.yolo_camera_client=camera_client
         try:yield
         finally:
             if isinstance(dashboard,RemoteInventory):dashboard.stop()
@@ -53,8 +56,12 @@ async def lifespan(app):
 from dataqc.api import app as automatic_app
 app=FastAPI(lifespan=lifespan)
 app.mount('/auto',automatic_app)
+from dataqc.market_api import app as market_app
+app.mount('/market', market_app)
 from dataqc.collection_dashboard_api import router as dashboard_router
 app.include_router(dashboard_router)
+from integrations.yolo_camera import router as yolo_camera_router
+app.include_router(yolo_camera_router)
 
 @app.get('/healthz')
 def health():

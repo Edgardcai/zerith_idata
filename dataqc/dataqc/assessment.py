@@ -20,6 +20,39 @@ def category(root,report,cfg,cache,progress):
     return dict(status=status,enabled=True,hands=reviewed,yolo=gate,evidence=evidence)
 
 
+def decide(report, motion, cat, errors, cfg, task):
+    """Grade measured evidence without loading data or invoking a model."""
+    enabled = cat.get('enabled', False)
+    targets = parse_task(normalized_task(task)) or {}
+    gripper = next((c for c in report['checks'] if c['key'] == 'gripper_sequence'), {})
+    stages = [dict(s, item=targets.get(s['hand'], '')) for s in gripper.get('detail', {}).get('stages') or []]
+    fatal = [c for c in report['checks'] if c['status'] == 'fail' and c['key'] not in ('stationary', 'prompt')]
+    reasons = []
+    if fatal:
+        grade = 'F'; reasons.append(failure_reason(fatal))
+    elif cat['status'] == 'fail':
+        grade = 'REVIEW'; reasons.append('图像模型提示商品或操作手不匹配，默认 B，等待人工复核')
+    elif errors or motion['status'] != 'pass' or cat['status'] not in ('pass', 'skipped'):
+        grade = 'REVIEW'
+        if errors: reasons.extend(('动作复核' if k == 'motion' else '类别复核') + '未完成：' + v for k, v in errors.items())
+        if motion['status'] == 'review': reasons.append('动作指标存在可疑现象，需要人工复核')
+        if cat['status'] == 'review': reasons.append('类别识别未同时满足每手 YOLO 至少2/3及图像 VLM通过')
+    else:
+        grade = 'A'; reasons.append('动作指标分析完成；类别双检通过' if enabled else '动作指标分析完成；类别识别未启用')
+    if grade != 'F':
+        if not stages:
+            grade = 'REVIEW'; reasons.append('阶段标注缺失，需要人工复核')
+        if any(c['key'] == 'stationary' and c['status'] in ('fail', 'warn') for c in report['checks']):
+            grade = 'REVIEW'; reasons.append('超长静止段需要人工复核')
+    references = [c for c in report['checks'] if isinstance(c.get('detail'), dict) and c['detail'].get('requires_review')]
+    if references and grade != 'F':
+        grade = 'REVIEW'; reasons.extend('；'.join(c['detail'].get('issues', [])) for c in references)
+    return warning_grade(dict(grade=grade, reason='；'.join(reasons), corrected_prompt=normalized_task(task),
+        stages=stages, safe_trim_ids=[], findings=[], category_qc=dict(policy=VERSION, enabled=enabled,
+        yolo_enabled=enabled, vlm_enabled=enabled, complete=cat['status'] == 'pass', model=cfg['api_model']),
+        motion_qc=dict(version=motion_review.VERSION, status=motion['status'], input_type='metrics_and_trajectory_only')), report)
+
+
 def inspect(root,report,cfg,cache,progress=lambda _:None,*,motion_outcome=None):
     started=time.perf_counter();cache=Path(cache);cache.mkdir(parents=True,exist_ok=True)
     enabled=cfg.get('vlm_enabled',False);d=load(root)
@@ -47,28 +80,8 @@ def inspect(root,report,cfg,cache,progress=lambda _:None,*,motion_outcome=None):
                 if isinstance(exc,vision.RateLimited):retry_after=max(retry_after,exc.retry_after)
     motion=results.get('motion',dict(status='incomplete',summary=errors.get('motion',''),findings=[]))
     cat=results.get('category',dict(status='incomplete',enabled=enabled,hands=[],yolo=read_json(cache/'category/yolo_match.json') or dict(status='na',hands=[],warnings=[]),evidence={}))
-    targets=parse_task(normalized_task(d['task'])) or {}
-    gripper=next((c for c in report['checks'] if c['key']=='gripper_sequence'),{})
-    stages=[dict(s,item=targets.get(s['hand'],'')) for s in gripper.get('detail',{}).get('stages') or []]
-    fatal=[c for c in report['checks'] if c['status']=='fail' and c['key'] not in ('stationary','prompt')]
-    reasons=[]
-    if fatal:grade='F';reasons.append(failure_reason(fatal))
-    elif cat['status']=='fail':grade='REVIEW';reasons.append('图像模型提示商品或操作手不匹配，默认 B，等待人工复核')
-    elif errors or motion['status']!='pass' or cat['status'] not in ('pass','skipped'):
-        grade='REVIEW'
-        if errors:reasons.extend(('动作复核' if k=='motion' else '类别复核')+'未完成：'+v for k,v in errors.items())
-        if motion['status']=='review':reasons.append('动作指标存在可疑现象，需要人工复核')
-        if cat['status']=='review':reasons.append('类别识别未同时满足每手 YOLO 至少2/3及图像 VLM通过')
-    else:grade='A';reasons.append('动作指标分析完成；类别双检通过' if enabled else '动作指标分析完成；类别识别未启用')
-    if (not targets or not stages or any(c['key']=='stationary' and c['status'] in ('fail','warn') for c in report['checks'])) and grade!='F':
-        grade='REVIEW';reasons.append('任务/阶段标注或超长静止段需要人工复核')
-    references=[c for c in report['checks'] if isinstance(c.get('detail'),dict) and c['detail'].get('requires_review')]
-    if references and grade!='F':
-        grade='REVIEW';reasons.extend('；'.join(c['detail'].get('issues',[])) for c in references)
-    decision=warning_grade(dict(grade=grade,reason='；'.join(reasons),corrected_prompt=normalized_task(d['task']),
-        stages=stages,safe_trim_ids=[],findings=[],category_qc=dict(policy=VERSION,enabled=enabled,
-        yolo_enabled=enabled,vlm_enabled=enabled,complete=cat['status']=='pass',model=cfg['api_model']),
-        motion_qc=dict(version=motion_review.VERSION,status=motion['status'],input_type='metrics_and_trajectory_only')),report)
+    decision=decide(report,motion,cat,errors,cfg,d['task'])
+    grade=decision['grade']
     if decision['grade'] in ('A','B'):vision.validate_decision(decision,d,[])
     result=dict(pipeline='yolo_first',assessment_version=VERSION,rule_version=RULE_VERSION,
         vision_version=cfg.get('vision_version',VERSION),matching_policy=yolo_gate.cache_policy(cfg),model=cfg['api_model'],

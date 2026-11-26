@@ -139,3 +139,18 @@ FFmpeg/ffprobe 使用 `/srv/projects/caizj/agilex_qc_env/bin`。
 切分以当前 LeRobot Parquet、视频和阶段映射为准，不依赖原 HDF5；旧映射缺少阶段时，才尝试从来源 HDF5 补充边界。
 源文件缺失时，可选质检仍检查 LeRobot 的数值和视频，并明确标记来源核对未执行。
 手动处理不会执行质检；单独选择的自动质检流水线保留其显式检查和中断恢复语义。
+
+## 商超页面 1.0.2：全目录统计与按目录转换
+
+进入 `/market/` 后自动汇总所有商超录制目录，不再固定或记住某个源目录。
+数量、等级和可选目录每 5 秒更新；选择质检 / 转换目录不会缩小全局统计范围。
+任务必须明确选择具体目录，仍只处理该目录，沿用原有任务锁和目录身份校验。
+
+部署标签为 `dataqc-market-v1.0.2`。测试通过并提交源代码后，在质检与转换任务空闲时
+运行 `deploy/restart_when_idle.py`，再核对配置的 `browse_scope=all_directories_v1`、
+无 `default_root`，以及页面引用的 `workbench.js?v=5`。部署前后的提交与服务状态
+记录在本机 `runtime/var/market-deployments.jsonl`，原始数据和质检运行记录保持在 Git 外。
+
+## 商超页面 1.1.0：按实际阶段导出
+
+部署标签 `dataqc-market-v1.1.0`，规则 `market_recorded_phases_v2`。先运行商超、工作台、部署回归并提交源码，再通过既有空闲重载流程更新服务。核对 `/market/api/config` 返回新规则，页面引用 `workbench.js?v=6`，回放引用 `replay-bridge.js?v=3`。部署前后提交与验证结果追加至 `runtime/var/market-deployments.jsonl`。旧数据集保持原样，新转换使用新任务目录。

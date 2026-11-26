@@ -1,6 +1,6 @@
 {
   "robot": "zerith",
-  "api_model": "gpt-5.6-terra",
+  "api_model": "gpt-6.1-sol",
   "api_file": "runtime/config/api.txt",
   "vlm_enabled": false,
   "motion_batch_size": 10,

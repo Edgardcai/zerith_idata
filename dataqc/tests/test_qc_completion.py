@@ -12,6 +12,22 @@ from test_grade_choices import grades, requests
 from test_gateway_queue import mock_gateway, limited
 
 
+@pytest.mark.parametrize('action', ['resume', 'retry'])
+def test_existing_run_uses_updated_gateway_source(tmp_path, monkeypatch, action):
+    from dataqc import api
+    monkeypatch.setattr(db, 'DB', tmp_path / 'db.sqlite3')
+    db.init()
+    old = config.settings() | dict(stationary_frames=60)
+    old.pop('api_local_address', None)
+    rid = db.create(str(tmp_path), 'manual', old, [str(tmp_path / 'episode')])
+    db.update('runs', rid, status='paused')
+    monkeypatch.setattr(api, 'settings', lambda: config.settings() | dict(api_local_address='127.0.0.2'))
+    result = api.control(rid, action)
+    assert result['status'] == 'queued'
+    assert result['config']['api_local_address'] == '127.0.0.2'
+    assert result['config']['stationary_frames'] == 60
+
+
 def test_more_than_old_retry_limit_still_finishes(tmp_path,monkeypatch):
     calls=mock_gateway(monkeypatch,tmp_path,[limited() for _ in range(14)]+[httpx.Response(200,json={'status':'completed'})])
     waits=[];monkeypatch.setattr(vision,'wait_seconds',lambda seconds,*a:waits.append(seconds))

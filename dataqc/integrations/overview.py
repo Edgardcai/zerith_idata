@@ -44,6 +44,3 @@ def integrate_overview(app):
     if old_js not in app.HTML:
         raise RuntimeError('Overview finiteNumber integration anchor missing')
     app.HTML = app.HTML.replace(old_js, new_js)
-    app.HTML = app.HTML.replace('          gripperCloseGroupedBarChart(records),', '''          targetValuePieChart(records, "left_gripper_close_events", "左夹爪闭合（标准 1 次）", 1, "次"),
-          targetValuePieChart(records, "right_gripper_close_events", "右夹爪闭合（标准 1 次）", 1, "次"),
-          gripperCloseGroupedBarChart(records),''')

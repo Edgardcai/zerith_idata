@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "unified-dataqc-workbench"
-version = "1.0.0"
+version = "1.1.1"
 description = "Zerith HDF5 quality control, visual annotations and LeRobot conversion"
 requires-python = ">=3.11,<3.12"
 dependencies = [

@@ -1,6 +1,8 @@
 # Local state and credentials
 /runtime/
+/.venv/
 /.venv
+# The release tracks the pinned LeRobot source and its license.
 /.env
 /.env.*
 !/.env.example
@@ -37,3 +39,11 @@ htmlcov/
 .DS_Store
 .vscode/
 .idea/
+
+# Local backups and one-off release exports
+/backups/
+/releases/
+/exports/
+*.old
+*.orig
+*.swp

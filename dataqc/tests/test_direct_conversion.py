@@ -38,7 +38,7 @@ def test_direct_conversion_defers_hard_fail_and_preserves_data(source, tmp_path,
     assert read_json(out/'meta/episode_name_mapping.json')['episodes'][0]['grade']=='A'
 
 
-def test_non_template_prompt_converts_then_fails_qc(source,tmp_path):
+def test_non_template_prompt_converts_without_prompt_qc(source,tmp_path):
     with h5py.File(source/'episode.hdf5','a') as f:
         f.attrs['task_name']='把物品放到桌上'
         del f['subtask_transitions']
@@ -47,7 +47,7 @@ def test_non_template_prompt_converts_then_fails_qc(source,tmp_path):
     assert not (out/'qc_report.json').exists()
     report=validate_dataset(out)
     assert report['passed']
-    assert any(w.get('check')=='prompt' for w in report['warnings'])
+    assert not any(w.get('check')=='prompt' for w in report['warnings'])
 
 
 def test_direct_selection_ignores_reports_and_retains_all_grades(monkeypatch,tmp_path):

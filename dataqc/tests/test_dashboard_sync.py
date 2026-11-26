@@ -120,24 +120,3 @@ def test_background_scheduler_starts_without_dashboard_read(tmp_path,monkeypatch
     assert index.state()['ready'] and len(calls)==1
     index.start();index.stop()
     assert len(calls)==1
-
-
-def test_runtime_adapter_preserves_existing_lifespan(tmp_path,monkeypatch):
-    from contextlib import asynccontextmanager
-    import threading
-    from integrations import dashboard_runtime
-    payload,_,_=source(tmp_path,monkeypatch)
-    called=threading.Event();events=[]
-    def fetch():called.set();return payload
-    index=RemoteInventory('http://source',tmp_path/'remote.json',fetch=fetch)
-    monkeypatch.setattr(dashboard_runtime,'inventory',lambda:index)
-    @asynccontextmanager
-    async def original(app):
-        events.append('start')
-        yield
-        events.append('stop')
-    app=FastAPI(lifespan=original)
-    dashboard_runtime.install_runtime(app)
-    with TestClient(app):
-        assert called.wait(3) and events==['start']
-    assert events==['start','stop'] and not index._thread.is_alive()

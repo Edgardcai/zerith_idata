@@ -1,4 +1,5 @@
 import cv2
+from .depth import depth_integrity
 import h5py
 import numpy as np
 
@@ -8,9 +9,6 @@ from .io import (
     clean,
     gripper_events,
     load,
-    normalized_task,
-    parse_task,
-    prompt_issues,
     stationary_spans,
     video_path,
 )
@@ -26,6 +24,7 @@ LABELS = {
     "state": "State 维度",
     "action": "Action 维度",
     "finite": "数值有效性",
+    "action_coverage": "动作指令观测覆盖",
     "timestamps": "时间戳",
     "fps": "实际帧率",
     "duration": "轨迹时长",
@@ -41,7 +40,7 @@ LABELS = {
 }
 
 
-def numeric_checks(s, a, t, threshold=40):
+def numeric_checks(s, a, t, threshold=40, action_valid=None):
     n = len(s)
     checks = []
 
@@ -88,9 +87,25 @@ def numeric_checks(s, a, t, threshold=40):
         {"shape": a.shape},
         25,
     )
-    finite = all(np.isfinite(v).all() for v in [s, a, t])
-    invalid={key:np.argwhere(~np.isfinite(v)).tolist() for key,v in [('state',s),('action',a),('timestamp',t)]}
-    add("finite", "pass" if finite else "fail", {"finite": bool(finite),"invalid":invalid}, 30)
+    masked = action_valid is not None and action_valid.shape == a.shape and action_valid.dtype.kind == 'b'
+    bad_action = ~np.isfinite(a)
+    if masked:
+        bad_action = (bad_action & action_valid) | np.isinf(a)
+    invalid_arrays = {'state': ~np.isfinite(s), 'action': bad_action, 'timestamp': ~np.isfinite(t)}
+    counts = {key: int(value.sum()) for key, value in invalid_arrays.items()}
+    finite = not any(counts.values())
+    invalid = {key: np.argwhere(value)[:256].tolist() for key, value in invalid_arrays.items()}
+    add("finite", "pass" if finite else "fail", {"finite": bool(finite), "invalid": invalid,
+        "invalid_counts": counts, "positions_limit": 256,
+        "note": "仅有效指令参与数值检查；明确标记为未观测的 NaN 不属于损坏" if masked else "未声明有效位，所有数值必须有限"}, 30)
+    if masked:
+        from .io import NAMES
+        missing = ~action_valid
+        add('action_coverage', 'warn' if missing.any() else 'pass', dict(
+            unknown_values=int(missing.sum()), requires_review=bool(missing.any()),
+            channels=[dict(joint=name, valid_frames=int(action_valid[:, i].sum()), total_frames=n)
+                      for i, name in enumerate(NAMES)],
+            issues=['存在尚未观测到指令的通道；保留缺失值，不以零或反馈补写'] if missing.any() else []))
     if n < 2:
         add("timestamps", "fail", {"frames": n, "minimum": 2}, 25)
     if len(t) != n:
@@ -138,21 +153,23 @@ def numeric_checks(s, a, t, threshold=40):
     )
     checks.extend(arm_and_posture_checks(s, a, t))
     runs = stationary_spans(s, a)
+    stationary_available = bool(np.isfinite(a).all())
     long = [dict(start=b, end=e, frames=e - b) for b, e in runs if e - b > threshold]
     add(
         "stationary",
-        "warn" if long else "pass",
+        "na" if not stationary_available else "warn" if long else "pass",
         {
             "threshold": threshold,
             "max_frames": max([e - b for b, e in runs], default=0),
             "intervals": long,
+            "note": "部分动作未知，不能据此判断全身连续静止" if not stationary_available else "",
         },
         15,
     )
     activity = {
         hand: dict(
             state_range=float(np.ptp(s[:, col])),
-            action_range=float(np.ptp(a[:, col])),
+            action_range=float(np.ptp(a[np.isfinite(a[:, col]), col])) if np.isfinite(a[:, col]).any() else None,
             events=[e for e in gripper_events(a) if e["hand"] == hand],
         )
         for hand, col in [("left", 7), ("right", 15)]
@@ -161,7 +178,7 @@ def numeric_checks(s, a, t, threshold=40):
         "gripper",
         "pass"
         if any(
-            v["state_range"] > 0.05 or v["action_range"] > 0.05
+            v["state_range"] > 0.05 or (v["action_range"] is not None and v["action_range"] > 0.05)
             for v in activity.values()
         )
         else "warn",
@@ -210,13 +227,15 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
     except Exception as e:
         add("schema", "fail", {"error": str(e)}, 35)
         return summary(checks, 0)
+    if d['attrs'].get('chassis_zero_filled'):
+        add('chassis_recording', 'na', {'note': '未采集底盘，23 维中的底盘线速度/角速度按格式补 0；不作为实测静止证据'})
     n = d["n"]
     simulation = bool(d.get("source_format"))
     if simulation:
         from .simulation import numeric
         checks.extend(numeric(d, threshold))
     else:
-        checks.extend(numeric_checks(d["state"], d["action"], d["t"], threshold))
+        checks.extend(numeric_checks(d["state"], d["action"], d["t"], threshold, d.get('action_valid')))
     checks.extend(contextual_checks(d, root))
     if simulation:
         add('schema', 'pass', {'format': d['source_format'], 'frames': n, 'vector_components_checked': True})
@@ -271,20 +290,11 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
                 )
                 if bool(attrs.get("depth_recorded")):
                     dk = f"observation/images/rs/{cam}/depth"
-                    db = []
-                    if dk not in f:
-                        db = ["missing"]
-                    else:
-                        for i, buf in enumerate(f[dk]):
-                            img = cv2.imdecode(
-                                np.asarray(buf, dtype=np.uint8), cv2.IMREAD_UNCHANGED
-                            )
-                            if img is None:
-                                db.append(i)
+                    depth_status, depth_detail = depth_integrity(f.get(dk), n)
                     add(
                         "depth_" + cam,
-                        "fail" if db or dk not in f or len(f[dk]) != n else "pass",
-                        {"bad_frames": db},
+                        depth_status,
+                        depth_detail,
                         30,
                     )
     visual = {}
@@ -329,24 +339,13 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
             3,
         )
     task = d["task"]
-    targets = parse_task(task)
-    norm = normalized_task(task)
     add(
         "prompt",
-        "pass" if targets else "warn",
-        {"original": task, "normalized_candidate": norm if parse_task(norm) else None, "issues": prompt_issues(task)},
-        5,
+        "na",
+        {"original": task, "issues": [], "note": "提示词质检已关闭，原文保留，不参与判级"},
     )
-    mism = list(d.get("metadata_issues", []))
-    ct = d["collection"]
-    ctask = ct.get("config", {}).get("task_name")
-    if ctask and ctask != task:
-        if parse_task(normalized_task(ctask)) != parse_task(normalized_task(task)) or not targets:
-            mism.append(f"任务冲突：HDF5={task}；采集配置={ctask}")
-    if targets:
-        for h, v in ct.get("targets", {}).items():
-            if h in ("left", "right") and v and targets.get(h) != v:
-                mism.append(f"{'左手' if h=='left' else '右手'}目标冲突：提示词={targets.get(h)}；采集配置={v}")
+    from .prompt_policy import METADATA_PREFIXES
+    mism = [v for v in d.get("metadata_issues", []) if not str(v).startswith(METADATA_PREFIXES)]
     add("metadata", "warn" if mism else "pass", {"issues": mism}, 3)
     tr = d["transitions"]
     ends = [int(x) for x in tr if 0 < int(x) <= n]
@@ -384,7 +383,8 @@ def raw_checks(root, threshold=40, progress=lambda _: None):
     report.update(
         task=task, events=gripper_events(d["action"]), transitions=tr, visual=visual
     )
-    return report
+    from .recorded_task import correct
+    return correct(d, report)
 
 
 def summary(checks, n):

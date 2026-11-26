@@ -11,7 +11,8 @@ from .motion import RULE_VERSION
 def policy(cfg):
     from .assessment import VERSION
     from .yolo_gate import cache_policy
-    return dict(rules=RULE_VERSION, assessment=VERSION, category=cache_policy(cfg),
+    from .recorded_task import POLICY
+    return dict(rules=RULE_VERSION, recorded_task_policy=POLICY, assessment=VERSION, category=cache_policy(cfg),
                 model=cfg.get('api_model'), effort=cfg.get('reasoning_effort','none'),
                 stationary=cfg['stationary_frames'])
 

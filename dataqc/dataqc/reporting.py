@@ -67,10 +67,10 @@ def presentation(report):
             continue
         if k=='gripper_sequence':
             for hand,v in d.get('channels',{}).items():
-                expected=v.get('expected_closures');ac=v.get('action_close_frames',[]);sc=v.get('state_close_frames',[])
+                ac=v.get('action_close_frames',[]);sc=v.get('state_close_frames',[])
                 feedback=not any(x.get('key')=='gripper_feedback' and x.get('status')=='na' for x in checks)
-                text=f"指令闭合 {len(ac)} 次，要求 {expected} 次"+(f"；状态闭合 {len(sc)} 次" if feedback else '；无独立物理反馈')
-                add(k,('左' if hand=='left' else '右')+'夹爪闭合次数','warn' if len(ac)!=expected or (feedback and len(sc)!=expected) else 'pass',text,ac+sc,'双手各1次；单手任务非操作手0次')
+                text=f"指令闭合 {len(ac)} 次"+(f"；状态闭合 {len(sc)} 次" if feedback else '；无独立物理反馈')
+                add(k,('左' if hand=='left' else '右')+'夹爪闭合次数','info',text,ac+sc,'仅统计，不限制次数，不参与判级')
             for issue in issues:add(k,label,'review' if status=='warn' else status,issue,frames)
             if not issues:add(k,'夹爪阶段与反馈','pass','闭合位于对应操作阶段'+('，可用反馈延迟正常' if not any(x.get('key')=='gripper_feedback' for x in checks) else '；无独立反馈'),standard='反馈相对指令允许−2～15帧')
             continue
@@ -107,12 +107,14 @@ def presentation(report):
         elif k=='gripper':
             text='；'.join(f"{'左' if hand=='left' else '右'}爪：状态变化幅度 {number(v.get('state_range'))}，指令 {number(v.get('action_range'))}" for hand,v in d.items() if isinstance(v,dict))
             standard='至少一侧变化幅度>0.05'
-        elif k=='prompt':text='原始任务：'+str(d.get('original','未提供'));standard='双手先左后右／单左手／单右手模板'
+        elif k=='prompt':text='提示词质检已关闭；原始任务：'+str(d.get('original','未提供'));standard='不检查句式或文本一致性，不参与判级'
         elif k=='metadata':text='任务与左右手目标一致' if not issues else ''
         elif k=='stages':text=f"阶段结束边界 {d.get('boundaries',[])}；总帧数 {d.get('frames','未提供')}";standard='边界递增，连续覆盖全部帧'
         elif k=='repair_records':text=(f"最长连续补帧/复用 {d.get('maximum_consecutive')} 帧" if status!='na' else '未提供补帧/复用记录');standard='≤2帧'
         elif k.startswith(('video_','hdf5_','depth_')):
             text=(f"已解码 {d.get('decoded_frames')} / {d.get('expected')} 帧" if k.startswith('video_') else f"{'图像缺失' if 'missing' in frames else f'解码异常 {len(frames)} 帧'}；应与轨迹 {n} 帧一致")
+            if k.startswith('depth_') and 'decoded_frames' in d and 'missing' not in frames:
+                text=f"已解码 {d['decoded_frames']} / {d.get('expected_frames', n)} 帧；解码异常 {len(frames)} 帧"
             if status=='na':text=d.get('note','此格式不包含该通道')
         elif k.startswith('quality_'):
             cam=k.removeprefix('quality_');v=raw.get('visual',{}).get(cam,{})
@@ -141,7 +143,7 @@ def presentation(report):
                 reason=f'已检查左右臂状态与指令；最大单步变化 {number(max(steps))} rad，上限0.800 rad' if steps else '轨迹复核未发现额外连续性问题；具体数值见基础检查'
             elif criterion=='夹爪配合':
                 ch=next((c.get('detail',{}).get('channels',{}) for c in checks if c.get('key')=='gripper_sequence'),{})
-                reason='；'.join(f"{'左' if h=='left' else '右'}爪指令闭合{len(v.get('action_close_frames',[]))}次，要求{v.get('expected_closures')}次" for h,v in ch.items()) or reason
+                reason='；'.join(f"{'左' if h=='left' else '右'}爪指令闭合{len(v.get('action_close_frames',[]))}次（仅统计）" for h,v in ch.items()) or reason
             elif criterion=='阶段完成情况':reason='已记录阶段覆盖完整、操作顺序符合任务；不代表实际物理任务成功'
         add('motion_vlm',criterion,status,reason,frames,source=(motion.get('model') or visual.get('model') or 'VLM')+' · 数值与采样轨迹')
     cat=visual.get('category_review') or {};gate=cat.get('yolo') or visual.get('yolo') or {}

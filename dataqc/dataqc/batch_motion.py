@@ -45,7 +45,8 @@ def compact_payload(payload):
     # Preserve sparse chronological anchors, plus close events and boundaries.
     selected = {frames[0]['frame'], frames[-1]['frame']}
     sequence = payload['evidence'].get('check:gripper_sequence', {}).get('detail', {})
-    for stage in sequence.get('stages', []):
+    # Historical reports use JSON null when phases cannot be mapped to hands.
+    for stage in sequence.get('stages') or []:
         for key in ('start', 'end', 'close_frame'):
             if type(stage.get(key)) is int:
                 selected.add(stage[key])
@@ -163,6 +164,8 @@ def _batch(items, cfg, cache, progress):
         '升降柱高度不检查，不得据其目标、取值或偏差判断异常。'
         '传统预警不自动等于动作异常；grading_effect是原分级影响，不能改阈值或覆盖B/F。'
         '夹爪State/Action量纲可能不同，仿真无独立反馈时只评估指令。阶段完成只代表记录顺序，不证明物理成功。'
+        + motion_review.INSTRUCTION +
+        motion_review.prompt_policy.INSTRUCTION +
         '掉落、碰撞、抓取失败、实际任务完成没有物体/接触/成功信号时标not_observable，不能声称排除，不因此判suspected。'
         '具体异常标suspected并引用证据；可由指标确认的项目pass。不得猜测碰撞或编造力数据。'
         '只有审查可测动作确需额外轨迹时needs_detail=true；仅物理风险不可观测不用补充。'
@@ -190,6 +193,10 @@ def _batch(items, cfg, cache, progress):
     by_id = {e['episode_id']: e for e in raw['episodes']}
     outcomes = {}
     for item in items:
+        previous = read_json(item['cache'] / 'motion_report.json')
+        if previous.get('signature') == item['signature'] and previous.get('status') in ('pass', 'review'):
+            outcomes[item['id']] = dict(result=dict(previous, execution='cached'))
+            continue
         compact_reply = by_id[item['wire_id']]
         needs_detail = compact_reply['needs_detail']
         try:
@@ -209,12 +216,13 @@ def _batch(items, cfg, cache, progress):
             reply=dict(summary=compact_reply['summary'],findings=findings)
             result = motion_review.validated_result(reply, item['compact'] | dict(semantics=item['payload']['semantics']),
                                                     item['signature'], cfg, time.perf_counter() - started)
-            if needs_detail:
+            if needs_detail and cfg.get('motion_detail_review', True):
                 progress('补充单条轨迹分析 · ' + item['id'])
                 result = motion_review.inspect(item['root'], item['report'], cfg, item['cache'] / 'detail', progress)
                 if result['signature'] != item['signature']: raise ValueError('补充分析期间数据发生变化')
             if fingerprint(item['root']) != item['fingerprint']: raise ValueError('批量分析期间原始数据发生变化')
-            result.update(batch=dict(id=signature, size=len(items), detail_requested=needs_detail))
+            result.update(batch=dict(id=signature, size=len(items), detail_requested=needs_detail,
+                detail_executed=bool(needs_detail and cfg.get('motion_detail_review', True))))
             write_json(item['cache'] / 'motion_report.json', result)
             outcomes[item['id']] = dict(result=result)
         except Exception as exc:

@@ -143,8 +143,19 @@ def hdf5_path(root):
 
 
 
+def _legacy_unrecorded_base(f, key):
+    """Only adapt explicitly declared 21-channel recordings; never hide damage."""
+    return (key in ('action/base/velocity', 'observation/state/base/velocity')
+            and f.attrs.get('recorded_channel_count') == 21
+            and 'chassis_recorded' in f.attrs and not bool(f.attrs['chassis_recorded'])
+            and 'action/base/velocity' not in f
+            and 'observation/state/base/velocity' not in f)
+
+
 def vectors(f, prefix):
-    parts = {k: np.asarray(f[prefix + "/" + k], dtype=np.float64) for k in PARTS}
+    parts = {k: (np.zeros((len(f[prefix + '/arm/position']), 2), dtype=np.float64)
+                 if _legacy_unrecorded_base(f, prefix + '/' + k)
+                 else np.asarray(f[prefix + '/' + k], dtype=np.float64)) for k in PARTS}
     for k, n in PARTS.items():
         if parts[k].ndim != 2 or parts[k].shape[1] != n:
             raise ValueError(f"{prefix}/{k} 应为 (T,{n})，实际 {parts[k].shape}")
@@ -162,11 +173,39 @@ def load(root):
         state, action = vectors(f, "observation/state"), vectors(f, "action")
         t = np.asarray(f["timestamp/t"], dtype=float) / 1000
         attrs = clean(dict(f.attrs))
+        action_valid = None
+        if attrs.get('recording_source') in ('robot_station_inference', 'robot_station_order'):
+            width = int(attrs.get('recorded_channel_count', 23))
+            node = f.get('timing/action_valid')
+            if width not in (21, 23) or node is None or node.shape != (len(action), width) or node.dtype.kind != 'b':
+                raise ValueError('录制动作有效位缺失或格式错误')
+            mask = np.asarray(node, dtype=bool)
+            recorded = action[:, :width]
+            finite_action = np.isfinite(recorded)
+            if attrs.get('chassis_zero_filled'):
+                modern = attrs.get('recording_schema') == 'collection-compatible-v2'
+                zero_node = f.get('timing/chassis_zero_filled')
+                if modern and (zero_node is None or zero_node.shape != (len(action),) or zero_node.dtype.kind != 'b'):
+                    raise ValueError('底盘补零逐帧标记缺失或格式错误')
+                zero_rows = np.asarray(zero_node, dtype=bool) if modern else np.ones(len(action), dtype=bool)
+                if (width != 23 or (not modern and attrs.get('chassis_recorded', True))
+                        or np.any(action[zero_rows, 21:] != 0) or np.any(mask[zero_rows, 21:])
+                        or (not modern and np.any(state[zero_rows, 21:] != 0))):
+                    raise ValueError('底盘补零声明与数据不一致')
+                finite_action[zero_rows, 21:] = False
+            if np.isinf(recorded).any() or not np.array_equal(finite_action, mask):
+                raise ValueError('动作数值与 action_valid 不一致，或含有 Inf')
+            action_valid = np.zeros(action.shape, dtype=bool)
+            action_valid[:, :width] = mask
+        if _legacy_unrecorded_base(f, 'action/base/velocity'):
+            attrs.update(chassis_zero_filled=True, observed_channel_count=21,
+                         read_channel_count=23, compatibility='legacy21_base_zero_fill')
         trans = np.asarray(f.get("subtask_transitions", []), dtype=int).tolist()
     return dict(
         root=root,
         state=state,
         action=action,
+        action_valid=action_valid,
         t=t,
         attrs=attrs,
         n=len(state),

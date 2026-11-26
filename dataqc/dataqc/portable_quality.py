@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import cv2
-from .io import prompt_issues, CAMS, read_json, hdf5_path, parse_task, normalized_task, open_video
+from .io import CAMS, read_json, hdf5_path, parse_task, normalized_task, open_video
 from .checks import numeric_checks
 from .motion import RULE_VERSION, gripper_check, result
 
@@ -38,7 +38,6 @@ def validate_portable(root,threshold=40,progress=lambda _:None):
             if ep['tasks']!=[task]:raise ValueError('任务映射不一致')
             checks=numeric_checks(s,a,t,threshold)
             parsed=parse_task(normalized_task(task))
-            if not parsed:checks.append(result('prompt','任务文本','warn',{},prompt_issues(task)))
             stages=m.get('stages') or []
             # A hand clip has its own local range; do not reuse the full episode's offsets.
             if m.get('source_lerobot') and parsed and len(parsed)==1:

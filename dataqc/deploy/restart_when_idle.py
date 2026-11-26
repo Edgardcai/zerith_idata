@@ -19,7 +19,13 @@ def get(path):
 
 
 def active_jobs():
-    return ([dict(id=j['id'], kind='collection', status=j['status']) for j in get('/api/jobs')['jobs']
+    from urllib.error import HTTPError
+    try:
+        market_jobs = [dict(id=j['id'],kind='market',status=j['status']) for j in get('/market/api/jobs')['jobs'] if j['status'] in ('queued','running')]
+    except HTTPError as exc:
+        if exc.code != 404: raise
+        market_jobs = []
+    return (market_jobs + [dict(id=j['id'], kind='collection', status=j['status']) for j in get('/api/jobs')['jobs']
              if j['status'] not in ('completed', 'failed', 'stopped')] +
             [dict(id=j['id'], kind='automatic', status=j['status']) for j in get('/auto/api/runs')
              if j['status'] in ('queued', 'running', 'retry_wait')])

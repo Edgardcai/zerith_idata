@@ -146,6 +146,8 @@ def integrate(app):
     app.manual_screening.discover_datasets=discover
     app.manual_screening.find_dataset_group=find
 
+    app.HTML = replace(app.HTML, '<span class="server-pill">', '<a href="/market/" class="server-pill">商超全流程质检</a><span class="server-pill">')
+
     from .compact_review import integrate_compact
     integrate_compact(app)
 
@@ -167,5 +169,10 @@ def integrate(app):
     from .sku_visualization import integrate_sku
     integrate_sku(app)
 
+    from .replay_stages import integrate_stages
+    integrate_stages(app)
+
     from .collection_dashboard import integrate_dashboard
     integrate_dashboard(app)
+    from .yolo_camera import integrate_camera
+    integrate_camera(app)
