@@ -10,11 +10,10 @@ def integrate_layout(app):
     for id,label in [('collectionWorkspaceBtn','① 采集数据质检与转换'),
                      ('lerobotVisualizationWorkspaceBtn','② LeRobot 可视化与人工筛查'),
                      ('lerobotWorkspaceBtn','③ 仿真与真机比较'),
-                     ('manualScreeningWorkspaceBtn','④ plumo筛查')]:
+                     ('manualScreeningWorkspaceBtn','④ 按 SKU 可视化')]:
         nav.append(f'<button id="{id}" class="workspace-btn{" active" if id=="collectionWorkspaceBtn" else ""}" type="button">{label}</button>')
     html=re.sub(r'(<nav class="workspace-switch"[^>]*>).*?(</nav>)',lambda m:m[1]+'\n'+'\n'.join(nav)+'\n'+m[2],html,count=1,flags=re.S)
     html=replace(html,'    setWorkspace("lerobot-visualization");','    setWorkspace("collection");')
-    html=html.replace('title="VLM 自动质检"','title="plumo筛查"')
     html=html.replace('已递归发现 HDF5 数据集，可直接质检或回放。','')
     html=html.replace('任务文本来自当前数据，可编辑。','')
     html=html.replace('按等级生成会覆盖已存在的同名 A/B/C/F LeRobot 等级目录，旧目录不会备份；各等级独立生成，中途失败不会回滚已经完成的等级。确定继续吗？','直接转换全部 HDF5，不执行质检；保留已有等级，未评级单独保存。已有同名输出会备份后更新。确定继续吗？')
@@ -28,7 +27,6 @@ def integrate_layout(app):
     html=html.replace('      optimize.disabled = !isZerith || isSimulation;',
                       '      optimize.disabled = !isZerith;\n      optimize.dataset.stage = "qc";')
     html=html.replace('仿真无需真机 UUID 重编号','仿真 HDF5 质检')
-    html=html.replace('模块③','模块④ plumo筛查')
     css=(Path(__file__).parent/'review_assets/collection.css').read_text()
     html=replace(html,'  </style>',css+'\n  </style>')
     # Grade provenance is visible without opening a dropdown or details panel.

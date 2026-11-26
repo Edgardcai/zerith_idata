@@ -8,7 +8,7 @@ from typing import Literal
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
@@ -475,8 +475,12 @@ app.mount("/assets", StaticFiles(directory=WEB), name="assets")
 @app.get("/review")
 @app.get("/jobs")
 @app.get("/exports")
-@app.get("/settings")
 @app.get("/hdf5")
+def workbench_home():
+    return RedirectResponse("/")
+
+
+@app.get("/settings")
 @app.get("/lerobot")
 @app.get("/compare")
 def index():

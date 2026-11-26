@@ -16,12 +16,7 @@ def integrate(app):
     app.DATA_ROOT = Path(os.environ["DATAQC_HOME"])
     app.HTML = replace(app.HTML, 'LeRobot 数据可视化</button>', '① LeRobot 可视化与人工筛查</button>')
     app.HTML = replace(app.HTML, '采集数据质检与转换</button>', '② 采集数据质检与转换</button>')
-    old = '''      <button id="lerobotWorkspaceBtn" class="workspace-btn" type="button">跨平台 LeRobot 质检</button>
-      <button id="manualScreeningWorkspaceBtn" class="workspace-btn" type="button">数据人工筛查模块</button>'''
-    new = '''      <button id="manualScreeningWorkspaceBtn" class="workspace-btn" type="button">③ VLM 自动质检</button>
-      <button id="lerobotWorkspaceBtn" class="workspace-btn" type="button">④ 仿真与真机比较</button>'''
-    app.HTML = replace(app.HTML, old, new)
-    app.HTML = app.HTML.replace('服务端 9988', '服务端 ' + str(int(os.environ.get('DATAQC_PORT', '9990')))).replace('src="/manual-screening/" title="数据人工筛查模块"', 'src="/auto/hdf5" title="VLM 自动质检"')
+    app.HTML = app.HTML.replace('服务端 9988', '服务端 ' + str(int(os.environ.get('DATAQC_PORT', '9990'))))
     app.HTML = replace(app.HTML, '<span class="server-pill">', '<a href="/auto/settings" target="_blank" class="server-pill">设置</a><span class="server-pill">')
     app.HTML = replace(app.HTML, '<span class="step-badge">先选数据，再执行</span>', '<span class="step-badge">手工执行</span>')
     app.HTML = replace(app.HTML, '    setWorkspace("collection");', '    setWorkspace("lerobot-visualization");')

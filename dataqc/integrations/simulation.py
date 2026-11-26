@@ -41,7 +41,7 @@ def integrate_simulation(app):
     def guard_inplace(old):
         def guarded(cfg,*args,**kwargs):
             if any(is_simulation(p) for p in discover(cfg['hdf5_root'])):
-                raise ValueError('仿真格式不使用真机原地删帧/UUID重编号工具；请在模块③复核静止段，生成派生副本后复检导出')
+                raise ValueError('仿真格式不使用真机原地删帧/UUID重编号工具；请先复核静止段，再对派生副本复检并导出')
             return old(cfg,*args,**kwargs)
         return guarded
     app.repair_commands=guard_inplace(app.repair_commands)
@@ -52,7 +52,7 @@ def integrate_simulation(app):
       optimize.disabled = !isZerith || isSimulation;
       const repair = document.querySelector('button[data-stage="repair"]');
       repair.disabled = isSimulation;
-      repair.title = isSimulation ? "仿真请在模块③复核静止段并生成派生副本" : "选择 episode 剔除静止帧";''')
+      repair.title = isSimulation ? "仿真静止段需复核并生成派生副本" : "选择 episode 剔除静止帧";''')
     app.HTML=replace(app.HTML,'      optimize.title = isZerith ?', '      optimize.title = isSimulation ? "仿真无需真机 UUID 重编号" : isZerith ?')
     # Both source formats use the common HDF5 player and grade APIs.
     old_preflight=app.validate_lerobot_stage_split_grade

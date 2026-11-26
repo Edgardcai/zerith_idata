@@ -1,5 +1,9 @@
 # 数据质检工作台开发者手册
 
+[![数据质检与资产转换架构图](docs/images/dataqc-architecture.png)](docs/images/dataqc-architecture.png)
+
+上图为 2026.09 的架构概览。下文按当前代码说明各模块和判级规则，具体差异见[架构与代码对照](#architecture)。
+
 DataQC 在同一个 Web 工作台处理真机和仿真 HDF5 的扫描、规则质检、模型复核、人工评级、三视角回放、LeRobot 转换及切分。商超录制使用一套按实际录制阶段运行的质检和导出管线。项目在 GitHub `dataqc` 分支的 `dataqc/` 目录，本文所有相对路径均从这里开始，默认 Web 端口为 `9990`。
 
 - [架构图与代码对应关系](#architecture)
@@ -53,7 +57,6 @@ flowchart TD
 | 功能与入口 | 接口、编排与存储 | 前端、渲染或兼容层 |
 |---|---|---|
 | 主工作台 `/` · 真机/仿真切换、扫描、概览、批量任务、静止帧处理、报告、删除 | [`pipeline_web_app.py`](legacy/scripts/embodied_data_pipeline-main/scripts/pipeline_web_app.py) 路由及任务步骤 · [`collection_defaults.py`](integrations/collection_defaults.py) 来源默认值 · [`overview.py`](integrations/overview.py) 概览 · [`batch_collection.py`](integrations/batch_collection.py) 批量预处理 · [`maintenance.py`](dataqc/maintenance.py) 维护操作 | [`legacy_ui.py`](integrations/legacy_ui.py)、[`collection_layout.py`](integrations/collection_layout.py)、[`review_assets/`](integrations/review_assets/)、[`web/raw-grade.js`](web/raw-grade.js)、[`web/qc-report.js`](web/qc-report.js) |
-| plumo 筛查 `/auto/hdf5` · 来源、任务、轮询、暂停/继续/重试、审核、报告 | [`api.py`](dataqc/api.py) 的 `/auto/api/runs`、`/auto/api/episodes/{eid}/review` 等 · [`worker.py`](dataqc/worker.py) `process_run()` · [`db.py`](dataqc/db.py) runs、episodes、audit | [`index.html`](web/index.html)、[`app.js`](web/app.js)、[`viewer.js`](web/viewer.js) |
 | 原始 HDF5 回放 · 三路流、曲线、逐帧数值、阶段、人工等级 | [`pipeline_web_app.py`](legacy/scripts/embodied_data_pipeline-main/scripts/pipeline_web_app.py)、[`replay_icra_episode.py`](legacy/scripts/embodied_data_pipeline-main/mcap_conversion/scripts/replay_icra_episode.py)、[`replay_grades.py`](integrations/replay_grades.py)、[`simulation_replay.py`](integrations/simulation_replay.py) | [`replay_stages.py`](integrations/replay_stages.py)、[`review_assets/replay.css`](integrations/review_assets/replay.css)、[`review_assets/grade-table.js`](integrations/review_assets/grade-table.js) |
 | LeRobot 回放与人工筛查 · 数据集浏览、等级、备注、回放及筛选导出 | `/auto/lerobot` 使用 [`library.py`](dataqc/library.py) · 旧首页 LeRobot 标签使用 [`lerobot_manual_screening.py`](legacy/scripts/embodied_data_pipeline-main/lerobot_manual_screening.py) 及旧 Handler | [`web/library.js`](web/library.js)、[`replay_stages.py`](integrations/replay_stages.py)、[`compact_review.py`](integrations/compact_review.py) · SKU 定向筛选使用 [`sku_visualization.py`](integrations/sku_visualization.py) 与 [`sku_index.py`](dataqc/sku_index.py) |
 | 仿真/真机跨平台对比 | [`library.py`](dataqc/library.py) `compare()` · [`lerobot_cross_platform.py`](legacy/scripts/embodied_data_pipeline-main/lerobot_cross_platform.py) 对齐和比较 · [`integrations/simulation.py`](integrations/simulation.py) 识别和切换仿真入口 | [`lerobot_cross_platform_web.py`](legacy/scripts/embodied_data_pipeline-main/lerobot_cross_platform_web.py)、[`web/library.js`](web/library.js) |

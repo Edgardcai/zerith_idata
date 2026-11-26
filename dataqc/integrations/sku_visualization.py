@@ -12,8 +12,7 @@ def integrate_sku(app):
     from .compact_review import between, asset
     jobs=Searches()
     app.sku_searches=jobs
-    app.HTML=replace(app.HTML,'④ plumo筛查','④ 按 SKU 可视化')
-    app.HTML=replace(app.HTML,'src="/auto/hdf5" title="plumo筛查"','src="/sku-visualization/" title="按 SKU 可视化 LeRobot"')
+    app.HTML=replace(app.HTML,'src="/manual-screening/" title="数据人工筛查模块"','src="/sku-visualization/" title="按 SKU 可视化 LeRobot"')
     app.HTML=replace(app.HTML,'</style>','''#manualScreeningFrame{min-height:0;height:calc(100dvh - 74px)}\n</style>''')
     options=''.join(f'<option value="{escape(p,quote=True)}">{escape(p)}</option>' for p in PRODUCTS)
     toolbar='''<header class="directory-toolbar sku-toolbar">
