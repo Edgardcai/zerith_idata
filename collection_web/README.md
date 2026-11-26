@@ -1,5 +1,7 @@
 # ZERITH 独立采集工作台
 
+机器人 `192.168.10.45` 上，网页项目位于 `/home/robot/collection_web/`，实际入口是 `/home/robot/collection_web/app.py`，服务文件为 `/home/robot/.config/systemd/user/zerith-collection-web.service`。[打开 8090 采集工作台](http://192.168.10.45:8090/)
+
 开发者架构图、接口和现场排查见[仓库 README](../README.md)，各检查的指标见[采集质检与验收指标](../docs/collection-quality.md)。
 
 网站默认运行在 **8090**。项目、进程、页面和数据索引均独立于 `/home/robot/control`，不会调用 8080 API，也不会初始化机器人或发送关节运动指令。

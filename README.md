@@ -2,7 +2,43 @@
 
 # ZERITH H1 PRO 数据采集 · 开发者 README
 
-`Edgardcai/zerith_idata` 的 [`data_collection_new`](https://github.com/Edgardcai/zerith_idata/tree/data_collection_new) 分支在厂商 H1 PRO 1.3.9 的 VR 遥操和录制程序上增加固定姿态、三相机对齐和采集管理。本文按《01_数据采集架构》从 VR 输入、Action/State、采样引擎讲到归档。点击上方架构图可查看原尺寸。代码位置使用仓库相对路径。`/home/robot/...` 是典型部署路径，`<机器人IP>` 使用现场地址。
+## 机器人登录与核心地址
+
+这台采集机器人的内网地址是 **`192.168.10.45`**，SSH 用户为 **`robot`**，端口 **`22`**。在能访问该内网的终端执行 `ssh robot@192.168.10.45`，按提示输入本机交接版 README 中的 SSH 登录密码。采集界面和下游质检都运行在这台机器上。[8090 采集工作台](http://192.168.10.45:8090/) · [9990 DataQC 质检工作台](http://192.168.10.45:9990/)
+
+以下是 **`192.168.10.45` 的实际部署路径**，于 2026 年 11 月 26 日用服务配置、监听端口和进程入口复核。下方的 GitHub 源码链接使用仓库相对路径，可与此表对照。
+
+| 核心模块 | 机器人上的绝对路径 | 查什么 |
+| --- | --- | --- |
+| **8090 采集网页** | `/home/robot/collection_web/`，服务从 `/home/robot/collection_web/start.sh` 进入 `/home/robot/collection_web/app.py` | 用户服务 `zerith-collection-web.service`。提交会话查 `collector.py`，厂商 RPC 查 `protocol.py`，归档和评级查 `episodes.py`。前端入口为 `/home/robot/collection_web/static/index.html`。 |
+| **锁腰、锁头与固定高度** | `/home/robot/teleop_zero_lock/patch/zero_lock.py`、`/home/robot/teleop_zero_lock/patch/pose_config.py`。运行入口 `/home/robot/teleop_zero_lock/runtime/teleop_zero_lock` | 已保存目标在 `/home/robot/teleop_zero_lock/config.json`，运行状态与实测在 `/home/robot/teleop_zero_lock/runtime/status.json`。逐帧验收用 `/home/robot/teleop_zero_lock/tools/analyze_recording.py`。 |
+| **三路相机、采样与写盘** | `/home/robot/collection_depth_toggle/`。运行入口 `/home/robot/collection_depth_toggle/runtime/server_fast` | `timing.py` 负责匹配与拒帧，`rgb_mode.py` 切 RGB/RGB-D，`patch.py` 接入原厂写盘，`audio_cache.py` 缓存阶段提示音。原厂 gRPC 为 `192.168.10.45:50051`。 |
+| **开机启动** | 源文件在 `/home/robot/collection_autostart/`。`robotd.service` 实际调用 `/usr/local/lib/zerith-collection-autostart/direct_boot.py` | 覆盖文件 `/etc/systemd/system/robotd.service.d/collection-direct-boot.conf`。生成脚本 `/run/zerith-collection-autostart/start_all_h1_tmux.sh`，启动诊断 `/run/zerith-collection-autostart/status.json`。 |
+| **原厂进程及 SDK** | `/opt/robot/` 是 `robotd` 内的只读挂载，原厂入口 `server`、`teleop`，控制及状态进程 `Motion_Control`、`SDKService`、`robot_state` | 状态接口 `192.168.10.45:25120`，文件接口 `192.168.10.45:25128`。协议参考 `/home/robot/data_collection/robot.proto`，ZCM 定义 `/home/robot/H1_SDK_1.3.9/robot_SDK/include/ZCM_Data/`，相机 SDK `/home/robot/H1_SDK_1.3.9/camera_sdk_python/`。 |
+| **采集数据、录像和索引** | `/data/zerith_data/` 保存原厂任务目录及按场景整理的 `episode_*`。`/home/robot/collection_web/runtime/` 保存网站索引和会话状态 | 采集索引 `/home/robot/collection_web/runtime/collection.sqlite3`。每条归档内有 `episode.hdf5`、`videos/rs/`、`collection_task.json`、`timing_quality.json` 和 `review.json`。 |
+| **9990 DataQC、复核和导出** | `/home/robot/dataqc/unified-workbench/workbench.py`、`/home/robot/dataqc/unified-workbench/dataqc/worker.py` | 用户服务 `dataqc-web.service`、`dataqc-worker.service`。数值规则 `dataqc/checks.py`，动作与姿态 `dataqc/motion.py`、`dataqc/recorded_task.py`。实际运行目录为 `/home/robot/dataqc/unified-workbench/runtime/`，任务和报告位于其 `var/runs/`，导出位于其 `exports/`。 |
+
+### 源码检出与配套项目
+
+| 项目 | 这台机器上的位置 | 用途 |
+| --- | --- | --- |
+| 采集分支源码检出 | `/home/robot/zerith_idata_datacollection/` | `Edgardcai/zerith_idata` 的 `data_collection_new`。该目录是源码检出，线上 8090 和两个扩展从上表列出的独立目录启动。[采集分支](https://github.com/Edgardcai/zerith_idata/tree/data_collection_new) |
+| 固定 RGB 与快速写入历史源码 | `/home/robot/zerith_idata_datacollection/collection_rgb_only/`、`/home/robot/zerith_idata_datacollection/collection_storage_fast/` | 历史实现和回滚链。当前常驻录制入口为 `collection_depth_toggle/runtime/server_fast`。 |
+| DataQC 分支源码检出 | `/home/robot/dataqc/zerith_idata-release/dataqc/` | 同仓库 `dataqc` 分支在机器人上的源码副本。现场运行版本从 `/home/robot/dataqc/unified-workbench/` 确认。[DataQC 分支](https://github.com/Edgardcai/zerith_idata/tree/dataqc/dataqc) |
+| 8080 H1 SDK 控制与推理录制 | `/home/robot/control/web_control/`，入口 `/home/robot/control/web_control/server.py` | 独立控制台，集中处理 SDK 控制、回放及推理录制。本次核对时 8080 用户服务处于停止状态。源码同一检出下的 `/home/robot/control/h1_sdk_common.py`、`/home/robot/control/read_robot_state.py`、`/home/robot/control/send_robot_command.py` 和 `/home/robot/control/inference_executor.py` 提供 SDK 工具。 |
+| 语音助手与本地语音 | `/home/robot/control/voice_assistant/`、`/home/robot/control/chinese_speech/` | 独立模块。8090 的标定提示由浏览器播报，录制阶段提示音在录制进程侧缓存。 |
+| 现场服务与配置 | 8090 和 9990 的用户服务均在 `/home/robot/.config/systemd/user/`，附属控制工程的配置在 `/home/robot/control/config/`、`/home/robot/control/systemd/` | 以 `systemctl show` 的 `FragmentPath`、`DropInPaths` 和 `WorkingDirectory` 确认实际生效文件。 |
+
+如果 SSH 登录后 `/opt/robot` 显示为空，可通过正在运行的 `robotd` 查看其只读挂载。以下命令在机器人上执行。
+
+```bash
+robotd_pid=$(systemctl show robotd.service -p MainPID --value)
+if [ "$robotd_pid" -gt 0 ]; then
+  sudo ls -l "/proc/$robotd_pid/root/opt/robot/"
+fi
+```
+
+`Edgardcai/zerith_idata` 的 [`data_collection_new`](https://github.com/Edgardcai/zerith_idata/tree/data_collection_new) 分支在厂商 H1 PRO 1.3.9 的 VR 遥操和录制程序上增加固定姿态、三相机对齐和采集管理。本文按《01_数据采集架构》从 VR 输入、Action/State、采样引擎讲到归档。点击上方架构图可查看原尺寸。源码链接使用仓库相对路径。`/home/robot/...` 是 `192.168.10.45` 上的实际部署路径。
 
 **定位问题时先确认是哪条链路。** `collection_web` 决定何时提交任务和归档。`teleop_zero_lock` 决定机器人怎样保持姿态。`collection_depth_toggle` 决定哪些相机帧、状态和命令进入 HDF5。质检的阈值、失败状态、证据和排查入口集中在 [采集质检与验收指标](docs/collection-quality.md)。
 
@@ -20,6 +56,8 @@
 
 ## 阅读索引
 
+- [机器人登录与核心地址](#机器人登录与核心地址)
+- [源码检出与配套项目](#源码检出与配套项目)
 - [系统和端口](#系统和端口)
 - [代码目录与入口](#代码目录与入口)
 - [原厂接口和封装方式](#原厂接口和封装方式)
@@ -51,15 +89,17 @@ flowchart LR
 
 | 地址或通道 | 提供者 / 使用者 | 用途与入口 |
 | --- | --- | --- |
-| `http://<机器人IP>:8090/` | `zerith-collection-web.service` → `/home/robot/collection_web/start.sh` → `app.py` | 提示词、场景、设备检查、会话、固定姿态配置、录像复核。服务模板在 [`collection_web/deploy/`](collection_web/deploy/zerith-collection-web.service)。 |
-| `127.0.0.1:50051` | 机器人上的 `server_fast`。网页 `protocol.py` 连接本机，Quest 连接机器人的对应 gRPC 服务 | `MetaTransfer` 提交录制会话，`DeviceStatusStream` 订阅状态，`VRStream` 传姿态与手柄事件，`ControlVideo` 用于 WebRTC 视频信令。 |
-| `http://127.0.0.1:25120/` | 厂商状态服务 → `DeviceMonitor` | 工作台读取 `/motor`、`/communication_board`、`/system_init`、`/control_mode`、`/battery`。 |
-| `:25128` | 厂商 `server` 自带的 HTTP 文件服务，由录制扩展保留 | 厂商文件接口。8090 的归档和回放由本地文件与 SQLite 实现。 |
+| [采集工作台](http://192.168.10.45:8090/) | `zerith-collection-web.service` → `/home/robot/collection_web/start.sh` → `app.py` | 提示词、场景、设备检查、会话、固定姿态配置、录像复核。服务模板在 [`collection_web/deploy/`](collection_web/deploy/zerith-collection-web.service)。 |
+| `192.168.10.45:50051`（机器内调用 `127.0.0.1:50051`） | 机器人上的 `server_fast`。网页 `protocol.py` 连接本机，Quest 连接机器人的对应 gRPC 服务 | `MetaTransfer` 提交录制会话，`DeviceStatusStream` 订阅状态，`VRStream` 传姿态与手柄事件，`ControlVideo` 用于 WebRTC 视频信令。 |
+| `http://192.168.10.45:25120/`（机器内调用 `127.0.0.1:25120`） | 厂商状态服务 → `DeviceMonitor` | 工作台读取 `/motor`、`/communication_board`、`/system_init`、`/control_mode`、`/battery`。 |
+| `http://192.168.10.45:25128/` | 厂商 `server` 自带的 HTTP 文件服务，由录制扩展保留 | 厂商文件接口。8090 的归档和回放由本地文件与 SQLite 实现。 |
 | ZCM `ipcshm` | 录制进程、遥操进程、厂商控制与状态进程 | 本机共享内存消息。`VRFrame` 传入遥操，`*_control` 携带控制目标，`*_state` 携带实际反馈。网页只通过 `joint_observer` 订阅头腰反馈。 |
-| `http://<服务器IP>:9990/` | 同仓库 [`dataqc` 分支](https://github.com/Edgardcai/zerith_idata/tree/dataqc/dataqc) 的 `workbench.py` 和 worker | 下游 HDF5 质检、批量复核、视频解码、LeRobot 转换。读取已归档数据。 |
-| `:8080` | [`web_control`](web_control/README.md) | 另一套 H1 SDK 控制工具，包含数值控制、机器人动作回放，以及 SDK 推理录制。8090 的三路录像回放只播放媒体。 |
+| [DataQC 工作台](http://192.168.10.45:9990/) | 同仓库 [`dataqc` 分支](https://github.com/Edgardcai/zerith_idata/tree/dataqc/dataqc) 的 `workbench.py` 和 worker | 下游 HDF5 质检、批量复核、视频解码、LeRobot 转换。读取已归档数据。 |
+| `:8080` | [`web_control`](web_control/README.md) | 另一套 H1 SDK 控制工具，包含数值控制、机器人动作回放以及 SDK 推理录制。现场目录 `/home/robot/control/web_control/`，本次核对时 8080 停止。8090 的三路录像回放只播放媒体。 |
 
 ## 代码目录与入口
+
+先确定要读的副本。机器人 `192.168.10.45` 的采集分支检出在 `/home/robot/zerith_idata_datacollection/`，实际进程从[核心部署表](#机器人登录与核心地址)的各自路径启动。
 
 | 工程位置 | 职责 | 从哪里开始读 |
 | --- | --- | --- |
@@ -77,6 +117,8 @@ flowchart LR
 | [`read_robot_state.py`](read_robot_state.py)、[`send_robot_command.py`](send_robot_command.py)、[`h1_sdk_common.py`](h1_sdk_common.py) | H1 SDK 状态与数值控制工具 | [`CORE_GUIDE.md`](CORE_GUIDE.md)、[`CONTROL_README.md`](CONTROL_README.md)、[`H1_ARM_CAMERA_LIDAR_GUIDE.md`](H1_ARM_CAMERA_LIDAR_GUIDE.md)。[`voice_assistant/`](voice_assistant/README.md) 与 [`chinese_speech/`](chinese_speech/README.md) 是独立语音服务。 |
 
 ## 原厂接口和封装方式
+
+在 `192.168.10.45` 上，协议参考为 `/home/robot/data_collection/robot.proto`。录制服务是 `/home/robot/collection_depth_toggle/runtime/server_fast`，提供 `192.168.10.45:50051`。原厂进程位于 `robotd` 内的 `/opt/robot/`。
 
 ### 三条独立的接口链
 
@@ -103,6 +145,8 @@ flowchart LR
 4. [`audio_cache.install()`](collection_depth_toggle/audio_cache.py#L51) 在创建采集器时预生成开始、完成和各阶段提示音，播报时复用音频数组。未缓存的厂商告警仍使用原语音路径。8090 的标定语音由浏览器 `speechSynthesis` 处理，属于另一条链。
 
 ## 固定头腰与升降柱
+
+在 `192.168.10.45` 上先打开 `/home/robot/teleop_zero_lock/patch/zero_lock.py`。控制程序为 `/home/robot/teleop_zero_lock/runtime/teleop_zero_lock`，配置为 `/home/robot/teleop_zero_lock/config.json`，应用与实测查 `/home/robot/teleop_zero_lock/runtime/status.json`。
 
 ### 原厂局部能力与固定姿态任务的差异
 
@@ -138,6 +182,8 @@ flowchart LR
 头部设定是上身坐标系内的关节角。腰 pitch 为 `0.3 rad` 且头 pitch 为 `0` 时，头部会随上身倾斜。**任务表单的 `lift_height` 是高度标签**，只写 `targets`。**姿态面板的 `lift_height_m` 是升降目标**，在 A 初始化阶段应用。进入录制会话时不会重新移动升降柱。界面 `ready` 与厂商 `system_init`、采集 `waiting` 以及标定状态分别表示不同事项，见[固定姿态质检](docs/collection-quality.md#固定姿态验收)。
 
 ## 从网页操作到一条录制
+
+浏览器访问 [192.168.10.45:8090](http://192.168.10.45:8090/)。SSH 登录后，网页与会话的入口分别是 `/home/robot/collection_web/app.py` 和 `/home/robot/collection_web/collector.py`。采样代码从 `/home/robot/collection_depth_toggle/timing.py` 读起。
 
 | 操作 | 调用位置 | 发生的事 |
 | --- | --- | --- |
@@ -178,6 +224,8 @@ flowchart LR
 | `POST /api/episode/rate`、`POST /api/episode/delete` | 保存人工 A/B/F，或确认放弃 | `EpisodeStore.rate()`、`delete()` 及恢复审计。 |
 
 ## 数据结构与归档
+
+在 `192.168.10.45` 上，原始和归档数据都在 `/data/zerith_data/`，8090 的索引为 `/home/robot/collection_web/runtime/collection.sqlite3`，归档与校验入口为 `/home/robot/collection_web/episodes.py`。
 
 ### Action 与 State 的 23 维约定
 
@@ -225,13 +273,16 @@ Action 前缀为 `action/`，State 为 `observation/state/`。State 的底盘反
 
 ## 现场排查
 
+先用 `ssh robot@192.168.10.45` 进入机器人。8090 用户服务、`robotd`、以及 9990 的 `dataqc-web` / `dataqc-worker` 分开查。
+
 这些命令从机器人主机执行。故障定位可以先读进程、状态、日志以及已完成的 episode。
 
 ```bash
 systemctl --user status zerith-collection-web.service --no-pager
 journalctl --user -u zerith-collection-web.service -n 100 --no-pager
 systemctl show robotd.service -p MainPID -p ExecStart -p DropInPaths
-ss -lnt '( sport = :8090 or sport = :50051 or sport = :25120 )'
+systemctl --user show dataqc-web.service dataqc-worker.service -p ActiveState -p WorkingDirectory -p FragmentPath
+ss -lnt '( sport = :8090 or sport = :9990 or sport = :50051 or sport = :25120 or sport = :25128 )'
 curl -fsS 'http://127.0.0.1:8090/api/status?compact=1' | python3 -m json.tool
 python3 -m json.tool /home/robot/teleop_zero_lock/runtime/status.json
 ```

@@ -2,6 +2,8 @@
 
 [返回开发者 README 和架构图](../README.md) · [启动前](#启动前质检) · [在线采样](#在线采样质检) · [落盘前后](#落盘完整性与时序质检) · [姿态](#固定姿态验收) · [人工复核](#人工复核与三路回放) · [下游 DataQC](#下游-dataqc)
 
+机器人 `192.168.10.45` 上，采集侧质检入口为 `/home/robot/collection_web/episodes.py`，采样侧为 `/home/robot/collection_depth_toggle/timing.py`，姿态侧为 `/home/robot/teleop_zero_lock/patch/zero_lock.py`。历史录制放在 `/data/zerith_data/`。9990 的当前进程入口为 `/home/robot/dataqc/unified-workbench/workbench.py` 和 `/home/robot/dataqc/unified-workbench/dataqc/worker.py`。[8090 采集](http://192.168.10.45:8090/) · [9990 DataQC](http://192.168.10.45:9990/)
+
 ## 架构图中的模块和证据
 
 | 架构图区域 | 何时执行 | 失败时的行为 | 开发入口和证据 |

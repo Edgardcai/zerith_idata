@@ -1,5 +1,7 @@
 # 网站可选深度采集（默认关闭）
 
+机器人 `192.168.10.45` 上，源码位于 `/home/robot/collection_depth_toggle/`，常驻程序 `/home/robot/collection_depth_toggle/runtime/server_fast` 提供 `192.168.10.45:50051`。采样逻辑在 `/home/robot/collection_depth_toggle/timing.py`。
+
 模块在采集系统中的位置见[仓库架构图](../README.md)，采样匹配、拒帧和落盘指标见[在线采样质检](../docs/collection-quality.md#在线采样质检)。
 
 已部署并验证三路真实相机关闭 → 开启 → 关闭，最后保持默认 color。
