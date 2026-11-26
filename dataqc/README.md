@@ -1,11 +1,16 @@
 # 数据质检工作台开发者手册
 
+**45 号机器人** · [数据质检工作台](http://192.168.10.45:9990/) · SSH `robot@192.168.10.45`。登录凭据通过内部渠道获取。
+
+**在线项目目录** `/home/robot/dataqc/unified-workbench` · **本机访问** `http://127.0.0.1:9990/`（在机器人上打开）。
+
 [![数据质检与资产转换架构图](docs/images/dataqc-architecture.png)](docs/images/dataqc-architecture.png)
 
 上图为 2026.09 的架构概览。下文按当前代码说明各模块和判级规则，具体差异见[架构与代码对照](#architecture)。
 
 DataQC 在同一个 Web 工作台处理真机和仿真 HDF5 的扫描、规则质检、模型复核、人工评级、三视角回放、LeRobot 转换及切分。商超录制使用一套按实际录制阶段运行的质检和导出管线。项目在 GitHub `dataqc` 分支的 `dataqc/` 目录，本文所有相对路径均从这里开始，默认 Web 端口为 `9990`。
 
+- [45 号机访问与项目目录](#robot45)
 - [架构图与代码对应关系](#architecture)
 - [功能入口与文件导航](#entrypoints)
 - [数据接入与 23 维字段](#input)
@@ -17,6 +22,32 @@ DataQC 在同一个 Web 工作台处理真机和仿真 HDF5 的扫描、规则�
 - [开发环境与部署](#setup)
 - [故障排查](#debug)
 - [二次开发与回归测试](#extend)
+
+<a name="robot45"></a>
+## 45 号机访问与项目目录
+
+从能访问机器人网段的终端登录，进入 Web 和 Worker 的实际工作目录。
+
+```bash
+ssh robot@192.168.10.45
+cd /home/robot/dataqc/unified-workbench
+```
+
+| 用途 | 45 号机上的路径或地址 |
+|---|---|
+| Web 工作台 | 局域网 `http://192.168.10.45:9990/`，机器人本机 `http://127.0.0.1:9990/` |
+| 商超全流程质检、采集看板、模型与质检设置 | 同一端口下的 `/market/`、`/collection-dashboard/`、`/auto/settings` |
+| 在线源码与 Web 启动文件 | `/home/robot/dataqc/unified-workbench/`，入口 `/home/robot/dataqc/unified-workbench/workbench.py` |
+| GitHub 发布检出 | `/home/robot/dataqc/zerith_idata-release/` 的 `dataqc` 分支，质检子项目在 `/home/robot/dataqc/zerith_idata-release/dataqc/`。线上服务从 `unified-workbench` 启动。 |
+| Python 环境 | `/home/robot/dataqc/unified-workbench/.venv/bin/python` |
+| Web 和 Worker 服务文件 | `/home/robot/.config/systemd/user/dataqc-web.service`、`/home/robot/.config/systemd/user/dataqc-worker.service` |
+| 运行目录和设置 | `/home/robot/dataqc/unified-workbench/runtime/`，设置文件在 `/home/robot/dataqc/unified-workbench/runtime/config/settings.json`。API 文件位置由 `api_file` 设置。 |
+| 任务、报告和人工等级 | `/home/robot/dataqc/unified-workbench/runtime/var/`，其中 `db/dataqc.sqlite3`、`runs/`、`manual/`、`grade-selections/`、`market-qc/` 分别存放任务库、自动任务产物、普通质检缓存、人工等级和商超状态。 |
+| 工作台内部导出与 LeRobot 人工筛查 | `/home/robot/dataqc/unified-workbench/runtime/exports/`、`/home/robot/dataqc/unified-workbench/runtime/manual-screening/`。普通真机的分级转换目录另见 `/data/zerith_data/lerobot/`。 |
+| 真机、仿真和采集计划来源 | `/data/zerith_data/`、`/data/sim_data/`、`/data/plan/` |
+| 商超主录制和导出 | `/home/robot/workspace/robot_station/data/market_recordings/`、`/home/robot/workspace/robot_station/data/lerobot/` |
+| 商超附加录制 | `/home/robot/workspace/robot_station_refactor/data/market_recordings/`，通过 Web 服务的 `DATAQC_MARKET_EXTRA_ROOTS` 加载。 |
+| 本机相机页与 YOLO 推理服务 | 相机页源码 `/data/yolo-camera-studio/`，对应 `127.0.0.1:8787`。推理服务工作目录 `/data/yolo/sku71_service_20261014/`，对应 `127.0.0.1:7881`。 |
 
 <a name="architecture"></a>
 ## 1. 架构图与代码对应关系
@@ -51,6 +82,19 @@ flowchart TD
 
 <a name="entrypoints"></a>
 ## 2. 功能入口与文件导航
+
+**45 号机核心代码位置** · 以下路径均为 `robot@192.168.10.45` 上的绝对路径。
+
+| 核心功能 | 服务器路径 |
+|---|---|
+| Web 总入口 | `/home/robot/dataqc/unified-workbench/workbench.py` |
+| 真机与仿真接入 | `/home/robot/dataqc/unified-workbench/dataqc/io.py`、`/home/robot/dataqc/unified-workbench/dataqc/simulation.py` |
+| 数值、轨迹、图像、夹爪规则 | `/home/robot/dataqc/unified-workbench/dataqc/checks.py`、`/home/robot/dataqc/unified-workbench/dataqc/motion.py`、`/home/robot/dataqc/unified-workbench/dataqc/depth.py` |
+| 动作复核、类别双检和判级 | `/home/robot/dataqc/unified-workbench/dataqc/assessment.py`、`/home/robot/dataqc/unified-workbench/dataqc/motion_review.py`、`/home/robot/dataqc/unified-workbench/dataqc/yolo_gate.py`、`/home/robot/dataqc/unified-workbench/dataqc/grade_policy.py` |
+| 商超接口、阶段质检及分级导出 | `/home/robot/dataqc/unified-workbench/dataqc/market_api.py`、`/home/robot/dataqc/unified-workbench/dataqc/market.py`、`/home/robot/dataqc/unified-workbench/dataqc/market_job.py` |
+| 普通转换、切分和后台任务 | `/home/robot/dataqc/unified-workbench/dataqc/export.py`、`/home/robot/dataqc/unified-workbench/dataqc/direct_export.py`、`/home/robot/dataqc/unified-workbench/dataqc/worker.py` |
+| 首页、看板与回放 | `/home/robot/dataqc/unified-workbench/web/`、`/home/robot/dataqc/unified-workbench/integrations/`、`/home/robot/dataqc/unified-workbench/legacy/` |
+| 部署脚本、测试和工程文档 | `/home/robot/dataqc/unified-workbench/deploy/`、`/home/robot/dataqc/unified-workbench/tests/`、`/home/robot/dataqc/unified-workbench/docs/` |
 
 [`workbench.py`](workbench.py) 是组合入口。FastAPI 挂载 `/auto` 和 `/market`，直接注册采集看板、YOLO 和 `/healthz`，其余请求由 `legacy_proxy()` 转入进程内临时端口的 Python HTTP Server。`load_legacy()` 装入 `pipeline_web_app.py`，再由 `integrations/legacy_ui.py` 按顺序接入兼容模块。修改普通首页前先确认页面来自旧 Handler 的 HTML 还是 `web/` 静态页面。独立 Worker 负责 `/auto` 数据库任务，商超与旧首页批量流程各有自己的执行入口。
 

@@ -1,9 +1,14 @@
 # 数据质检与资产转换
 
+**45 号机器人** · [数据质检工作台](http://192.168.10.45:9990/) · SSH `robot@192.168.10.45`。登录凭据通过内部渠道获取。
+
+**在线项目目录** `/home/robot/dataqc/unified-workbench` · **本机访问** `http://127.0.0.1:9990/`（在机器人上打开）。
+
 [![数据质检与资产转换架构图](dataqc/docs/images/dataqc-architecture.png)](dataqc/docs/images/dataqc-architecture.png)
 
 从 HDF5 数据接入，经规则质检、模型复核和人工评级，生成可回放、可切分的 LeRobot 数据集。图下的开发者手册按当前版本说明每条处理链路。
 
+- [45 号机项目、配置与数据目录](dataqc/README.md#robot45)
 - [开发者手册](dataqc/README.md)
 - [功能入口与源码导航](dataqc/README.md#entrypoints)
 - [质检指标与阈值](dataqc/README.md#rules)
