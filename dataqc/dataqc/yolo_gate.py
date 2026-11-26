@@ -9,7 +9,7 @@ from typing import Literal
 
 from .io import frame, load, normalized_task, parse_task, read_json, sha, write_json
 from .motion import RULE_VERSION, warning_grade
-from . import vision
+from . import head_yolo, vision
 
 VERSION = 'motion_category_v5'
 _MODELS = {}
@@ -20,6 +20,7 @@ def cache_policy(cfg):
         return dict(grade_policy='motion_category_v5', motion_policy='trajectory_review_v3', vlm_enabled=False)
     return dict(grade_policy='motion_category_v5', motion_policy='trajectory_review_v3', vlm_enabled=cfg.get('vlm_enabled', False),
                 confidence=cfg.get('yolo_confidence', .25), frame_offset=cfg.get('yolo_frame_offset', 40),
+                **({'head_model_hash': head_yolo.model_hash(cfg)} if cfg.get('head_yolo_path') else {}),
                 model_hash=sha(cfg['yolo_path']),
                 thresholds_hash=sha(cfg['yolo_thresholds_path']) if cfg.get('yolo_thresholds_path') else '')
 
@@ -113,7 +114,9 @@ def yolo_match(root, report, cfg, cache, progress=lambda _: None):
             samples.append(dict(hand=hand, expected=expected, moment=moment,
                                 camera=f'cam_{hand}_wrist', frame=max(0, min(d['n']-1, value))))
     digest, thresholds = model_config(cfg)
+    head_hash = head_yolo.model_hash(cfg) if cfg.get('head_yolo_path') else None
     signature = hashlib.sha256(json.dumps(dict(version=VERSION, model=digest, samples=samples,
+                                 **({'head_model': head_hash} if head_hash else {}),
                                  confidence=cfg.get('yolo_confidence', .25), thresholds=thresholds), sort_keys=True).encode()).hexdigest()
     cached = read_json(Path(cache) / 'yolo_match.json')
     if cached.get('signature') == signature:
@@ -129,6 +132,8 @@ def yolo_match(root, report, cfg, cache, progress=lambda _: None):
                   hands=hands, warnings=warnings, classes=classes, model_hash=digest,
                   model_path=cfg['yolo_path'], frame_offset=offset, confidence=cfg.get('yolo_confidence', .25),
                   elapsed_seconds=time.perf_counter()-started)
+    if head_hash:
+        result['head_context'] = head_yolo.observe(root, [s['frame'] for s in samples], cfg, head_hash)
     write_json(Path(cache) / 'yolo_match.json', result)
     return result
 
@@ -157,6 +162,12 @@ def review_warnings(root, gate, cfg, cache, evidence, progress, all_hands=False)
         + json.dumps([dict(hand=h['hand'],expected=h['expected'],warning=h['reason'],
                            moments=[dict(moment=m['moment'],frame=m['frame'],camera=m['camera'],detections=m['detections'])
                                     for m in h['moments']]) for h in warned], ensure_ascii=False))]
+    if gate.get('head_context'):
+        # Head detections describe the scene. Hand attribution still uses each wrist.
+        by_frame = [{'frame': m['frame'], 'products': sorted({d['name'] for d in m['detections']})}
+                    for m in gate['head_context']['frames']]
+        content.append(dict(type='input_text', text='头部相机检测到的场景商品，仅辅助定位：' +
+                            json.dumps(by_frame, ensure_ascii=False)))
     sent = set()
     for hand in warned:
         for moment in hand['moments']:

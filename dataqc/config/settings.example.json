@@ -7,6 +7,8 @@
   "motion_batch_concurrency": 2,
   "stationary_frames": 40,
   "yolo_path": "runtime/models/products.pt",
+  "head_yolo_path": "",
+  "head_yolo_sha256": "",
   "yolo_thresholds_path": "",
   "device": "0",
   "export_grades": ["A", "B"]

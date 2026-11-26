@@ -1,8 +1,20 @@
 # 数据质检工作台开发者手册
 
-**45 号机器人** · [数据质检工作台](http://192.168.10.45:9990/) · SSH `robot@192.168.10.45`。登录凭据通过内部渠道获取。
+**机器人工作台与 SSH** · [45 号工作台](http://192.168.10.45:9990/)（`robot@192.168.10.45`） · [46 号工作台](http://192.168.10.46:9990/)（`robot@192.168.10.46`）。登录凭据通过内部渠道获取。
 
-**在线项目目录** `/home/robot/dataqc/unified-workbench` · **本机访问** `http://127.0.0.1:9990/`（在机器人上打开）。
+**两台机器各自的在线项目目录** · `/home/robot/dataqc/unified-workbench`。在机器人本机打开 `http://127.0.0.1:9990/`。
+
+**45、46 号机各自在本机加载以下 YOLO 权重**（2026-11-26 核对，两机绝对路径相同）。
+
+- **头部相机** · `head_yolo_path` · `/home/robot/dataqc/yolo/yolo26m_head_104sku_20261122_focus4_row_best.pt`
+- **左右腕相机** · `yolo_path` · `/home/robot/workspace/robot_station/yolo/yolo26m_wrist_104sku_20261120_itoen_ginger_r_best.pt`
+
+**VLM 网关** · 两机均从工作台向 `http://192.168.1.244:8000` 发起请求。
+
+- **45 号机** · 模型 `gpt-6.1-sol`，API 配置文件 `/home/robot/api.txt`。
+- **46 号机** · 模型 `gpt-6-astra`，API 配置文件 `/home/robot/dataqc/robot46-secrets/api.txt`。
+
+[更换 VLM 网关、端口、密钥或模型及验证方法](#vlm-config)
 
 [![数据质检与资产转换架构图](docs/images/dataqc-architecture.png)](docs/images/dataqc-architecture.png)
 
@@ -223,9 +235,46 @@ flowchart TD
 3. 图像模型逐手核对腕相机与同帧头部相机，即使 YOLO 通过也会复核。证据约束到对应手和采样帧，遮挡或证据不足留待人工。只有每手两种检查均通过，类别分支才为 `pass`。明确商品或操作手不匹配进入待复核。
 4. 排查时查看 `category/yolo_match.json` 的 `hands`、`moments`、`matched_count`、`supported`、`model_hash`，再看 `visual_report.json` 的 `category_review`、`hand_checks` 和 `errors`。配置改变后核对权重和阈值文件的指纹。
 
+头部 104 类模型在 `cam_high` 原始画面上按去重后的关键帧推理（`imgsz=960`、IoU `0.45`）。报告的 `head_context.frames` 保存各帧的商品名、置信度和边框，`head_context.model_hash` 标识权重版本。腕部匹配仍按每只手计算，头部检测为图像复核提供场景参考。要单独验证头部权重，可访问 `GET /auto/api/hdf5/head-yolo?root=<episode绝对路径>&index=<从0开始的帧号>`，此接口可独立于批量类别开关运行。更换权重时，在本机设置文件中更新 `head_yolo_path` 和对应的 `head_yolo_sha256`。用 `sha256sum` 核对新文件，再以单帧结果的 `model_hash` 确认实际版本。[头部推理实现](dataqc/head_yolo.py)
+
 [类别流程](dataqc/yolo_gate.py) · [商品词表归一化及阈值格式](legacy/scripts/embodied_data_pipeline-main/lerobot_manual_screening_yolo.py) · [回归用例](tests/test_yolo_gate.py)
 
-### 5.3 网关、缓存与限流恢复
+<a name="vlm-config"></a>
+### 5.3 更换 VLM API 配置、端口与模型
+
+两台机器的 DataQC 设置文件均为 `/home/robot/dataqc/unified-workbench/runtime/config/settings.json`。其中 `api_file` 指向本页开头列出的本机 API 文件，`api_model` 选择请求使用的模型。配置读取和请求拼接分别见 [配置读取](dataqc/config.py) 和 [VLM 客户端](dataqc/vision.py)。
+
+1. **换网关、端口或密钥**。在目标机器人上编辑对应的 API 文件。`base_url` 填网关根地址或带 `/v1` 的前缀，`OPENAI_API_KEY` 填新密钥。实际调用使用 Bearer 鉴权。示例格式如下。
+
+   ```ini
+   base_url="http://192.168.1.244:8000"
+   OPENAI_API_KEY="REPLACE_WITH_YOUR_API_KEY"
+   ```
+
+2. **核对端口和出站网卡**。浏览器连接机器人 TCP `9990`，DataQC 再连接网关 TCP `8000`，当前首选请求地址为 `POST http://192.168.1.244:8000/v1/responses`。若根地址未带 `/v1` 且网关对首选路径返回 404，客户端再尝试 `/responses`。45 号机的 `api_local_address` 绑定 `192.168.10.45`，46 号机使用系统路由。更换网络时在各机设置文件中核对这个字段。
+3. **换模型**。在目标机器的 `/auto/settings` 选择 VLM 模型并保存，然后新建任务验证。`settings.json` 中的 `api_model` 优先于 API 文件中的 `model`。若要让页面支持新的模型 ID，同时更新后端 `Settings.api_model` 的允许值和前端 `renderSettings()` 的选项。45 当前支持 `gpt-6.1-sol`、`gpt-6-astra`、`gpt-5.6-terra`，46 当前部署支持后两项。[设置 API](dataqc/api.py) · [设置页面](web/app.js)
+4. **验证配置和连通性**。在目标机器人进入在线项目目录后运行下列命令。第一条显示工作台读取到的模型和配置状态，第二条使用应用的出站地址实测 TCP 连接。最后用一条测试录制发起模型复核，以成功返回的报告确认鉴权、模型 ID 和响应格式。遇到 401/403 时核对密钥和模型权限，连接超时时核对网关端口、路由和源地址。
+
+   ```bash
+   cd /home/robot/dataqc/unified-workbench
+   curl -fsS http://127.0.0.1:9990/auto/api/settings | .venv/bin/python -c 'import json,sys; c=json.load(sys.stdin); print(c["api_model"], c["api_configured"])'
+   .venv/bin/python - <<'PY'
+   import socket
+   from urllib.parse import urlsplit
+   from dataqc.config import settings, api_config
+
+   cfg = settings()
+   url, model, _ = api_config(cfg)
+   dst = urlsplit(url)
+   port = dst.port or (443 if dst.scheme == 'https' else 80)
+   src = cfg.get('api_local_address')
+   with socket.create_connection((dst.hostname, port), timeout=5,
+                                 source_address=(src, 0) if src else None):
+       print(f'{model} · {dst.hostname}:{port} · TCP OK')
+   PY
+   ```
+
+### 5.4 网关、缓存与限流恢复
 
 | 行为 | 默认值与实现 |
 |---|---|

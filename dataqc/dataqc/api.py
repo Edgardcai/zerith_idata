@@ -494,6 +494,25 @@ def raw_root(value):
     return root
 
 
+@app.get("/api/hdf5/head-yolo", summary="检测录制片段中指定帧的头部相机商品")
+def raw_head_yolo(root: str, index: int = 0):
+    from . import head_yolo
+    path = raw_root(root)
+    if index < 0:
+        raise HTTPException(422, '帧号须从 0 开始')
+    cfg = settings()
+    if not cfg.get('head_yolo_path'):
+        raise HTTPException(503, '尚未配置头部 YOLO 权重')
+    try:
+        digest = head_yolo.model_hash(cfg)
+    except (OSError, ValueError) as exc:
+        raise HTTPException(503, str(exc)) from exc
+    try:
+        return head_yolo.observe(path, [index], cfg, digest)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/hdf5/episodes")
 def raw_episodes(root:str):
     path=Path(root).expanduser().resolve()

@@ -140,3 +140,27 @@ def test_policy_switch_preserves_manual_and_numeric_reports(tmp_path,monkeypatch
     assert 'visual'not in db.episode(a['id'])['data']
     assert db.episode(b['id'])['data']['manual_decision']=={'grade':'B'}
     assert db.get_run(rid)['status']=='paused'
+
+
+def test_head_scene_detections_do_not_pass_wrist_matching(moving_source, cfg, tmp_path, monkeypatch):
+    head_weights = tmp_path / 'head.pt'
+    head_weights.write_bytes(b'head-v1')
+    cfg = cfg | {'head_yolo_path': str(head_weights)}
+    monkeypatch.setattr(gate, 'predict_samples', detector(warn=['left']))
+
+    def observe(root, indices, cfg, digest):
+        frames = [{'frame': i, 'detections': [{'name': 'Milk'}]} for i in dict.fromkeys(indices)]
+        return {'camera': 'cam_high', 'model_hash': digest, 'frames': frames}
+
+    monkeypatch.setattr(gate.head_yolo, 'observe', observe)
+    report = raw_checks(moving_source)
+    first = gate.yolo_match(moving_source, report, cfg, tmp_path)
+    left = next(h for h in first['hands'] if h['hand'] == 'left')
+    assert first['status'] == 'warn' and left['matched_count'] == 0
+    assert first['head_context']['model_hash'] == gate.cache_policy(cfg)['head_model_hash']
+
+    head_weights.write_bytes(b'head-v2')
+    second = gate.yolo_match(moving_source, report, cfg, tmp_path)
+    assert first['signature'] != second['signature']
+    assert first['head_context']['model_hash'] != second['head_context']['model_hash']
+    assert first['model_hash'] == second['model_hash']
