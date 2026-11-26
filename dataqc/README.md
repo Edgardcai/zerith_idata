@@ -26,28 +26,51 @@ DataQC 在同一个 Web 工作台处理真机和仿真 HDF5 的扫描、规则�
 <a name="robot45"></a>
 ## 45 号机访问与项目目录
 
-从能访问机器人网段的终端登录，进入 Web 和 Worker 的实际工作目录。
+在机器人局域网内执行 `ssh robot@192.168.10.45` 登录，再执行 `cd /home/robot/dataqc/unified-workbench` 进入 Web 和 Worker 的工作目录。
 
-```bash
-ssh robot@192.168.10.45
-cd /home/robot/dataqc/unified-workbench
-```
+### 工作台入口
 
-| 用途 | 45 号机上的路径或地址 |
-|---|---|
-| Web 工作台 | 局域网 `http://192.168.10.45:9990/`，机器人本机 `http://127.0.0.1:9990/` |
-| 商超全流程质检、采集看板、模型与质检设置 | 同一端口下的 `/market/`、`/collection-dashboard/`、`/auto/settings` |
-| 在线源码与 Web 启动文件 | `/home/robot/dataqc/unified-workbench/`，入口 `/home/robot/dataqc/unified-workbench/workbench.py` |
-| GitHub 发布检出 | `/home/robot/dataqc/zerith_idata-release/` 的 `dataqc` 分支，质检子项目在 `/home/robot/dataqc/zerith_idata-release/dataqc/`。线上服务从 `unified-workbench` 启动。 |
-| Python 环境 | `/home/robot/dataqc/unified-workbench/.venv/bin/python` |
-| Web 和 Worker 服务文件 | `/home/robot/.config/systemd/user/dataqc-web.service`、`/home/robot/.config/systemd/user/dataqc-worker.service` |
-| 运行目录和设置 | `/home/robot/dataqc/unified-workbench/runtime/`，设置文件在 `/home/robot/dataqc/unified-workbench/runtime/config/settings.json`。API 文件位置由 `api_file` 设置。 |
-| 任务、报告和人工等级 | `/home/robot/dataqc/unified-workbench/runtime/var/`，其中 `db/dataqc.sqlite3`、`runs/`、`manual/`、`grade-selections/`、`market-qc/` 分别存放任务库、自动任务产物、普通质检缓存、人工等级和商超状态。 |
-| 工作台内部导出与 LeRobot 人工筛查 | `/home/robot/dataqc/unified-workbench/runtime/exports/`、`/home/robot/dataqc/unified-workbench/runtime/manual-screening/`。普通真机的分级转换目录另见 `/data/zerith_data/lerobot/`。 |
-| 真机、仿真和采集计划来源 | `/data/zerith_data/`、`/data/sim_data/`、`/data/plan/` |
-| 商超主录制和导出 | `/home/robot/workspace/robot_station/data/market_recordings/`、`/home/robot/workspace/robot_station/data/lerobot/` |
-| 商超附加录制 | `/home/robot/workspace/robot_station_refactor/data/market_recordings/`，通过 Web 服务的 `DATAQC_MARKET_EXTRA_ROOTS` 加载。 |
-| 本机相机页与 YOLO 推理服务 | 相机页源码 `/data/yolo-camera-studio/`，对应 `127.0.0.1:8787`。推理服务工作目录 `/data/yolo/sku71_service_20261014/`，对应 `127.0.0.1:7881`。 |
+- **局域网访问** · `http://192.168.10.45:9990/`
+- **机器人本机访问** · `http://127.0.0.1:9990/`
+- **同一端口的业务页面** · 商超全流程质检 `/market/`，采集看板 `/collection-dashboard/`，模型与质检设置 `/auto/settings`。
+
+### 源码与服务
+
+- **在线源码** · `/home/robot/dataqc/unified-workbench/`
+- **Web 启动文件** · `/home/robot/dataqc/unified-workbench/workbench.py`
+- **Python 解释器** · `/home/robot/dataqc/unified-workbench/.venv/bin/python`
+- **GitHub 发布检出** · `/home/robot/dataqc/zerith_idata-release/`，分支为 `dataqc`。
+- **发布检出中的质检源码** · `/home/robot/dataqc/zerith_idata-release/dataqc/`
+- **Web 服务文件** · `/home/robot/.config/systemd/user/dataqc-web.service`
+- **Worker 服务文件** · `/home/robot/.config/systemd/user/dataqc-worker.service`
+
+### 配置、任务与报告
+
+- **运行目录** · `/home/robot/dataqc/unified-workbench/runtime/`
+- **工作台设置** · `/home/robot/dataqc/unified-workbench/runtime/config/settings.json`，其中 `api_file` 指定 API 文件位置。
+- **任务与报告根目录** · `/home/robot/dataqc/unified-workbench/runtime/var/`，其中包含以下项目。
+  - `db/dataqc.sqlite3` 保存任务记录。
+  - `runs/` 保存自动任务产物。
+  - `manual/` 保存普通质检缓存。
+  - `grade-selections/` 保存人工等级。
+  - `market-qc/` 保存商超质检状态。
+
+### 录制数据与导出
+
+- **真机数据** · `/data/zerith_data/`
+- **仿真数据** · `/data/sim_data/`
+- **采集计划** · `/data/plan/`
+- **工作台内部导出** · `/home/robot/dataqc/unified-workbench/runtime/exports/`
+- **LeRobot 人工筛查** · `/home/robot/dataqc/unified-workbench/runtime/manual-screening/`
+- **普通真机分级转换结果** · `/data/zerith_data/lerobot/`
+- **商超主录制** · `/home/robot/workspace/robot_station/data/market_recordings/`
+- **商超附加录制** · `/home/robot/workspace/robot_station_refactor/data/market_recordings/`，由 Web 服务通过 `DATAQC_MARKET_EXTRA_ROOTS` 加载。
+- **商超 LeRobot 导出** · `/home/robot/workspace/robot_station/data/lerobot/`
+
+### 本机相机与推理服务
+
+- **相机页** · 本机地址 `127.0.0.1:8787`，源码目录 `/data/yolo-camera-studio/`。
+- **YOLO 推理服务** · 本机地址 `127.0.0.1:7881`，工作目录 `/data/yolo/sku71_service_20261014/`。
 
 <a name="architecture"></a>
 ## 1. 架构图与代码对应关系
