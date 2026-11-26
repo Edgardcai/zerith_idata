@@ -1,6 +1,8 @@
 # 数据采集遥操扩展 1.1：自定义固定姿态
 
-适用于本机 ZERITH-H1 1.3.9，与独立采集网站 `/home/robot/collection_web` 配套，网页地址 `http://172.16.18.43:8090`。不依赖 `/home/robot/control`，不修改厂商安装文件、Motion_Control、SDKService 或原始采集数据。
+开发者可从[固定姿态实现](../README.md#固定头腰与升降柱)追到控制与规划接入点，从[固定姿态验收](../docs/collection-quality.md#固定姿态验收)查看在线及逐帧验收阈值。
+
+适用于本机 ZERITH-H1 1.3.9，与独立采集网站 `/home/robot/collection_web` 配套，网页地址 `http://<机器人IP>:8090/`。不依赖 `/home/robot/control`，不修改厂商安装文件、Motion_Control、SDKService 或原始采集数据。
 
 ## 当前功能
 
