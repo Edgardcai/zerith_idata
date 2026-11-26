@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -10,15 +11,20 @@ sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from app import Application,CollectionHTTPServer,Handler
 from test_core import episode
 
-REAL=Path('/data/zerith_data/20260914_scene2/episode_000009/videos/rs')
 with tempfile.TemporaryDirectory() as tmp:
+    video = Path(tmp)/'fixture.mp4'
+    subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i',
+                    'testsrc2=size=320x240:rate=24', '-t', '8', '-c:v', 'libx264',
+                    '-threads', '1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart',
+                    str(video)], check=True)
     root=Path(tmp)/'data';root.mkdir();app=Application(root,Path(tmp)/'runtime',start_devices=False)
     dataset=root/'20260915_scene1';dataset.mkdir();app.store.new_session('browser',{}, {},dataset)
     for uid in ('a'*32,'b'*32,'c'*32):
         episode(dataset,uid);app.store.observe({'id':'browser','dataset':str(dataset),'baseline':[]})
     rows=sorted(app.store.list(),key=lambda r:r['id'])
     for row in rows:
-        for video in REAL.glob('*.mp4'):shutil.copy2(video,Path(row['path'])/'videos/rs'/video.name)
+        for camera in ('cam_high', 'cam_left_wrist', 'cam_right_wrist'):
+            shutil.copyfile(video, Path(row['path'])/'videos/rs'/f'{camera}.mp4')
     # Reproduce the actual renamed-directory issue, including missing one camera.
     Path(rows[0]['path']).rename(dataset/'episode99')
     (Path(rows[1]['path'])/'videos/rs/cam_high.mp4').unlink()
@@ -48,7 +54,6 @@ with tempfile.TemporaryDirectory() as tmp:
             page.locator('#reviewSpeed').select_option('2');page.locator('#reviewPlay').click()
             page.wait_for_function("[...document.querySelectorAll('#review video')].every(v=>!v.paused&&v.currentTime>4)")
             page.locator('#reviewPause').click()
-            page.screenshot(path='/tmp/collection-three-video.png')
             page.locator('#reviewSeek').evaluate("el=>{el.value=7.4;el.dispatchEvent(new Event('input'))}")
             page.wait_for_function("!document.getElementById('reviewPlay').disabled")
             page.locator('#reviewPlay').click()

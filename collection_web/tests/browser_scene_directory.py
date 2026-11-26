@@ -27,17 +27,19 @@ with tempfile.TemporaryDirectory() as temp, patch('tasks.datetime') as clock:
             page=browser.new_page();errors=[];starts=[]
             page.on('pageerror',lambda e:errors.append(str(e)))
             page.goto(f'http://127.0.0.1:{server.server_port}')
-            page.wait_for_function("document.querySelector('#taskId').value==='20260914' && document.querySelector('#prompt').value==='old prompt'")
+            page.wait_for_function("document.querySelector('#taskId').value==='20260914' && document.querySelector('#prompt').value.startsWith('Place the item held')")
             assert page.locator('#start').is_disabled()
             assert not list(root.iterdir())
-            # Scene application does not require any prompt or product names.
-            page.locator('#prompt').fill('')
+            # Applying a scene does not submit the generated task.
+            assert app.collector.phase == 'closed'
             page.locator('#applyScene').click()
             page.wait_for_function("document.querySelector('#directory').textContent.endsWith('20260914_scene1')")
             assert (root/'20260914_scene1').is_dir()
-            page.locator('#prompt').fill('Grasp Tea with the left hand and then grasp Coffee with the right hand')
-            page.locator('#prompt').blur()
-            page.wait_for_function("document.querySelector('#left').value==='Tea'")
+            page.locator('[data-prompt-mode=fridge_grasp]').click()
+            assert page.locator('#handMode').input_value() == 'left'
+            page.locator('#leftProductSearch').fill('Safeguard')
+            page.locator('.product-picker-option:visible').filter(has_text='Safeguard Soap').click()
+            assert page.locator('#prompt').input_value() == 'Open the warming cabinet door and grasp Safeguard Soap'
             assert page.locator('#directory').inner_text().endswith('20260914_scene1')
             page.locator('#taskOptions summary').click()
             page.locator('#liftHeight').fill('0.7')
@@ -56,7 +58,8 @@ with tempfile.TemporaryDirectory() as temp, patch('tasks.datetime') as clock:
             page.locator('#start').click();page.locator('#confirmAccept').click()
             page.wait_for_function("!document.querySelector('#start').disabled")
             assert starts[0]['scene_id']==2 and starts[0]['task_id']==20260914
-            assert starts[0]['task_name'].startswith('Grasp Tea')
+            assert starts[0]['task_name'] == 'Open the warming cabinet door and grasp Safeguard Soap'
+            assert starts[0]['hand_mode'] == 'left' and int(starts[0]['subtask_num']) == 1
             page.reload()
             page.wait_for_function("document.querySelector('#sceneId').value==='2' && document.querySelector('#directory').textContent.endsWith('20260914_scene2')")
             # Date changes do not silently switch a scene without Apply.
@@ -73,10 +76,6 @@ with tempfile.TemporaryDirectory() as temp, patch('tasks.datetime') as clock:
             page.set_viewport_size({'width':390,'height':844})
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
             assert not errors,errors
-            out=Path('/home/robot/collection_web/runtime/scene_ui_verification');out.mkdir(exist_ok=True)
-            page.screenshot(path=str(out/'mobile.png'),full_page=True)
-            page.set_viewport_size({'width':1440,'height':1100})
-            page.screenshot(path=str(out/'desktop.png'),full_page=True)
             print(json.dumps({'scene_apply_creates_directory':True,'draft_requires_apply':True,'prompt_independent':True,'per_scene_submission':True,'reload_persists_scene':True,'date_rollover_requires_apply':True,'active_scene_locked':True,'mobile_no_overflow':True,'page_errors':errors}))
             browser.close()
     finally:

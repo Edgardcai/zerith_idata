@@ -144,6 +144,10 @@ def install_service(module):
                 if config.get('_probe_depth_mode') is True:
                     yield module.pb.MetaData(json_data=json.dumps(result))
                     return
+                if config.get('_probe_timing') is True:
+                    result = await asyncio.to_thread(timing_probe, self.hub)
+                    yield module.pb.MetaData(json_data=json.dumps(result))
+                    return
                 stream = original(self, request, context)
                 try:
                     async for reply in stream:

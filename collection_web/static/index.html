@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css?v=20260929.1"></head>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ZERITH · 采集工作台</title><link rel="stylesheet" href="/static/style.css?v=20261125.1"></head>
 <body>
 <header><a class="brand" href="/"><span class="brand-icon">Z</span>采集工作台</a><div class="header-status"><span id="connection" class="pill">连接中</span><span id="battery" class="battery">电量 —</span></div><div class="header-actions"><button id="check" class="secondary">设备检测</button><button id="end" class="secondary" disabled>结束会话</button><button id="start" class="primary">启动采集</button></div></header>
 <main>
@@ -9,6 +9,7 @@
 <button type="button" data-prompt-mode="shelf_grasp" aria-pressed="false">货架抓取配置</button>
 <button type="button" data-prompt-mode="tabletop" aria-pressed="true">桌面取放配置</button>
 <button type="button" data-prompt-mode="shelf_place" aria-pressed="false">货架放置配置</button>
+<button type="button" data-prompt-mode="fridge_grasp" aria-pressed="false">冰箱抓取配置</button>
 </nav>
 <section class="card scene-panel" aria-label="采集场景">
 <div class="scene-controls"><label>日期<input id="taskId" type="number" min="0" max="99999999" step="1" placeholder="YYYYMMDD"></label><label>场景<input id="sceneId" type="number" min="1" max="99999999" step="1" value="1"></label><button id="applyScene" class="primary" type="button">应用</button><span id="sceneHint" class="muted" role="status">待应用</span></div>
@@ -49,6 +50,6 @@
 <p id="reviewStatus" class="review-status" role="status" aria-live="polite"></p><div id="reviewGrid" class="review-grid"></div></dialog>
 <script src="/static/review.js" defer></script>
 <script src="/static/product-picker.js?v=20261113.1" defer></script>
-<script src="/static/task-prompts.js?v=20261112.1" defer></script>
-<script src="/static/app.js?v=20261113.1" defer></script>
+<script src="/static/task-prompts.js?v=20261125.4" defer></script>
+<script src="/static/app.js?v=20261125.2" defer></script>
 </body></html>

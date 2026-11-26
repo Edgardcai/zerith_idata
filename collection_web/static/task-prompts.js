@@ -1,10 +1,11 @@
 'use strict';
 // Prompt text and atomic Y-button stages; mirrored by tasks.compose_task.
 globalThis.TaskPrompts=Object.freeze({
- modes:['shelf_grasp','tabletop','shelf_place'],
- infer(prompt){return /^Place the item held in the /i.test(prompt)?'tabletop':/^Place /i.test(prompt)?'shelf_place':'shelf_grasp';},
+ modes:['shelf_grasp','tabletop','shelf_place','fridge_grasp'],
+ infer(prompt){if(/^Open the warming cabinet door and grasp /i.test(prompt))return 'fridge_grasp';return /^Place the item held in the /i.test(prompt)?'tabletop':/^Place /i.test(prompt)?'shelf_place':'shelf_grasp';},
  compose(mode,hand,left='',right=''){
   if(!this.modes.includes(mode)||!['left','right','both'].includes(hand))throw Error('未知的提示词配置');
+  if(mode==='fridge_grasp' && hand==='both')throw Error('冰箱抓取配置每次只采集一件商品，请选择左手或右手');
   const sides=hand==='both'?['left','right']:[hand],products={left:left.trim(),right:right.trim()};
   let prompt,stages;
   if(mode==='shelf_grasp'){
@@ -16,6 +17,11 @@ globalThis.TaskPrompts=Object.freeze({
    const grasps=sides.map(side=>`Grasp ${products[side]} from the table with the ${side} hand.`);
    stages=[...places,...grasps];
    prompt=hand==='both'?`Place the item held in the left hand on the table, then place the item held in the right hand on the table. Grasp ${products.left} from the table with the left hand, then grasp ${products.right} with the right hand.`:stages.join(' ');
+  }else if(mode==='fridge_grasp'){
+   const product=products[hand];
+   const item=product.charAt(0).toUpperCase()+product.slice(1);
+   prompt=`Open the warming cabinet door and grasp ${item}`;
+   stages=[prompt];
   }else{
    stages=sides.map(side=>`Place ${products[side]} on the shelf with the ${side} hand.`);
    prompt=hand==='both'?`Place ${products.left} on the shelf with the left hand, then place ${products.right} with the right hand.`:stages[0];

@@ -25,13 +25,16 @@ with tempfile.TemporaryDirectory() as tmp:
             page.on('pageerror',lambda e:errors.append(str(e)))
             page.on('response',lambda r:ratings.append(r.status) if r.url.endswith('/api/episode/rate') else None)
             page.goto(f'http://127.0.0.1:{server.server_port}');page.wait_for_selector('[data-id="1"][data-grade="B"]')
-            page.locator('#prompt').fill('Preserve this edited prompt')
+            page.locator('[data-prompt-mode=shelf_grasp]').click()
+            page.locator('#handMode').select_option('right')
+            draft_prompt = page.locator('#prompt').input_value()
+            assert 'right hand' in draft_prompt
             # A service restart replaces the CSRF token. The denied POST did no work.
             app.csrf=secrets.token_urlsafe(32)
             page.locator('[data-id="1"][data-grade="B"]').click()
             page.wait_for_function("document.getElementById('toast').textContent==='已评为 B' && !document.querySelector('[data-id=\"1\"][data-grade=B]').disabled")
             assert ratings==[403,200],ratings
-            assert page.locator('#prompt').input_value()=='Preserve this edited prompt'
+            assert page.locator('#prompt').input_value()==draft_prompt
             assert app.store.db.execute("select count(*) from audit where action='grade'").fetchone()[0]==1
             assert json.loads((actual/'review.json').read_text())['grade']=='B'
             # Delay an old group response until after a newer response has rendered.

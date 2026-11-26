@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import signal
+import shutil
 import subprocess
 import time
 import urllib.request
@@ -120,17 +121,24 @@ def main():
             if not marker.get('passed') or digest(ROOT/'runtime/server_fast') != marker['sha256'] or marker['sha256'] != manifest['sha256']:
                 raise RuntimeError('运行包与已通过自检的版本不一致')
             old_fast = pids('server_fast')
+            rollback_release = None
             if old_fast:
                 previous = Path('/home/robot/collection_rgb_only/runtime')
-                previous_marker = json.loads((previous/'validated.json').read_text())
-                allowed = {previous_marker['sha256']} if previous_marker.get('passed') else set()
+                previous_marker = (json.loads((previous/'validated.json').read_text())
+                                   if (previous/'validated.json').exists() else {})
+                allowed = set()
+                if (previous_marker.get('passed') and (previous/'server_fast').exists()
+                        and digest(previous/'server_fast') == previous_marker['sha256']):
+                    allowed.add(previous_marker['sha256'])
+                running_hashes = {digest('/proc/%d/exe' % pid) for pid in old_fast}
                 for saved in (ROOT/'runtime/releases').glob('*/validated.json'):
                     release = json.loads(saved.read_text())
                     if release.get('passed') and digest(saved.parent/'server_fast') == release['sha256']:
                         allowed.add(release['sha256'])
-                if (not args.replace_fast or not previous_marker.get('passed') or
-                        any(digest('/proc/%d/exe' % pid) not in allowed for pid in old_fast)):
-                    raise RuntimeError('仅允许替换已验证的 RGB-only 服务')
+                        if running_hashes == {release['sha256']}:
+                            rollback_release = saved.parent
+                if not args.replace_fast or len(running_hashes)!=1 or not running_hashes.issubset(allowed):
+                    raise RuntimeError('仅允许替换有已验证备份的采集服务')
             old = pids('server')
             if not old and not old_fast and not args.recover_stopped:
                 raise RuntimeError('原厂已退出；恢复启动请使用 --recover-stopped')
@@ -161,8 +169,18 @@ def main():
         if args.action == 'start':
             pane = server_pane()
             if pids('server_fast') and pane: stop_pane(pane)
-            fallback = ('/home/robot/collection_rgb_only/runtime/server_fast --live'
-                        if old_fast else './server')
+            if old_fast and rollback_release is not None:
+                # Restore its own validation marker before launching the prior
+                # bootstrap, which verifies the executable against that marker.
+                for name in ('server_fast', 'build.json', 'validated.json'):
+                    target = ROOT/'runtime'/name
+                    temp = target.with_name(name+'.rollback')
+                    shutil.copy2(rollback_release/name, temp)
+                    temp.replace(target)
+                fallback = str(ROOT/'runtime/server_fast')+' --live'
+            else:
+                fallback = ('/home/robot/collection_rgb_only/runtime/server_fast --live'
+                            if old_fast else './server')
             launch('cd /opt/robot && '+fallback+'; exec sh')
             raise RuntimeError('优化服务启动未通过，已发起原厂服务恢复。窗口输出：\n'+output)
         raise RuntimeError('原厂服务恢复未确认，请检查：\n'+output)

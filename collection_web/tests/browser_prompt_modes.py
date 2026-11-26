@@ -61,9 +61,10 @@ with tempfile.TemporaryDirectory() as temp:
             # Exercise the unchanged visible product search control.
             page.locator('#leftProductSearch').fill('Safeguard')
             page.locator('.product-picker-option:visible').filter(has_text='Safeguard Soap').click()
-            for mode in ('shelf_grasp','tabletop','shelf_place'):
+            for mode in ('shelf_grasp','tabletop','shelf_place','fridge_grasp'):
                 page.locator(f'[data-prompt-mode="{mode}"]').click()
-                for hand in ('left','right','both'):
+                hand_modes = ('left','right') if mode == 'fridge_grasp' else ('left','right','both')
+                for hand in hand_modes:
                     page.locator('#handMode').select_option(hand)
                     expected=compose_task(mode,hand,'Safeguard Soap','HandFan')
                     assert page.locator('#prompt').input_value()==expected['task_name'],(mode,hand)
@@ -116,13 +117,11 @@ with tempfile.TemporaryDirectory() as temp:
             page.reload();page.wait_for_function("document.querySelector('[data-prompt-mode=tabletop]').getAttribute('aria-pressed')==='true'")
             assert page.locator('#subtasks').input_value()=='2'
             page.locator('#handMode').select_option('both')
-            page.screenshot(path='/tmp/collection-prompt-desktop.png',full_page=True)
             page.set_viewport_size({'width':390,'height':844})
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-            page.screenshot(path='/tmp/collection-prompt-mobile.png',full_page=True)
             assert not errors,errors
             browser.close()
-            print(json.dumps({'nine_mode_hand_choices':True,'default_after_closed_legacy_session':'tabletop',
+            print(json.dumps({'eleven_mode_hand_choices':True,'default_after_closed_legacy_session':'tabletop',
                 'catalog_unchanged':True,'active_session_locked':True,'active_reload_preserved':True,
                 'four_stage_progress_and_archive':True,'closed_reload_default':'tabletop','mobile_no_overflow':True,'page_errors':errors}))
     finally:

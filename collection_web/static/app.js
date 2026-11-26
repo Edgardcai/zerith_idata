@@ -114,7 +114,12 @@ const PRODUCTS = Object.freeze({
   "Mirinda Apple": "苹果味美年达",
   "Warheads Mixed": "子弹头牌酸果味糖混合口味",
   "Warheads Blue Raspberry": "子弹头牌酸果味糖蓝树莓味",
-  "Warheads Watermelon": "子弹头牌酸果味糖西瓜味"
+  "Warheads Watermelon": "子弹头牌酸果味糖西瓜味",
+  "Nescafe": "雀巢咖啡",
+  "Vitasoy Original": "维他奶原味",
+  "Vitasoy Chocolate": "维他奶巧克力味",
+  "Soymilk": "豆本豆豆奶",
+  "Ovaltine": "阿华田"
 });
 
 const PRODUCT_ALIASES = Object.freeze({
@@ -189,12 +194,17 @@ function populateProducts(){
  for(const side of ['left','right'])productPickers[side]=new ProductPicker($(side+'Product'));
 }
 function renderProductMode(){
- const mode=$('handMode').value;
+ const handSelect=$('handMode');
+ const bothOption=handSelect.querySelector('option[value="both"]');
+ bothOption.hidden=bothOption.disabled=promptMode==='fridge_grasp';
+ const mode=handSelect.value;
  $('leftProductLabel').hidden=mode==='right';$('rightProductLabel').hidden=mode==='left';
  for(const side of ['left','right'])if($(side+'ProductLabel').hidden)productPickers[side].close();
 }
 function updateProductPrompt(){
- const mode=$('handMode').value,left=$('leftProduct').value,right=$('rightProduct').value;
+ const handSelect=$('handMode');
+ if(promptMode==='fridge_grasp' && handSelect.value==='both')handSelect.value='left';
+ const mode=handSelect.value,left=$('leftProduct').value,right=$('rightProduct').value;
  const composed=TaskPrompts.compose(promptMode,mode,left,right);
  $('left').value=composed.left;$('right').value=composed.right;
  $('prompt').value=composed.task_name;$('subtasks').value=composed.subtask_num;
@@ -323,9 +333,11 @@ function renderStages(){
  if(!Number.isInteger(total)||total<1||total>20){$('stagePlan').replaceChildren();$('stageHint').textContent='请输入 1—20 的整数阶段数';return;}
  const completed=c?.current?Number(c.current.progress?.completed_steps||0):0;
  const recording=c?.current?.state==='recording';
- const selected=TaskPrompts.compose(promptMode,$('handMode').value,$('leftProduct').value,$('rightProduct').value);
- let stages=active?c.session?.targets?.stage_prompts:selected.stage_prompts;
- if(!stages&&active&&/^(?:Grasp|Pick up) /i.test(c.session?.config?.task_name||''))stages=selected.stage_prompts;
+ let stages=active?c.session?.targets?.stage_prompts:null;
+ const useDraft=!active || (!stages && /^(?:Grasp|Pick up) /i.test(c.session?.config?.task_name||''));
+ if(useDraft){
+  stages=TaskPrompts.compose(promptMode,$('handMode').value,$('leftProduct').value,$('rightProduct').value).stage_prompts;
+ }
  $('stagePlan').innerHTML=Array.from({length:total},(_,index)=>{
   const title=stages?.length===total?stages[index]:`Stage ${index+1}`;
   const state=index<completed?'complete':recording&&index===completed?'active':'';
@@ -343,7 +355,17 @@ $('sceneId').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault
 $('applyScene').onclick=()=>action(async()=>{appliedScene=await api('/api/scene/apply',{task_id:$('taskId').value,scene_id:$('sceneId').value});$('taskId').value=appliedScene.task_id;$('sceneId').value=appliedScene.scene_id;queueDirectory();toast(`已应用场景 ${appliedScene.scene_id}`);});
 populateProducts();
 $('handMode').addEventListener('change',updateProductPrompt);
-document.querySelectorAll('[data-prompt-mode]').forEach(button=>button.addEventListener('click',()=>{if(button.disabled)return;promptMode=button.dataset.promptMode;updateProductPrompt();}));
+document.querySelectorAll('[data-prompt-mode]').forEach(button=>{
+  button.addEventListener('click',()=>{
+    if(button.disabled)return;
+    const nextMode=button.dataset.promptMode;
+    if(nextMode==='fridge_grasp' && promptMode!==nextMode){
+      $('handMode').value='left';
+    }
+    promptMode=nextMode;
+    updateProductPrompt();
+  });
+});
 for(const side of ['left','right'])$(side+'Product').addEventListener('change',updateProductPrompt);
 $('taskForm').addEventListener('input',()=>{queueDirectory();renderStages();});$('taskForm').addEventListener('submit',e=>e.preventDefault());$('checks').onclick=e=>{const b=e.target.closest('[data-detail]');if(b)toast(b.dataset.detail,b.classList.contains('bad'));};
 $('check').onclick=()=>action(async()=>{await pendingParse;const r=await api('/api/preflight',task());checks(r.checks);if(!r.ready){$('alert').hidden=false;$('alert').textContent=r.checks.filter(c=>!c.ok).map(c=>`${c.label}：${c.detail}`).join('；');throw Error('检测未通过：'+r.checks.filter(c=>!c.ok).map(c=>c.label).join('、'));}toast('设备检测通过');});

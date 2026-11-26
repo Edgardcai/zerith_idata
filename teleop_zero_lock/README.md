@@ -83,7 +83,7 @@ python3 tools/monitor_trial.py --seconds 600
   /data/zerith_data/数据集/episode_000001 --output runtime/episode_audit.json
 ```
 
-分析脚本仅打开已结束的 episode，核查全帧数值/时间戳、四轴目标和反馈，抽查图像字段长度与样本非空；不修改训练数据。软件测试和真机验收范围见 `TEST_REPORT.md`。
+分析脚本仅打开已结束的 episode，核查全帧数值/时间戳、四轴目标和反馈，抽查图像字段长度与样本非空；不修改训练数据。
 
 ## 回退
 

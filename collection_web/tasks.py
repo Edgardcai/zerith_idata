@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 DEFAULT_PROMPT = 'Grasp Dahongpao Milk Tea with the left hand and then grasp If coconut with the right hand'
 DEFAULT_PROMPT_MODE = 'tabletop'
-PROMPT_MODES = ('shelf_grasp', 'tabletop', 'shelf_place')
+PROMPT_MODES = ('shelf_grasp', 'tabletop', 'shelf_place', 'fridge_grasp')
 
 
 def reject_retired_product(value):
@@ -20,6 +20,8 @@ def compose_task(prompt_mode, hand_mode, left='', right=''):
         raise ValueError('未知的提示词配置')
     if hand_mode not in ('left', 'right', 'both'):
         raise ValueError('请选择左手、右手或双手')
+    if prompt_mode == 'fridge_grasp' and hand_mode == 'both':
+        raise ValueError('冰箱抓取配置每次只采集一件商品，请选择左手或右手')
     products = {'left': left, 'right': right}
     sides = ('left', 'right') if hand_mode == 'both' else (hand_mode,)
     for side in sides:
@@ -43,6 +45,11 @@ def compose_task(prompt_mode, hand_mode, left='', right=''):
         prompt = (f'Place the item held in the left hand on the table, then place the item held in the right hand on the table. '
                   f'Grasp {left} from the table with the left hand, then grasp {right} with the right hand.'
                   if hand_mode == 'both' else ' '.join(stages))
+    elif prompt_mode == 'fridge_grasp':
+        product = products[hand_mode]
+        item = product[0].upper() + product[1:]
+        prompt = f'Open the warming cabinet door and grasp {item}'
+        stages = [prompt]
     else:
         stages = [f'Place {products[side]} on the shelf with the {side} hand.' for side in sides]
         prompt = (f'Place {left} on the shelf with the left hand, then place {right} with the right hand.'
@@ -87,6 +94,16 @@ def normalize_height(height):
 
 def parse_targets(prompt):
     result = {'left': '', 'right': ''}
+    fridge_prefix = 'Open the warming cabinet door and grasp '
+    if prompt.startswith(fridge_prefix):
+        product = prompt[len(fridge_prefix):]
+        legacy_products, separator, _ = product.partition('. Open the warming cabinet door and place ')
+        if separator:
+            for match in re.finditer(r'(.+?) \((left|right)\)(?: and |$)', legacy_products):
+                result[match[2]] = match[1]
+        else:
+            result['left'] = product.strip()
+        return result
     for clause in re.split(r'\b(?=(?:grasp|pick up|place)\s)', prompt, flags=re.I):
         match = re.match(r'(?:grasp|pick up|place)\s+(.+?)\s+(?:from\s+the\s+table\s+|on\s+the\s+shelf\s+)?with\s+(?:the\s+)?(left|right)\s+hand', clause, flags=re.I)
         if match:
@@ -98,7 +115,9 @@ def validate_task(payload):
         raise ValueError('任务配置格式错误')
     composed = None
     if 'prompt_mode' in payload:
-        composed = compose_task(payload['prompt_mode'], payload.get('hand_mode'), payload.get('left', ''), payload.get('right', ''))
+        mode = payload['prompt_mode']
+        hand_mode = payload.get('hand_mode', 'left' if mode == 'fridge_grasp' else None)
+        composed = compose_task(mode, hand_mode, payload.get('left', ''), payload.get('right', ''))
         if 'task_name' in payload and payload['task_name'] != composed['task_name']:
             raise ValueError('提示词与选中配置不一致，请刷新页面后重试')
         if 'subtask_num' in payload:
@@ -109,7 +128,7 @@ def validate_task(payload):
             if isinstance(payload['subtask_num'], bool) or number != composed['subtask_num']:
                 raise ValueError('阶段数与提示词配置不一致')
         payload = {**payload, 'task_name': composed['task_name'], 'subtask_num': composed['subtask_num'],
-                   'left': composed['left'], 'right': composed['right']}
+                   'hand_mode': hand_mode, 'left': composed['left'], 'right': composed['right']}
     prompt = payload.get('task_name', '')
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
         raise ValueError('请输入 1—500 字的提示词')
@@ -153,6 +172,8 @@ def validate_task(payload):
             scene_description = 'Items are held in the robot hands and placed on a table within reach.'
         elif payload['prompt_mode'] == 'shelf_place':
             scene_description = 'Items are held in the robot hands for placement on a shelf within reach.'
+        elif payload['prompt_mode'] == 'fridge_grasp':
+            scene_description = 'The warming cabinet is within reach of the robot.'
     result.update(scene_name=f"scene{result['scene_id']}",
         scene_desc=scene_description,
         action_desc=description, step_list=[])

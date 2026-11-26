@@ -36,7 +36,7 @@ with tempfile.TemporaryDirectory() as tmp,patch('tasks.datetime') as clock:
             page.wait_for_selector('[data-id="8"][data-grade="A"].selected')
             assert not page.locator('.telemetry').evaluate('e=>e.open')
             assert not page.locator('#taskOptions').evaluate('e=>e.open')
-            assert page.locator('.episodes-card').bounding_box()['y']<720
+            assert page.locator('.episodes-card').bounding_box()['y'] < page.viewport_size['height']
             before=len([u for u in requests if '/api/episodes?' in u])
             page.wait_for_timeout(3200)
             after=len([u for u in requests if '/api/episodes?' in u])
@@ -61,11 +61,8 @@ with tempfile.TemporaryDirectory() as tmp,patch('tasks.datetime') as clock:
             page.locator('#taskOptions summary').click()
             assert page.locator('#liftHeight').is_visible()
             page.locator('#taskOptions summary').click()
-            out=Path('/home/robot/collection_web/runtime/compact_ui_verification');out.mkdir(exist_ok=True)
-            page.screenshot(path=str(out/'desktop.png'),full_page=True)
             page.set_viewport_size({'width':390,'height':844})
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-            page.screenshot(path=str(out/'mobile.png'),full_page=True)
             page.reload();page.wait_for_selector('[data-id="8"][data-grade="B"].selected')
             assert not errors,errors
             print(json.dumps({'compact_layout':True,'default_A':True,'manual_ABF_during_session':True,'grade_persists_after_reload':True,'external_grade_refresh':True,'unchanged_records_not_refetched':True,'mobile_layout':True,'page_errors':errors}))

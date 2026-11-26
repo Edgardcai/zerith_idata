@@ -14,14 +14,20 @@
 
 `_probe_depth_mode=true` 为直接 RPC 诊断入口：仅切换相机、确认真实帧并返回结果，然后恢复 color；不创建采集线程、任务目录或录制文件。它也遵循会话互斥。
 
-## 验证
+## 构建与离线验证
 
-真实厂商 writer 两种模式离线比较 40 帧：RGB 的关节/时间戳/JPEG/MP4 与基线一致，RGB-D 额外深度压缩字节也一致。两种模式分别测试 200 帧、30 Hz 持续入队，无超过 50 ms 阻塞。还验证相机选择、严格布尔值、会话互斥、取消后的默认恢复。网站 37 项测试通过，JS 语法通过。完整性能与精确包摘要见 runtime/offline_benchmark.json、runtime/validated.json。
+录制扩展使用头部相机时间戳对齐三路相机和状态，并把时序信息写入 HDF5。录制过程预处理常用提示音，减少阶段切换时的合成开销。
+
+在包含 `teleop_zero_lock/` 和 `collection_autostart/` 的源码目录执行以下命令。使用 Python 3.10、匹配版本的厂商 `server` 二进制，以及本机一条已完成的 HDF5 录制作为只读测试样本。
+
+```bash
+python3.10 collection_depth_toggle/tools/build.py --vendor-server /path/to/factory/server
+ZERITH_TEST_EPISODE=/path/to/completed/episode.hdf5 \
+  collection_depth_toggle/runtime/server_fast_candidate --offline-self-test
+```
+
+自测比较 RGB 和 RGB-D 的 HDF5、MP4、帧时序及缓存行为，结果和候选包摘要写入候选包所在的 `runtime/`。构建和测试期间使用独立目录。
 
 ## 部署及恢复
 
-部署命令为 `sudo python3 /home/robot/collection_depth_toggle/tools/deploy.py`，需要操作员已结束会话并反初始化。脚本只替换 camera/collection server，不重启 Motion_Control、SDKService 或 teleop。系统启动覆盖配置继续位于 `/etc/systemd/system/zerith-storage-fast.service.d/rgb-only.conf`，实际入口指向本目录的 tools/boot.py；8080 彩色预览环境设置保留。
-
-需恢复固定 RGB-only 时：结束会话并反初始化，使用本目录 tools/switch.py restore 恢复原厂，然后执行 `/home/robot/collection_rgb_only/tools/switch.py start`；将系统启动覆盖入口恢复为 `/home/robot/collection_rgb_only/tools/boot.py` 并 daemon-reload。网站开关需同时禁用，避免显示与运行版本不一致。原 RGB-only 和 RGB-D 优化包均保留。
-
-部署与实机相机验证结果记录在 runtime/deployment_status.json 和 runtime/live_camera_modes.json。真实运动与新录制效果仍需由操作员录制后验收。
+当前直接开机启动由 [`collection_autostart`](../collection_autostart/README.md) 接入 `robotd.service`。运行包和验证摘要由部署主机管理。`tools/switch.py` 用于维护时切换采集服务，并校验候选、在用和回滚版本。维护前需结束采集并反初始化。旧版固定 RGB 回滚链见 [`collection_rgb_only`](../collection_rgb_only/README.md)。

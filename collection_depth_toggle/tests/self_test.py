@@ -11,7 +11,10 @@ import cv2
 import h5py
 import numpy as np
 
-source = Path('/data/zerith_data/DailyCGrapeJuice_DailyCOrangeJuice_0.4/episode_000003/episode.hdf5')
+fixture = os.environ.get('ZERITH_TEST_EPISODE')
+if not fixture or not Path(fixture).is_file():
+    raise SystemExit('Set ZERITH_TEST_EPISODE to a completed HDF5 episode for the offline test')
+source = Path(fixture)
 CAMERAS = ['rs/cam_high', 'rs/cam_left_wrist', 'rs/cam_right_wrist']
 
 def load_batch():
@@ -27,8 +30,11 @@ def load_batch():
             for camera in CAMERAS:
                 image_path = 'observation/images/'+camera
                 color = cv2.imdecode(f[image_path+'/color'][index], cv2.IMREAD_COLOR)
-                depth = np.frombuffer(zlib.decompress(f[image_path+'/depth'][index].tobytes()),
-                                      dtype=np.uint16).reshape(480, 640)
+                if image_path+'/depth' in f:
+                    depth = np.frombuffer(zlib.decompress(f[image_path+'/depth'][index].tobytes()),
+                                          dtype=np.uint16).reshape(480, 640)
+                else:
+                    depth = (np.indices(color.shape[:2]).sum(axis=0)+index).astype(np.uint16)
                 obs['images'][camera] = {
                     'color': SimpleNamespace(last_frame=color, fmt='bgr8', timestamp=float(f['timestamp/t'][index])),
                     'depth': SimpleNamespace(last_frame=depth, fmt='z16', timestamp=float(f['timestamp/t'][index]))}
@@ -105,7 +111,7 @@ def compare(a, b, record_depth=False):
                 np.testing.assert_array_equal(p.to_ndarray(format='bgr24'), q.to_ndarray(format='bgr24'))
 
 batch = load_batch()
-wrapped_code = patch.find_code(collect_data.EpisodeDataCollector._capture_episode.__code__, 'save_batch')[0]
+wrapped_code = patch.find_code(collect_data.EpisodeDataCollector._capture_episode.__wrapped__.__code__, 'save_batch')[0]
 assert rgb.depth_option({}) is False
 for invalid in ('false', 0, 1, None):
     try: rgb.depth_option({'record_depth':invalid})
